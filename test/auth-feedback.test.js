@@ -228,6 +228,29 @@ test('registered users get read-only configuration, isolated data, own traces, a
       method: 'POST', body: { password: 'test-admin' }
     });
     assert.equal(adminLogin.status, 200);
+    const storyNode = await request(baseUrl, '/api/plots', {
+      method: 'POST', cookie: adminLogin.cookie,
+      body: {
+        agent_id: 'agent_linwan',
+        parent_plot_id: 'plot_rain_letter',
+        branch_label: '回信分支',
+        node_type: 'branch',
+        name: '写下回信',
+        premise: '用户决定回应那封信。',
+        instructions: '给用户保留是否寄出回信的选择。',
+        priority: 55,
+        enabled: true
+      }
+    });
+    assert.equal(storyNode.status, 201);
+    assert.equal(storyNode.payload.parent_plot_id, 'plot_rain_letter');
+    assert.equal(storyNode.payload.node_type, 'branch');
+    const cyclicStory = await request(baseUrl, '/api/plots/plot_rain_letter', {
+      method: 'PUT', cookie: adminLogin.cookie,
+      body: { parent_plot_id: storyNode.payload.id }
+    });
+    assert.equal(cyclicStory.status, 400);
+    assert.match(cyclicStory.payload.error, /循环分支/);
     const profileWarning = await request(baseUrl, '/api/agents/agent_linwan', {
       method: 'PUT', cookie: adminLogin.cookie,
       body: { system_prompt: `${bootstrap.payload.agents[0].system_prompt}\n新增核心设定` }

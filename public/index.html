@@ -58,8 +58,8 @@
         <button class="nav-item active" data-page="chat" aria-label="角色对话"><i data-lucide="messages-square"></i><span>角色对话</span></button>
         <button class="nav-item" data-page="memory" aria-label="记忆查询"><i data-lucide="database"></i><span>记忆查询</span></button>
         <button class="nav-item" data-page="schemas" aria-label="记忆设置"><i data-lucide="list-tree"></i><span>记忆设置</span></button>
-        <button class="nav-item" data-page="persona" aria-label="人设与剧情"><i data-lucide="badge-check"></i><span>人设与剧情</span></button>
-        <button class="nav-item" data-page="automation" aria-label="触发与工具"><i data-lucide="workflow"></i><span>触发与工具</span></button>
+        <button class="nav-item" data-page="persona" aria-label="角色与人设"><i data-lucide="badge-check"></i><span>角色与人设</span></button>
+        <button class="nav-item" data-page="automation" aria-label="剧情与故事"><i data-lucide="git-branch"></i><span>剧情与故事</span></button>
         <button class="nav-item" data-page="timeline" aria-label="系统架构图"><i data-lucide="network"></i><span>系统架构图</span></button>
         <span class="nav-section-label" data-admin-only>管理</span>
         <button class="nav-item" data-admin-only data-page="users" aria-label="用户列表"><i data-lucide="users"></i><span>用户列表</span></button>
@@ -239,11 +239,11 @@
               <div class="object-sidebar-heading">
                 <span class="eyebrow">CHARACTERS</span>
                 <h3>角色</h3>
-                <p>每个角色归属一个场景，并拥有一套人设与剧情。</p>
+                <p>每个角色归属一个场景，并拥有一套独立人设。</p>
               </div>
               <div id="personaAgentList" class="object-list" aria-label="角色列表"></div>
               <div class="relationship-rule"><i data-lucide="network"></i><span><strong>N : 1</strong> 角色与场景</span></div>
-              <div class="relationship-rule"><i data-lucide="link-2"></i><span><strong>1 : 1</strong> 角色与人设剧情</span></div>
+              <div class="relationship-rule"><i data-lucide="link-2"></i><span><strong>1 : 1</strong> 角色与人设</span></div>
             </aside>
 
             <section class="object-workspace persona-workspace">
@@ -251,14 +251,14 @@
                 <div class="object-title-block">
                   <span id="personaAvatar" class="object-avatar">角</span>
                   <div>
-                    <div class="title-with-badge"><h3 id="personaHeaderName">角色人设与剧情</h3><span class="badge blue">角色 1:1</span></div>
+                    <div class="title-with-badge"><h3 id="personaHeaderName">角色人设</h3><span class="badge blue">角色 1:1</span></div>
                     <p id="personaHeaderMeta">选择角色进行配置。</p>
                   </div>
                 </div>
                 <button class="button primary" data-write-only type="submit" form="personaForm"><i data-lucide="save"></i><span>保存人设</span></button>
               </header>
 
-              <div class="persona-grid">
+              <div class="persona-grid persona-only-grid">
                 <form id="personaForm" class="form-surface" data-config-form>
                   <div class="surface-heading"><div><h3>核心人设</h3><span id="personaScenario" class="badge blue">-</span></div><span class="count-label">每轮固定注入</span></div>
                   <div class="form-grid two">
@@ -274,25 +274,52 @@
                   </section>
                   <label class="grow"><span>核心人设提示词</span><textarea id="personaPrompt" rows="14" required></textarea></label>
                 </form>
-                <section class="plot-surface">
-                  <div class="surface-heading"><div><h3>专属剧情</h3><span id="plotCount" class="count-label">0 条</span></div><button id="addPlotButton" class="button secondary compact" data-write-only><i data-lucide="plus"></i><span>新增剧情</span></button></div>
-                  <div class="plot-scope-note"><i data-lucide="lock-keyhole"></i><span>仅绑定当前角色，不被同场景其他角色共享</span></div>
-                  <div id="plotList" class="plot-list"></div>
-                </section>
               </div>
             </section>
           </div>
         </section>
 
-        <section id="page-automation" class="page admin-page">
-          <div class="section-toolbar">
-            <div class="segmented" role="tablist">
-              <button class="active" data-automation-tab="triggers">条件触发器</button>
-              <button data-automation-tab="tools">Function tools</button>
+        <section id="page-automation" class="page admin-page story-page">
+          <div class="story-workbench">
+            <header class="story-workbench-header">
+              <div class="story-title-block">
+                <span id="storyAvatar" class="object-avatar">剧</span>
+                <div><span class="eyebrow">NARRATIVE DESIGN</span><h3>剧情与故事</h3><p id="storyHeaderMeta">选择角色查看剧情分支。</p></div>
+              </div>
+              <div class="story-header-actions">
+                <div class="segmented" role="tablist" aria-label="剧情与故事视图">
+                  <button class="active" data-automation-tab="story">剧情树</button>
+                  <button data-automation-tab="triggers">触发配置</button>
+                  <button data-automation-tab="tools">工具能力</button>
+                </div>
+                <button id="addPlotButton" class="button primary"><i data-lucide="plus"></i><span>新建剧情节点</span></button>
+                <button id="addTriggerButton" class="button primary hidden"><i data-lucide="plus"></i><span>新建触发配置</span></button>
+              </div>
+            </header>
+
+            <div id="storyOverview" class="story-overview" aria-label="剧情配置概览"></div>
+
+            <div id="storyTreeView" class="story-tree-workspace">
+              <section class="story-tree-surface">
+                <header class="story-tree-toolbar">
+                  <div><strong id="storyTreeTitle">主故事线</strong><small>story: main_story / branch: main</small></div>
+                  <div class="story-tree-legend">
+                    <span><i class="story-legend-dot chapter"></i>章节</span>
+                    <span><i class="story-legend-dot branch"></i>分支</span>
+                    <span><i class="story-legend-dot ending"></i>结局</span>
+                    <span><i class="story-legend-line"></i>前置关系</span>
+                  </div>
+                </header>
+                <div id="storyTreeViewport" class="story-tree-viewport">
+                  <svg id="storyTreeEdges" class="story-tree-edges" aria-hidden="true"></svg>
+                  <div id="storyTreeCanvas" class="story-tree-canvas"></div>
+                </div>
+              </section>
+              <aside id="storyInspector" class="story-inspector" aria-live="polite"></aside>
             </div>
-            <button id="addTriggerButton" class="button primary" data-write-only><i data-lucide="plus"></i><span>新建触发器</span></button>
+
+            <div id="automationContent" class="story-automation-content hidden"></div>
           </div>
-          <div id="automationContent" class="data-surface"></div>
         </section>
 
         <section id="page-users" class="page admin-page">
@@ -651,7 +678,7 @@
                         <a class="input-source config-source" href="#personaPrompt" data-config-link data-jump-page="persona" data-jump-target="#personaPrompt">
                           <span class="source-order">02</span>
                           <div><strong>角色人设与固定属性</strong><small>agent.system_prompt + fixed_attributes_json</small></div>
-                          <span class="source-jump">人设与剧情<i data-lucide="external-link"></i></span>
+                          <span class="source-jump">角色与人设<i data-lucide="external-link"></i></span>
                         </a>
                         <a class="input-source config-source" href="#schemaTable" data-config-link data-jump-page="schemas" data-jump-target="#schemaTable">
                           <span class="source-order">03</span>
@@ -663,10 +690,10 @@
                           <div><strong>当前结构化记忆值</strong><small>称呼、回复契约、关系状态与用户边界</small></div>
                           <span class="source-jump">结构化记忆<i data-lucide="external-link"></i></span>
                         </a>
-                        <a class="input-source config-source" href="#plotList" data-config-link data-jump-page="persona" data-jump-target="#plotList">
+                        <a class="input-source config-source" href="#storyTreeView" data-config-link data-jump-page="automation" data-jump-tab="story" data-jump-target="#storyTreeView">
                           <span class="source-order">05</span>
                           <div><strong>已解锁剧情指令</strong><small>当前 story / branch 下的 active plot</small></div>
-                          <span class="source-jump">剧情库<i data-lucide="external-link"></i></span>
+                          <span class="source-jump">剧情与故事<i data-lucide="external-link"></i></span>
                         </a>
                         <a class="input-source config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="retrieval" data-jump-target="#memoryContent">
                           <span class="source-order">06</span>

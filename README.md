@@ -20,6 +20,7 @@
 - 召回测试工作台：展示实时 Embedding 模型/维度/向量预览、候选目录、详情资格、Planner 决策、图谱证据事件、过滤原因和最终 Prompt 注入片段。
 - 角色固定属性按角色全局常驻注入；用户事实写入 `user_memory`；角色和用户共同发生的承诺、物件、对话进展写入按用户-角色-故事-分支隔离的 `shared_story`，不会串到该角色与其他用户的会话。
 - 修改已投入使用的角色人设或固定属性时，系统展示影响范围并要求二次确认，同时保留角色版本历史。
+- “剧情与故事”工作台：剧情节点按前置节点组成 ARPG 式故事树，可在节点上查看剧情前提、主模型注入指令、解锁条件、动作与后继分支；预设“雨夜来信”包含男、女、非二元/不透露三条无刻板印象支线及各自后续章节，性别只接受用户明确自述；触发配置和工具能力作为同页独立视图。
 - 基于结构化记忆的条件触发器、剧情解锁和 function call。
 - 管理员 Trace：查看常驻记忆、召回结果、完整系统 Prompt、模型输入/输出、记忆写入和触发记录。
 - 管理员“系统架构图”：查看入口、Agent Runtime、记忆平面、模型与数据层，以及真实轮次阈值、写入顺序和第 N 次主模型请求的完整 Input 切片；可跳转到对应配置来源。
@@ -85,7 +86,7 @@ ARK_API_KEY='' npm test
 - 角色记忆：`agents.fixed_attributes_json` / `agents.profile_version` / `agent_profile_history`
 - 向量：`embeddings`
 - 架构问答：`architecture_knowledge_chunks` / `architecture_qa_logs`
-- 剧情与调度：`plots` / `user_plot_states` / `triggers` / `trigger_runs` / `tools` / `tool_runs`
+- 剧情与调度：`plots` 通过 `parent_plot_id / branch_label / node_type` 表达故事树；运行状态和调度记录使用 `user_plot_states` / `triggers` / `trigger_runs` / `tools` / `tool_runs`
 - 可观测与反馈：`traces` / `trace_spans` / `feedback`
 
 生产环境建议 PostgreSQL 16 + pgvector。对话、状态、图边和触发器保留关系表；`embeddings.vector_json` 迁移为 `vector(2048)` 并建 HNSW 索引。当图规模需要高频长路径遍历时，再同步到 Neo4j，当前 1-2 跳场景不需要额外数据库。

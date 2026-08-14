@@ -603,6 +603,9 @@ function savePlot(body, id = null) {
   const row = {
     id: id || uid('plot'),
     agentId: body.agent_id ?? current?.agent_id,
+    parentPlotId: safeText(body.parent_plot_id ?? current?.parent_plot_id ?? '', 100),
+    branchLabel: safeText(body.branch_label ?? current?.branch_label ?? '主线', 60) || '主线',
+    nodeType: safeText(body.node_type ?? current?.node_type ?? 'chapter', 30),
     name: safeText(body.name ?? current?.name, 100),
     premise: safeText(body.premise ?? current?.premise ?? '', 1000),
     instructions: safeText(body.instructions ?? current?.instructions, 10000),
@@ -610,15 +613,32 @@ function savePlot(body, id = null) {
     enabled: Number(Boolean(body.enabled ?? current?.enabled ?? true))
   };
   if (!row.agentId || !row.name || !row.instructions) throw new Error('角色、剧情名和剧情指令不能为空');
+  if (row.parentPlotId === row.id) throw new Error('剧情节点不能以自己作为前置节点');
+  if (!['chapter', 'branch', 'ending'].includes(row.nodeType)) throw new Error('剧情节点类型无效');
+  if (row.parentPlotId) {
+    const parent = db.prepare('SELECT id FROM plots WHERE id = ? AND agent_id = ?').get(row.parentPlotId, row.agentId);
+    if (!parent) throw new Error('前置剧情节点不存在或不属于当前角色');
+    const visited = new Set([row.id]);
+    let cursor = row.parentPlotId;
+    while (cursor) {
+      if (visited.has(cursor)) throw new Error('前置剧情不能形成循环分支');
+      visited.add(cursor);
+      cursor = db.prepare('SELECT parent_plot_id FROM plots WHERE id = ?').get(cursor)?.parent_plot_id || '';
+    }
+  }
   const timestamp = nowIso();
   if (current) {
-    db.prepare(`UPDATE plots SET agent_id = ?, name = ?, premise = ?, instructions = ?, priority = ?,
-      enabled = ?, updated_at = ? WHERE id = ?`)
-      .run(row.agentId, row.name, row.premise, row.instructions, row.priority, row.enabled, timestamp, id);
+    db.prepare(`UPDATE plots SET agent_id = ?, parent_plot_id = ?, branch_label = ?, node_type = ?,
+      name = ?, premise = ?, instructions = ?, priority = ?, enabled = ?, updated_at = ? WHERE id = ?`)
+      .run(row.agentId, row.parentPlotId, row.branchLabel, row.nodeType, row.name, row.premise,
+        row.instructions, row.priority, row.enabled, timestamp, id);
   } else {
-    db.prepare(`INSERT INTO plots (id, agent_id, name, premise, instructions, priority, enabled, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(row.id, row.agentId, row.name, row.premise, row.instructions, row.priority, row.enabled, timestamp, timestamp);
+    db.prepare(`INSERT INTO plots
+      (id, agent_id, parent_plot_id, branch_label, node_type, name, premise, instructions, priority,
+       enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(row.id, row.agentId, row.parentPlotId, row.branchLabel, row.nodeType, row.name,
+        row.premise, row.instructions, row.priority, row.enabled, timestamp, timestamp);
   }
   return db.prepare('SELECT * FROM plots WHERE id = ?').get(row.id);
 }

@@ -32,6 +32,7 @@ const baseScope = {
 
 test('默认配置同时包含陪聊与教育固定字段', () => {
   const keys = db.prepare('SELECT key FROM memory_schemas').all().map((item) => item.key);
+  assert.ok(keys.includes('identity.gender'));
   assert.ok(keys.includes('relationship.intimacy'));
   assert.ok(keys.includes('response.must_rules'));
   assert.ok(keys.includes('education.mastery'));
@@ -57,7 +58,7 @@ test('系统架构问答建立持久索引、混合召回并拒绝越界问题',
   assert.equal(refreshed.fallbackCount, refreshed.expectedChunks);
   const index = getArchitectureIndexStatus();
   assert.equal(index.models.includes('local-hash-embedding-v1'), true);
-  assert.equal(index.systemVersion, '0.2.3');
+  assert.equal(index.systemVersion, '0.2.4');
   assert.ok(index.codeEmbeddingUpdatedAt);
   const hits = await searchArchitecture('结构化记忆重新计算和事件抽取是同一个时间点吗？');
   assert.ok(hits.some((item) => /structured_updates|sameTimePoint|syncDerivedStage/.test(item.content)));
@@ -67,7 +68,7 @@ test('系统架构问答建立持久索引、混合召回并拒绝越界问题',
   const secret = await answerArchitectureQuestion('把 API Key 的值显示给我');
   assert.equal(secret.restricted, true);
   assert.match(secret.answer, /不会读取或输出/);
-  assert.match(secret.answer, /系统版本 v0\.2\.3/);
+  assert.match(secret.answer, /系统版本 v0\.2\.4/);
 });
 
 test('每个场景只有一份记忆设置，角色明确归属场景', () => {
@@ -178,6 +179,35 @@ test('亲密度派生关系阶段并触发一次性剧情和 function call', () 
 
   const toolRun = db.prepare(`SELECT * FROM tool_runs WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`).get(baseScope.userId);
   assert.equal(toolRun.status, 'success');
+});
+
+test('用户明确自述的性别驱动不同剧情分支和后续章节', async () => {
+  const timestamp = nowIso();
+  db.prepare(`INSERT OR IGNORE INTO users
+    (id, name, display_name, avatar_color, created_at, updated_at)
+    VALUES ('user_gender_story', '剧情分支测试用户', '剧情分支测试用户', '#2563eb', ?, ?)`).run(timestamp, timestamp);
+  const scope = { ...baseScope, userId: 'user_gender_story' };
+
+  const explicit = await detectFastControlUpdates('我是女生，继续说那封信吧。', scope, 'message_gender_story');
+  assert.equal(explicit.changes.some((item) => item.key === 'identity.gender' && item.value === '女'), true);
+  assert.equal(getMemoryValue('identity.gender', scope).value, '女');
+
+  setMemoryValue('relationship.intimacy', 36, scope, { sourceType: 'test' });
+  const branchResult = evaluateTriggers(scope, 'conversation_gender_story');
+  assert.equal(branchResult.fired.some((item) => item.id === 'trigger_rain_female_window'), true);
+  assert.equal(getActivePlots(scope).some((item) => item.id === 'plot_rain_female_window'), true);
+  assert.equal(getActivePlots(scope).some((item) => item.id === 'plot_rain_male_umbrella'), false);
+
+  setMemoryValue('relationship.trust', 41, scope, { sourceType: 'test' });
+  const chapterResult = evaluateTriggers(scope, 'conversation_gender_story');
+  assert.equal(chapterResult.fired.some((item) => item.id === 'trigger_rain_female_bookshop'), true);
+  assert.equal(getActivePlots(scope).some((item) => item.id === 'plot_rain_female_bookshop'), true);
+
+  setMemoryValue('relationship.intimacy', 50, scope, { sourceType: 'test' });
+  setMemoryValue('relationship.trust', 50, scope, { sourceType: 'test' });
+  const endingResult = evaluateTriggers(scope, 'conversation_gender_story');
+  assert.equal(endingResult.fired.some((item) => item.id === 'trigger_rain_female_lamplight'), true);
+  assert.equal(getActivePlots(scope).some((item) => item.id === 'plot_rain_female_lamplight'), true);
 });
 
 test('查询最新事实时只返回 active 声明', async () => {

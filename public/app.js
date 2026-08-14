@@ -34,9 +34,10 @@ const state = {
   extractionContract: null,
   extractionContractError: '',
   plots: [],
+  selectedPlotId: '__root__',
   triggers: [],
   tools: [],
-  automationTab: 'triggers',
+  automationTab: 'story',
   timelineView: 'all',
   architectureOverview: null,
   architectureSources: new Map(),
@@ -50,8 +51,8 @@ const pageTitles = {
   chat: '角色对话',
   memory: '记忆查询',
   schemas: '记忆设置',
-  persona: '人设与剧情',
-  automation: '触发与工具',
+  persona: '角色与人设',
+  automation: '剧情与故事',
   timeline: '系统架构图',
   users: '用户列表',
   feedback: '反馈列表'
@@ -1617,12 +1618,10 @@ async function loadPersona() {
   renderPersonaFixedAttributes(parseJson(agent.fixed_attributes_json, {}));
   $('#personaScenario').textContent = scene?.name || scenarioLabel(agent.scenario_type);
   $('#personaHeaderName').textContent = agent.name;
-  $('#personaHeaderMeta').textContent = `${scene?.name || scenarioLabel(agent.scenario_type)} · 人设 v${Number(agent.profile_version || 1)} · 专属剧情配置`;
+  $('#personaHeaderMeta').textContent = `${scene?.name || scenarioLabel(agent.scenario_type)} · 人设 v${Number(agent.profile_version || 1)} · 每轮固定注入`;
   $('#personaAvatar').textContent = agent.name.slice(0, 1);
   $('#personaAvatar').style.background = agent.avatar_color;
   $('#pageMeta').textContent = `${scene?.name || scenarioLabel(agent.scenario_type)} · ${agent.name}专属配置`;
-  state.plots = await api(`/api/plots?agent_id=${encodeURIComponent(state.currentAgentId)}`);
-  renderPlots();
   applyRoleUi();
 }
 
@@ -1708,70 +1707,310 @@ function renderPersonaAgentList() {
   refreshIcons();
 }
 
-function renderPlots() {
-  $('#plotCount').textContent = `${state.plots.length} 条`;
-  $('#plotList').innerHTML = state.plots.length ? state.plots.map((plot) => `
-    <article class="plot-item"><div class="plot-item-head"><div><span class="plot-index">${String(state.plots.indexOf(plot) + 1).padStart(2, '0')}</span><strong>${escapeHtml(plot.name)}</strong></div>${isAdmin() ? `<button class="icon-button bordered edit-plot" data-id="${plot.id}" title="编辑剧情" aria-label="编辑${escapeHtml(plot.name)}"><i data-lucide="pencil"></i></button>` : '<span class="badge">只读</span>'}</div>
-      <p>${escapeHtml(plot.premise)}</p><div class="plot-instruction">${escapeHtml(plot.instructions)}</div><div class="plot-item-meta"><span class="badge ${plot.enabled ? 'blue' : 'red'}">${plot.enabled ? '已启用' : '已停用'}</span><span class="badge">优先级 ${plot.priority}</span></div></article>`).join('') : emptyState('book-open', '尚无剧情');
-  $$('.edit-plot').forEach((button) => button.addEventListener('click', () => editPlot(button.dataset.id)));
+const storyNodeMeta = {
+  chapter: { label: '章节', icon: 'book-open' },
+  branch: { label: '分支', icon: 'git-branch' },
+  ending: { label: '结局', icon: 'flag' }
+};
+
+const memoryKeyLabels = {
+  'identity.gender': '用户性别',
+  'relationship.intimacy': '亲密度',
+  'relationship.trust': '信任度',
+  'relationship.stage': '关系阶段',
+  'education.mastery': '知识点掌握度'
+};
+
+function plotById(id) {
+  return state.plots.find((plot) => plot.id === id);
+}
+
+function triggersForPlot(plotId) {
+  return state.triggers.filter((trigger) => (trigger.actions || []).some((action) =>
+    ['unlock_plot', 'unlock_story_chapter'].includes(action.type) && action.plot_id === plotId));
+}
+
+function plotTargetsForTrigger(trigger) {
+  return (trigger.actions || [])
+    .filter((action) => ['unlock_plot', 'unlock_story_chapter'].includes(action.type) && action.plot_id)
+    .map((action) => plotById(action.plot_id))
+    .filter(Boolean);
+}
+
+function formatConditionValue(value) {
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function describeCondition(condition) {
+  if (!condition || typeof condition !== 'object') return '未配置条件';
+  if (Array.isArray(condition.all)) return condition.all.map(describeCondition).join(' 且 ');
+  if (Array.isArray(condition.any)) return condition.any.map(describeCondition).join(' 或 ');
+  if (condition.not) return `非（${describeCondition(condition.not)}）`;
+  if (condition.memory_key) {
+    const label = memoryKeyLabels[condition.memory_key] || condition.memory_key;
+    return `${label} ${condition.operator || '=='} ${formatConditionValue(condition.value)}`;
+  }
+  if (condition.plot_id) {
+    const plot = plotById(condition.plot_id);
+    return `剧情「${plot?.name || condition.plot_id}」状态 ${condition.operator || '=='} ${formatConditionValue(condition.value || 'unlocked')}`;
+  }
+  return '自定义条件';
+}
+
+function describeAction(action) {
+  if (action.type === 'unlock_plot') return `解锁剧情：${plotById(action.plot_id)?.name || action.plot_id}`;
+  if (action.type === 'memory_update') return `更新记忆：${memoryKeyLabels[action.key] || action.key}`;
+  if (action.type === 'tool_call') return `调用工具：${action.tool_key}`;
+  return action.type || '未知动作';
+}
+
+function storyTreeLevels() {
+  const byId = new Map(state.plots.map((plot) => [plot.id, plot]));
+  const memo = new Map();
+  const depthOf = (plot, visiting = new Set()) => {
+    if (memo.has(plot.id)) return memo.get(plot.id);
+    if (!plot.parent_plot_id || !byId.has(plot.parent_plot_id) || visiting.has(plot.id)) return 1;
+    const nextVisiting = new Set(visiting).add(plot.id);
+    const depth = Math.min(8, depthOf(byId.get(plot.parent_plot_id), nextVisiting) + 1);
+    memo.set(plot.id, depth);
+    return depth;
+  };
+  const levels = [[{ id: '__root__', name: '故事起点', node_type: 'root' }]];
+  state.plots.forEach((plot) => {
+    const depth = depthOf(plot);
+    if (!levels[depth]) levels[depth] = [];
+    levels[depth].push(plot);
+  });
+  levels.slice(1).forEach((level) => level?.sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name, 'zh-CN')));
+  return levels.filter(Boolean);
+}
+
+function renderStoryOverview() {
+  const active = state.plots.filter((plot) => plot.enabled).length;
+  const branches = new Set(state.plots.map((plot) => plot.branch_label).filter(Boolean)).size;
+  const covered = state.plots.filter((plot) => triggersForPlot(plot.id).length).length;
+  $('#storyOverview').innerHTML = `
+    <div><span>剧情节点</span><strong>${state.plots.length}</strong><small>${active} 个已启用</small></div>
+    <div><span>故事分支</span><strong>${branches}</strong><small>按前置节点连接</small></div>
+    <div><span>已配触发</span><strong>${covered}/${state.plots.length || 0}</strong><small>节点有解锁条件</small></div>
+    <div><span>可用工具</span><strong>${state.tools.filter((tool) => tool.enabled).length}</strong><small>Function call 执行器</small></div>`;
+}
+
+function renderStoryNode(plot) {
+  if (plot.id === '__root__') {
+    return `<button class="story-node root ${state.selectedPlotId === '__root__' ? 'selected' : ''}" data-plot-node="__root__">
+      <span class="story-node-orb"><i data-lucide="sparkles"></i></span>
+      <span class="story-node-copy"><span>STORY ROOT</span><strong>故事起点</strong><small>main_story / main</small></span>
+    </button>`;
+  }
+  const meta = storyNodeMeta[plot.node_type] || storyNodeMeta.chapter;
+  const triggers = triggersForPlot(plot.id);
+  const condition = triggers[0] ? describeCondition(triggers[0].condition) : '未配置解锁条件';
+  return `<button class="story-node ${escapeHtml(plot.node_type || 'chapter')} ${plot.enabled ? '' : 'disabled'} ${triggers.length ? 'configured' : 'unconfigured'} ${state.selectedPlotId === plot.id ? 'selected' : ''}" data-plot-node="${escapeHtml(plot.id)}">
+    <span class="story-node-orb"><i data-lucide="${meta.icon}"></i></span>
+    <span class="story-node-copy"><span>${escapeHtml(plot.branch_label || '主线')} · ${meta.label}</span><strong>${escapeHtml(plot.name)}</strong><small>${escapeHtml(condition)}</small></span>
+    <span class="story-node-state" title="${triggers.length ? '解锁条件已配置' : '尚未配置解锁条件'}"><i data-lucide="${triggers.length ? 'check' : 'minus'}"></i></span>
+  </button>`;
+}
+
+function drawStoryTreeEdges() {
+  const viewport = $('#storyTreeViewport');
+  const canvas = $('#storyTreeCanvas');
+  const svg = $('#storyTreeEdges');
+  if (!viewport || !canvas || !svg || state.automationTab !== 'story') return;
+  const width = Math.max(canvas.scrollWidth, viewport.clientWidth);
+  const height = Math.max(canvas.scrollHeight, viewport.clientHeight);
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  svg.setAttribute('width', width);
+  svg.setAttribute('height', height);
+  svg.style.width = `${width}px`;
+  svg.style.height = `${height}px`;
+  const viewportRect = viewport.getBoundingClientRect();
+  const nodeCenter = (id, side) => {
+    const node = $(`[data-plot-node="${CSS.escape(id)}"]`, canvas);
+    if (!node) return null;
+    const rect = node.getBoundingClientRect();
+    return {
+      x: (side === 'right' ? rect.right : rect.left) - viewportRect.left + viewport.scrollLeft,
+      y: rect.top - viewportRect.top + viewport.scrollTop + rect.height / 2
+    };
+  };
+  svg.innerHTML = state.plots.map((plot) => {
+    const parentId = plotById(plot.parent_plot_id) ? plot.parent_plot_id : '__root__';
+    const start = nodeCenter(parentId, 'right');
+    const end = nodeCenter(plot.id, 'left');
+    if (!start || !end) return '';
+    const bend = Math.max(32, (end.x - start.x) * 0.46);
+    return `<path d="M ${start.x} ${start.y} C ${start.x + bend} ${start.y}, ${end.x - bend} ${end.y}, ${end.x} ${end.y}" />`;
+  }).join('');
+}
+
+function selectStoryNode(id) {
+  state.selectedPlotId = id;
+  $$('.story-node', $('#storyTreeCanvas')).forEach((node) => node.classList.toggle('selected', node.dataset.plotNode === id));
+  renderStoryInspector();
+}
+
+function renderStoryInspector() {
+  const root = $('#storyInspector');
+  const plot = plotById(state.selectedPlotId);
+  if (!plot) {
+    root.innerHTML = `<div class="story-inspector-root"><span class="story-inspector-icon"><i data-lucide="sparkles"></i></span><span class="eyebrow">STORY ROOT</span><h3>故事起点</h3><p>这里是当前角色的剧情根节点。新建的首级剧情会从此处分支，实际是否解锁由节点的触发条件决定。</p>
+      <dl class="story-facts"><div><dt>角色</dt><dd>${escapeHtml(currentAgent()?.name || '-')}</dd></div><div><dt>故事空间</dt><dd>main_story / main</dd></div><div><dt>直接分支</dt><dd>${state.plots.filter((item) => !plotById(item.parent_plot_id)).length}</dd></div></dl>
+      ${isAdmin() ? '<button class="button primary wide" id="addRootPlot"><i data-lucide="plus"></i><span>添加首级剧情</span></button>' : '<span class="readonly-note"><i data-lucide="eye"></i>当前为只读视图</span>'}</div>`;
+    $('#addRootPlot')?.addEventListener('click', () => editPlot());
+    refreshIcons();
+    return;
+  }
+  const meta = storyNodeMeta[plot.node_type] || storyNodeMeta.chapter;
+  const parent = plotById(plot.parent_plot_id);
+  const children = state.plots.filter((item) => item.parent_plot_id === plot.id);
+  const triggers = triggersForPlot(plot.id);
+  root.innerHTML = `<div class="story-inspector-head"><div><span class="story-node-kind ${escapeHtml(plot.node_type)}">${meta.label}</span><span class="badge ${plot.enabled ? 'blue' : 'red'}">${plot.enabled ? '已启用' : '已停用'}</span></div>${isAdmin() ? `<button class="icon-button bordered" id="editSelectedPlot" title="编辑剧情节点"><i data-lucide="pencil"></i></button>` : ''}</div>
+    <span class="story-branch-name">${escapeHtml(plot.branch_label || '主线')}</span><h3>${escapeHtml(plot.name)}</h3><p>${escapeHtml(plot.premise || '未填写剧情前提')}</p>
+    <section class="story-inspector-section"><header><span>注入主模型的剧情指令</span><code>plot.instructions</code></header><div class="story-prompt-preview">${escapeHtml(plot.instructions)}</div></section>
+    <section class="story-inspector-section"><header><span>解锁条件与动作</span><b>${triggers.length} 组</b></header>${triggers.length ? triggers.map((trigger) => `<article class="story-trigger-brief"><div><i data-lucide="zap"></i><span><strong>${escapeHtml(trigger.name)}</strong><small>${escapeHtml(describeCondition(trigger.condition))}</small></span></div><p>${escapeHtml((trigger.actions || []).map(describeAction).join(' · '))}</p>${isAdmin() ? `<button class="text-action edit-trigger" data-id="${escapeHtml(trigger.id)}">编辑触发配置<i data-lucide="arrow-up-right"></i></button>` : ''}</article>`).join('') : `<div class="story-inline-empty"><i data-lucide="circle-dashed"></i><span>还没有解锁条件，该节点不会自动进入用户剧情。</span>${isAdmin() ? '<button id="addPlotTrigger" class="button secondary compact">配置触发</button>' : ''}</div>`}</section>
+    <dl class="story-facts"><div><dt>前置节点</dt><dd>${escapeHtml(parent?.name || '故事起点')}</dd></div><div><dt>后继分支</dt><dd>${children.length}</dd></div><div><dt>优先级</dt><dd>${Number(plot.priority)}</dd></div></dl>
+    ${isAdmin() ? `<div class="story-inspector-actions"><button class="button secondary" id="addChildPlot"><i data-lucide="git-branch-plus"></i><span>添加后继分支</span></button><button class="button secondary" id="addAnotherTrigger"><i data-lucide="zap"></i><span>新增触发</span></button></div>` : '<span class="readonly-note"><i data-lucide="eye"></i>当前为只读视图</span>'}`;
+  $('#editSelectedPlot')?.addEventListener('click', () => editPlot(plot.id));
+  $('#addChildPlot')?.addEventListener('click', () => editPlot('', plot.id));
+  $('#addPlotTrigger')?.addEventListener('click', () => editTrigger('', plot.id));
+  $('#addAnotherTrigger')?.addEventListener('click', () => editTrigger('', plot.id));
+  $$('.edit-trigger', root).forEach((button) => button.addEventListener('click', () => editTrigger(button.dataset.id)));
+  applyRoleUi();
   refreshIcons();
 }
 
-function editPlot(id = '') {
+function renderStoryTree() {
+  const levels = storyTreeLevels();
+  $('#storyTreeCanvas').innerHTML = levels.map((level, index) => `<div class="story-tree-level" data-story-depth="${index}">${level.map(renderStoryNode).join('')}</div>`).join('');
+  $$('[data-plot-node]', $('#storyTreeCanvas')).forEach((node) => node.addEventListener('click', () => selectStoryNode(node.dataset.plotNode)));
+  renderStoryInspector();
+  refreshIcons();
+  requestAnimationFrame(drawStoryTreeEdges);
+}
+
+function plotDescendantIds(plotId) {
+  const descendants = new Set();
+  const visit = (id) => state.plots.filter((plot) => plot.parent_plot_id === id).forEach((child) => {
+    if (descendants.has(child.id)) return;
+    descendants.add(child.id);
+    visit(child.id);
+  });
+  visit(plotId);
+  return descendants;
+}
+
+function editPlot(id = '', defaultParentId = '') {
   if (!isAdmin()) return;
-  const plot = state.plots.find((item) => item.id === id) || { name: '', premise: '', instructions: '', priority: 50, enabled: 1 };
+  const plot = plotById(id) || {
+    name: '', premise: '', instructions: '', parent_plot_id: defaultParentId,
+    branch_label: defaultParentId ? '新分支' : '主线', node_type: defaultParentId ? 'branch' : 'chapter', priority: 50, enabled: 1
+  };
+  const excluded = id ? plotDescendantIds(id) : new Set();
+  const parentOptions = state.plots.filter((item) => item.id !== id && !excluded.has(item.id));
   openModal({
-    title: id ? '编辑剧情' : '新建剧情',
-    body: `<label><span>剧情名称</span><input name="name" value="${escapeHtml(plot.name)}" required></label><label><span>剧情前提</span><textarea name="premise" rows="3">${escapeHtml(plot.premise)}</textarea></label><label><span>注入指令</span><textarea name="instructions" rows="7" required>${escapeHtml(plot.instructions)}</textarea></label><div class="form-grid two"><label><span>优先级</span><input name="priority" type="number" value="${plot.priority}" min="0" max="100"></label><label class="checkbox-row"><input name="enabled" type="checkbox" ${plot.enabled ? 'checked' : ''}><span>启用</span></label></div>`,
+    title: id ? '编辑剧情节点' : '新建剧情节点', width: 740,
+    body: `<div class="form-grid two"><label><span>剧情节点名称</span><input name="name" value="${escapeHtml(plot.name)}" required></label><label><span>节点类型</span><select name="node_type">${Object.entries(storyNodeMeta).map(([value, meta]) => `<option value="${value}" ${plot.node_type === value ? 'selected' : ''}>${meta.label}</option>`).join('')}</select></label></div>
+      <div class="form-grid two"><label><span>前置剧情节点</span><select name="parent_plot_id"><option value="">故事起点</option>${parentOptions.map((item) => `<option value="${escapeHtml(item.id)}" ${plot.parent_plot_id === item.id ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select><small>仅表示剧情结构；实际解锁仍由触发条件决定。</small></label><label><span>分支名称</span><input name="branch_label" value="${escapeHtml(plot.branch_label || '主线')}" placeholder="例如：情感线" required></label></div>
+      <label><span>剧情前提</span><textarea name="premise" rows="3" placeholder="说明这个节点的故事意图与进入时机">${escapeHtml(plot.premise)}</textarea></label>
+      <label><span>进入主模型 Input 的剧情指令</span><textarea name="instructions" rows="7" required placeholder="角色在该剧情中可以做什么、不能做什么，如何给用户选择空间">${escapeHtml(plot.instructions)}</textarea><small>节点解锁后，这段内容会编译进当前角色的 System Prompt。</small></label>
+      <div class="form-grid two"><label><span>注入优先级</span><input name="priority" type="number" value="${Number(plot.priority)}" min="0" max="100"></label><label class="checkbox-row"><input name="enabled" type="checkbox" ${plot.enabled ? 'checked' : ''}><span>启用该剧情节点</span></label></div>`,
     onSubmit: async (formData) => {
       const body = { ...Object.fromEntries(formData.entries()), agent_id: state.currentAgentId, enabled: formData.has('enabled'), priority: Number(formData.get('priority')) };
-      await api(id ? `/api/plots/${id}` : '/api/plots', { method: id ? 'PUT' : 'POST', body });
-      state.plots = await api(`/api/plots?agent_id=${encodeURIComponent(state.currentAgentId)}`);
-      renderPlots();
-      toast('剧情已保存');
+      const saved = await api(id ? `/api/plots/${id}` : '/api/plots', { method: id ? 'PUT' : 'POST', body });
+      state.selectedPlotId = saved.id;
+      await loadAutomation();
+      toast('剧情节点已保存');
     }
   });
 }
 
+function renderTriggerConfiguration() {
+  $('#automationContent').innerHTML = `<section class="story-config-surface"><header class="story-subview-header"><div><span class="eyebrow">UNLOCK RULES</span><h3>触发配置</h3><p>读取结构化记忆和剧情状态，命中后解锁节点、更新状态或调用工具。</p></div></header>
+    <div class="trigger-config-list">${state.triggers.length ? state.triggers.map((trigger) => {
+      const targets = plotTargetsForTrigger(trigger);
+      return `<article class="trigger-config-row ${trigger.enabled ? '' : 'disabled'}"><span class="trigger-status-icon"><i data-lucide="zap"></i></span><div class="trigger-config-copy"><div><strong>${escapeHtml(trigger.name)}</strong><span class="badge ${trigger.enabled ? 'blue' : 'red'}">${trigger.enabled ? '启用' : '停用'}</span></div><p>${escapeHtml(trigger.description || '未填写说明')}</p></div><div class="trigger-flow-block"><span>IF</span><strong>${escapeHtml(describeCondition(trigger.condition))}</strong></div><i class="trigger-flow-arrow" data-lucide="arrow-right"></i><div class="trigger-flow-block action"><span>THEN</span><strong>${escapeHtml((trigger.actions || []).map(describeAction).join(' · ') || '未配置动作')}</strong>${targets.map((plot) => `<button class="target-plot-link" data-open-plot="${escapeHtml(plot.id)}">${escapeHtml(plot.name)}<i data-lucide="locate-fixed"></i></button>`).join('')}</div><div class="trigger-policy"><span>${trigger.once_per_user ? '每用户一次' : `冷却 ${Number(trigger.cooldown_seconds)}s`}</span><small>优先级 ${Number(trigger.priority)}</small></div>${isAdmin() ? `<button class="icon-button bordered edit-trigger" data-id="${escapeHtml(trigger.id)}" title="编辑触发配置"><i data-lucide="pencil"></i></button>` : '<span class="badge">只读</span>'}</article>`;
+    }).join('') : emptyState('workflow', '尚无触发配置')}</div></section>`;
+  $$('.edit-trigger', $('#automationContent')).forEach((button) => button.addEventListener('click', () => editTrigger(button.dataset.id)));
+  $$('[data-open-plot]', $('#automationContent')).forEach((button) => button.addEventListener('click', () => {
+    state.automationTab = 'story';
+    $$('[data-automation-tab]').forEach((item) => item.classList.toggle('active', item.dataset.automationTab === 'story'));
+    state.selectedPlotId = button.dataset.openPlot;
+    renderAutomation();
+  }));
+}
+
+function renderToolCapabilities() {
+  $('#automationContent').innerHTML = `<section class="story-config-surface"><header class="story-subview-header"><div><span class="eyebrow">FUNCTION CAPABILITIES</span><h3>工具能力</h3><p>剧情触发可以在模型之外调用这些可审计的函数能力。</p></div></header><div class="tool-capability-list">${state.tools.map((tool) => `
+    <article class="tool-capability-row"><span class="tool-capability-icon"><i data-lucide="wrench"></i></span><div><strong>${escapeHtml(tool.name)}</strong><code>${escapeHtml(tool.key)}</code><p>${escapeHtml(tool.description)}</p></div><span class="badge">${escapeHtml(tool.handler_type)}</span><div class="tool-parameters"><span>入参</span><strong>${Object.keys(tool.input_schema?.properties || {}).length}</strong></div><span class="badge ${tool.enabled ? 'blue' : 'red'}">${tool.enabled ? '启用' : '停用'}</span></article>`).join('')}</div></section>`;
+}
+
 async function loadAutomation() {
-  state.triggers = await api(`/api/triggers?agent_id=${encodeURIComponent(state.currentAgentId)}`);
-  state.tools = await api('/api/tools');
+  [state.plots, state.triggers, state.tools] = await Promise.all([
+    api(`/api/plots?agent_id=${encodeURIComponent(state.currentAgentId)}`),
+    api(`/api/triggers?agent_id=${encodeURIComponent(state.currentAgentId)}`),
+    api('/api/tools')
+  ]);
+  if (state.selectedPlotId !== '__root__' && !plotById(state.selectedPlotId)) state.selectedPlotId = '__root__';
+  const agent = currentAgent();
+  const scene = sceneForAgent(agent);
+  $('#storyAvatar').textContent = agent?.name?.slice(0, 1) || '剧';
+  $('#storyAvatar').style.background = agent?.avatar_color || '#2563eb';
+  $('#storyHeaderMeta').textContent = `${scene?.name || scenarioLabel(agent?.scenario_type)} · ${agent?.name || '当前角色'}专属剧情 · user / agent / story / branch 隔离`;
+  $('#storyTreeTitle').textContent = `${agent?.name || '当前角色'}的主故事线`;
+  $('#pageMeta').textContent = `${scene?.name || '当前场景'} · ${agent?.name || '当前角色'} · main_story / main`;
+  renderStoryOverview();
   renderAutomation();
 }
 
 function renderAutomation() {
+  const storyMode = state.automationTab === 'story';
+  $('#storyTreeView').classList.toggle('hidden', !storyMode);
+  $('#automationContent').classList.toggle('hidden', storyMode);
+  $('#addPlotButton').classList.toggle('hidden', !storyMode || !isAdmin());
   $('#addTriggerButton').classList.toggle('hidden', state.automationTab !== 'triggers' || !isAdmin());
-  if (state.automationTab === 'tools') {
-    $('#automationContent').innerHTML = `
-      <table class="data-table"><thead><tr><th style="width:24%">工具</th><th style="width:38%">用途</th><th style="width:15%">执行器</th><th style="width:14%">状态</th><th style="width:9%">入参</th></tr></thead><tbody>${state.tools.map((tool) => `
-        <tr><td><span class="cell-main">${escapeHtml(tool.name)}</span><code>${escapeHtml(tool.key)}</code></td><td>${escapeHtml(tool.description)}</td><td><span class="badge">${escapeHtml(tool.handler_type)}</span></td><td><span class="badge ${tool.enabled ? 'blue' : 'red'}">${tool.enabled ? '启用' : '停用'}</span></td><td>${Object.keys(tool.input_schema?.properties || {}).length}</td></tr>`).join('')}</tbody></table>`;
-  } else {
-    $('#automationContent').innerHTML = state.triggers.length ? `
-      <table class="data-table"><thead><tr><th style="width:23%">触发器</th><th style="width:27%">条件</th><th style="width:25%">动作</th><th style="width:10%">策略</th><th style="width:8%">状态</th><th style="width:7%;text-align:right">操作</th></tr></thead><tbody>${state.triggers.map((trigger) => `
-        <tr><td><span class="cell-main">${escapeHtml(trigger.name)}</span><span class="cell-sub">${escapeHtml(trigger.description)}</span></td><td><code class="trigger-condition">${escapeHtml(JSON.stringify(trigger.condition))}</code></td><td class="value-cell">${escapeHtml((trigger.actions || []).map((action) => action.type).join(' · '))}</td><td><span class="badge">${trigger.once_per_user ? '单次' : `${trigger.cooldown_seconds}s`}</span></td><td><span class="badge ${trigger.enabled ? 'blue' : 'red'}">${trigger.enabled ? '启用' : '停用'}</span></td><td><div class="row-actions">${isAdmin() ? `<button class="icon-button edit-trigger" data-id="${trigger.id}" title="编辑"><i data-lucide="pencil"></i></button>` : '<span class="badge">只读</span>'}</div></td></tr>`).join('')}</tbody></table>` : emptyState('workflow', '尚无触发器');
-    $$('.edit-trigger').forEach((button) => button.addEventListener('click', () => editTrigger(button.dataset.id)));
-  }
+  if (storyMode) renderStoryTree();
+  else if (state.automationTab === 'triggers') renderTriggerConfiguration();
+  else renderToolCapabilities();
+  applyRoleUi();
   refreshIcons();
 }
 
-function editTrigger(id = '') {
+function editTrigger(id = '', defaultPlotId = '') {
   if (!isAdmin()) return;
   const trigger = state.triggers.find((item) => item.id === id) || {
     name: '', description: '', condition: { all: [{ memory_key: 'relationship.intimacy', operator: '>=', value: 30 }] },
-    actions: [{ type: 'unlock_plot', plot_id: state.plots[0]?.id || 'plot_rain_letter' }], once_per_user: 1,
+    actions: defaultPlotId ? [{ type: 'unlock_plot', plot_id: defaultPlotId }] : [], once_per_user: 1,
     cooldown_seconds: 0, priority: 50, enabled: 1
   };
+  const targetPlotId = defaultPlotId || (trigger.actions || []).find((action) => action.type === 'unlock_plot')?.plot_id || '';
   openModal({
-    title: id ? '编辑触发器' : '新建触发器', width: 680,
-    body: `<div class="form-grid two"><label><span>名称</span><input name="name" value="${escapeHtml(trigger.name)}" required></label><label><span>优先级</span><input name="priority" type="number" min="0" max="100" value="${trigger.priority}"></label></div><label><span>说明</span><input name="description" value="${escapeHtml(trigger.description)}"></label><label><span>条件 JSON</span><textarea name="condition" rows="7" required>${escapeHtml(JSON.stringify(trigger.condition, null, 2))}</textarea></label><label><span>动作 JSON</span><textarea name="actions" rows="8" required>${escapeHtml(JSON.stringify(trigger.actions, null, 2))}</textarea></label><div class="form-grid two"><label class="checkbox-row"><input name="once_per_user" type="checkbox" ${trigger.once_per_user ? 'checked' : ''}><span>每个用户仅触发一次</span></label><label class="checkbox-row"><input name="enabled" type="checkbox" ${trigger.enabled ? 'checked' : ''}><span>启用</span></label></div>`,
+    title: id ? '编辑触发配置' : '新建触发配置', width: 740,
+    body: `<div class="form-grid two"><label><span>配置名称</span><input name="name" value="${escapeHtml(trigger.name)}" required></label><label><span>目标剧情节点</span><select name="target_plot_id"><option value="">不直接解锁剧情</option>${state.plots.map((plot) => `<option value="${escapeHtml(plot.id)}" ${targetPlotId === plot.id ? 'selected' : ''}>${escapeHtml(plot.branch_label || '主线')} / ${escapeHtml(plot.name)}</option>`).join('')}</select></label></div>
+      <label><span>配置说明</span><input name="description" value="${escapeHtml(trigger.description)}" placeholder="说明什么时候进入这个剧情节点"></label>
+      <label><span>触发条件</span><textarea name="condition" rows="7" required>${escapeHtml(JSON.stringify(trigger.condition, null, 2))}</textarea><small>条件只读取已配置的结构化记忆。支持 all / any / not 组合。</small></label>
+      <details class="advanced-config"><summary>高级动作配置</summary><label><span>动作 JSON</span><textarea name="actions" rows="8" required>${escapeHtml(JSON.stringify(trigger.actions || [], null, 2))}</textarea><small>选择“目标剧情节点”后，系统会自动补齐 unlock_plot 动作；这里可另外配置记忆更新和 Function call。</small></label></details>
+      <div class="form-grid two"><label><span>冷却时间（秒）</span><input name="cooldown_seconds" type="number" min="0" value="${Number(trigger.cooldown_seconds || 0)}"></label><label><span>执行优先级</span><input name="priority" type="number" min="0" max="100" value="${Number(trigger.priority)}"></label></div>
+      <div class="form-grid two"><label class="checkbox-row"><input name="once_per_user" type="checkbox" ${trigger.once_per_user ? 'checked' : ''}><span>每个用户仅触发一次</span></label><label class="checkbox-row"><input name="enabled" type="checkbox" ${trigger.enabled ? 'checked' : ''}><span>启用该触发配置</span></label></div>`,
     onSubmit: async (formData) => {
       let condition;
       let actions;
       try { condition = JSON.parse(formData.get('condition')); actions = JSON.parse(formData.get('actions')); } catch { throw new Error('条件和动作必须是合法 JSON'); }
-      const body = { ...Object.fromEntries(formData.entries()), agent_id: state.currentAgentId, condition, actions, once_per_user: formData.has('once_per_user'), enabled: formData.has('enabled'), priority: Number(formData.get('priority')) };
+      if (!Array.isArray(actions)) throw new Error('动作 JSON 必须是数组');
+      const selectedPlotId = formData.get('target_plot_id');
+      const unlockIndex = actions.findIndex((action) => action.type === 'unlock_plot');
+      if (selectedPlotId && unlockIndex >= 0) actions[unlockIndex] = { ...actions[unlockIndex], plot_id: selectedPlotId };
+      else if (selectedPlotId) actions.push({ type: 'unlock_plot', plot_id: selectedPlotId });
+      else if (unlockIndex >= 0) actions.splice(unlockIndex, 1);
+      const body = {
+        ...Object.fromEntries(formData.entries()), agent_id: state.currentAgentId, condition, actions,
+        once_per_user: formData.has('once_per_user'), enabled: formData.has('enabled'),
+        cooldown_seconds: Number(formData.get('cooldown_seconds')), priority: Number(formData.get('priority'))
+      };
       await api(id ? `/api/triggers/${id}` : '/api/triggers', { method: id ? 'PUT' : 'POST', body });
       await loadAutomation();
-      toast('触发器已保存');
+      toast('触发配置已保存');
     }
   });
 }
@@ -2233,6 +2472,7 @@ $$('[data-config-link]').forEach((link) => link.addEventListener('click', async 
   history.replaceState(null, '', link.getAttribute('href'));
 }));
 $('#addTriggerButton').addEventListener('click', () => editTrigger());
+window.addEventListener('resize', () => requestAnimationFrame(drawStoryTreeEdges));
 
 initialize().then(refreshIcons).catch((error) => {
   showLogin();
