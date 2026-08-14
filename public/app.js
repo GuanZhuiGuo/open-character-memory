@@ -1,6 +1,7 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const appBasePath = $('meta[name="app-base-path"]')?.content || '';
+const CHAT_MESSAGE_MAX_CHARACTERS = 1000;
 
 const state = {
   page: 'chat',
@@ -426,16 +427,31 @@ function openMessageFeedback(messageId) {
   });
 }
 
+function updateMessageLength() {
+  const count = Array.from($('#messageInput').value).length;
+  const label = $('#messageLength');
+  label.textContent = `${count} / ${CHAT_MESSAGE_MAX_CHARACTERS}`;
+  label.classList.toggle('over-limit', count > CHAT_MESSAGE_MAX_CHARACTERS);
+}
+
 async function sendMessage(text) {
-  if (state.sending || !text.trim()) return;
+  const message = text.trim();
+  if (state.sending || !message) return;
+  const messageCharacters = Array.from(message).length;
+  if (messageCharacters > CHAT_MESSAGE_MAX_CHARACTERS) {
+    toast(`单条消息最多 ${CHAT_MESSAGE_MAX_CHARACTERS} 字，当前为 ${messageCharacters} 字`, 'error');
+    $('#messageInput').focus();
+    return;
+  }
   state.sending = true;
   $('#sendButton').disabled = true;
   $('#messageInput').value = '';
   $('#messageInput').style.height = 'auto';
+  updateMessageLength();
   const optimistic = {
     id: `local_${Date.now()}`,
     role: 'user',
-    content: text,
+    content: message,
     created_at: new Date().toISOString()
   };
   state.messages.push(optimistic);
@@ -447,7 +463,7 @@ async function sendMessage(text) {
         user_id: state.currentUserId,
         agent_id: state.currentAgentId,
         conversation_id: state.currentConversationId,
-        message: text
+        message
       }
     });
     state.currentConversationId = result.conversation.id;
@@ -515,18 +531,20 @@ async function loadArchitectureOverview() {
   const { thresholds, compression, timing, index, scene } = state.architectureOverview;
   const main = thresholds.mainModel;
   const extraction = thresholds.extraction;
+  const extractionInterval = Math.max(1, Number(extraction.intervalTurns || 1));
   $('#pageMeta').textContent = `${scene.name} · runtime / memory / retrieval`;
   $('#architectureMainWindow').textContent = `${main.messageLimit} 条消息 · 约 ${main.approximateTurns} 轮`;
   $('#architectureExtractionWindow').textContent = `${extraction.contextTurns} 轮 · 最多 ${extraction.messageLimit} 条`;
-  $('#architectureEventThreshold').textContent = `最多 ${extraction.maxEventsPerTurn} 个事件 · importance ≥ ${extraction.minImportance}`;
+  $('#architectureEventThreshold').textContent = `每 ${extractionInterval} 轮 · 最多 ${extraction.maxEventsPerBatch} 个事件 · importance ≥ ${extraction.minImportance}`;
+  $('#architectureRuntimeExtractionMode').textContent = `阻塞式 · 每 ${extractionInterval} 轮抽取`;
+  $('#architectureExtractionNodeTitle').textContent = `每 ${extractionInterval} 轮抽取与重算`;
+  $('#architectureExtractionStepTitle').textContent = `每 ${extractionInterval} 轮抽取`;
   $('#architectureCompressionStatus').textContent = compression.rollingSummaryEnabled ? '滚动摘要已启用' : '滚动摘要未启用';
   $('#architectureRecentContext').textContent = `最近 ${main.messageLimit} 条原文`;
   $('#architectureInputLimit').textContent = `0 < X ≤ ${main.messageLimit}`;
   $('#architectureMessageLimit').textContent = `X ≤ ${main.messageLimit}`;
   $('#architectureHistoryLimit').textContent = `最多 ${Math.max(0, main.messageLimit - 1)} 条 user / assistant 原文`;
-  $('#architectureExtractionTrigger').textContent = timing.triggerPoint === 'after_assistant_message_persisted'
-    ? 'assistant 落库后启动；同一 HTTP 请求继续等待'
-    : timing.triggerPoint;
+  $('#architectureExtractionTrigger').textContent = `累计第 ${extractionInterval} 个 assistant 落库后启动；该 HTTP 请求阻塞等待`;
   $('#architectureDerivedRule').textContent = thresholds.relationship.stages
     .slice().reverse().map((item) => `${item.minimum} ${item.stage}`).join(' · ');
   renderArchitectureIndex(index);
@@ -1307,9 +1325,9 @@ function renderEventExtractionSettings() {
   }
   $('#schemaSummary').innerHTML = [
     ['状态', profile.enabled ? '已启用' : '已停用'],
-    ['轮结束点', 'assistant 落库'],
+    ['抽取频率', `每 ${profile.extraction_interval_turns || 1} 轮`],
     ['历史理解窗口', `${profile.context_turns} 轮 / 最多 ${contract?.runtime?.historyMessageLimit || profile.context_turns * 2} 条`],
-    ['单轮写入上限', `${profile.max_events_per_turn} 事件`]
+    ['批次写入上限', `${contract?.runtime?.maxEventsPerBatch || Math.min(30, (profile.extraction_interval_turns || 1) * profile.max_events_per_turn)} 事件`]
   ].map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
   $('#schemaResultCount').textContent = '4 类抽取对象';
 
@@ -1323,26 +1341,27 @@ function renderEventExtractionSettings() {
     <div class="extraction-runtime-contract">
       <div><span>TURN END</span><i data-lucide="message-square"></i><strong>assistant 回复落库</strong><small>1 轮 = user 消息 + assistant 回复</small></div>
       <i data-lucide="arrow-right"></i>
-      <div class="active"><span>ONE MODEL OUTPUT</span><i data-lucide="scan-text"></i><strong>结构字段 + 事件 + 图谱</strong><small>同一次抽取，统一对齐当轮证据</small></div>
+      <div class="active"><span>EVERY ${profile.extraction_interval_turns || 1} TURNS</span><i data-lucide="scan-text"></i><strong>结构字段 + 事件 + 图谱</strong><small>合并待抽取批次，统一对齐逐条消息证据</small></div>
       <i data-lucide="arrow-right"></i>
       <div><span>COMMIT BARRIER</span><i data-lucide="database"></i><strong>状态派生与图谱提交</strong><small>提交完成后 /api/chat 才返回</small></div>
     </div>
     <form id="eventExtractionForm" class="extraction-form" data-config-form>
       <section class="extraction-form-section">
-        <header><span>01</span><div><strong>轮次、结束点与触发机制</strong><small>场景内所有角色共用，当轮内容与历史理解窗口分开传入</small></div></header>
+        <header><span>01</span><div><strong>轮次、结束点与触发机制</strong><small>场景内所有角色共用，待抽取批次与批次之前的消歧历史分开传入</small></div></header>
         <div class="turn-definition-banner">
           <div><i data-lucide="repeat-2"></i><span><strong>一轮如何计算</strong><small>1 条 user 消息 + 1 条 assistant 回复</small></span></div>
           <div><i data-lucide="flag"></i><span><strong>一轮何时结束</strong><small>assistant 回复成功写入 messages 表</small></span></div>
-          <div><i data-lucide="lock-keyhole"></i><span><strong>下一轮屏障</strong><small>同步抽取与提交完成后才解锁</small></span></div>
+          <div><i data-lucide="lock-keyhole"></i><span><strong>阈值轮屏障</strong><small>第 X 轮同步抽取与提交完成后才解锁</small></span></div>
         </div>
-        <div class="form-grid three extraction-runtime-fields">
+        <div class="form-grid two extraction-runtime-fields">
+          <label><span>每 X 轮抽取</span><input id="extractionIntervalTurns" name="extraction_interval_turns" type="number" min="1" max="20" step="1" value="${profile.extraction_interval_turns || 1}" required><small>未达到阈值的完整轮次先保留原始消息；达到 X 轮后合并为一个抽取批次</small></label>
           <label><span>历史理解窗口（指代消歧，轮）</span><input id="extractionContextTurns" name="context_turns" type="number" min="1" max="10" step="1" value="${profile.context_turns}" required><small id="turnWindowMessageLimit">例如“还是改到银座吧”需要历史才知道改的是哪次会面；最多读取 ${contract?.runtime?.historyMessageLimit || profile.context_turns * 2} 条，不会重复抽取旧事件</small></label>
-          <label><span>触发点（系统固定）</span><input value="assistant 回复落库后" disabled><small>after_assistant_message_persisted</small></label>
+          <label><span>触发点（系统固定）</span><input id="extractionTriggerPreview" value="累计第 ${profile.extraction_interval_turns || 1} 个 assistant 回复落库后" disabled><small>after_every_x_assistant_messages_persisted</small></label>
           <label><span>执行模式（系统固定）</span><input value="同一请求同步阻塞" disabled><small>blocking_after_assistant</small></label>
         </div>
         <div class="extraction-switches">
-          <label class="strategy-toggle"><span><strong>启用轮后抽取</strong><small>关闭后仅保留用户显式控制快通道</small></span><span class="toggle-control"><input name="enabled" type="checkbox" ${profile.enabled ? 'checked' : ''}><i></i></span></label>
-          <label class="strategy-toggle"><span><strong>将 assistant 回复传入抽取模型</strong><small>只用于理解当轮上下文，不能单独作为用户事实</small></span><span class="toggle-control"><input name="include_assistant" type="checkbox" ${profile.include_assistant ? 'checked' : ''}><i></i></span></label>
+          <label class="strategy-toggle"><span><strong>启用每 X 轮抽取</strong><small>关闭后仅保留用户显式控制快通道</small></span><span class="toggle-control"><input name="enabled" type="checkbox" ${profile.enabled ? 'checked' : ''}><i></i></span></label>
+          <label class="strategy-toggle"><span><strong>将 assistant 回复传入抽取模型</strong><small>用于识别角色言行与共同故事，不能单独写成用户事实</small></span><span class="toggle-control"><input name="include_assistant" type="checkbox" ${profile.include_assistant ? 'checked' : ''}><i></i></span></label>
         </div>
       </section>
       <section class="extraction-form-section">
@@ -1363,7 +1382,7 @@ function renderEventExtractionSettings() {
         <header><span>03</span><div><strong>事件阈值、类型与更新判定</strong><small>模型先按提示词生成候选，服务端再执行白名单、上限和重要度硬过滤</small></div></header>
         <div class="form-grid three">
           <label><span>配置名称</span><input name="name" value="${escapeHtml(profile.name)}" required></label>
-          <label><span>单轮最大事件数</span><input name="max_events_per_turn" type="number" min="1" max="10" step="1" value="${profile.max_events_per_turn}" required></label>
+          <label><span>每轮最大事件数</span><input name="max_events_per_turn" type="number" min="1" max="10" step="1" value="${profile.max_events_per_turn}" required><small>单次批次硬上限 = 每轮上限 × 实际批次轮数，最高 30</small></label>
           <label><span>新建事件最低重要度</span><input name="min_importance" type="number" min="0" max="1" step="0.05" value="${profile.min_importance}" required></label>
         </div>
         <div class="event-type-field"><span>允许的事件类型</span><div class="event-type-options">${options.map(([value, label]) => `<label><input type="checkbox" name="allowed_event_types" value="${escapeHtml(value)}" ${configuredTypes.includes(value) ? 'checked' : ''}><span><code>${escapeHtml(value)}</code>${escapeHtml(label)}</span></label>`).join('')}</div></div>
@@ -1374,14 +1393,14 @@ function renderEventExtractionSettings() {
         <header><span>04</span><div><strong>字段指令清单与系统硬保护</strong><small>这些字段指令会被逐条编译进模型 Input，manual / derived 还会被服务端拒绝写入</small></div></header>
         <div class="field-instruction-list">${fieldInstructions.map((item) => `<div><span><strong>${escapeHtml(item.label)}</strong><code>${escapeHtml(item.key)}</code></span><em>${escapeHtml(item.extraction_mode)}</em><p>${escapeHtml(item.extraction_instruction || '未配置抽取说明')}</p></div>`).join('')}</div>
         <div class="extraction-guards">
-          <span><i data-lucide="shield-check"></i><strong>只写当轮新增或更正</strong><small>历史上下文只用于理解指代</small></span>
+          <span><i data-lucide="shield-check"></i><strong>只写待抽取批次</strong><small>批次之前的历史只用于理解指代</small></span>
           <span><i data-lucide="shield-check"></i><strong>旧值标记为“已被新版本替代”</strong><small>当前有效版本才进入默认回答</small></span>
           <span><i data-lucide="shield-check"></i><strong>助手情节不等于用户事实</strong><small>必须有用户承接证据</small></span>
           <span><i data-lucide="shield-check"></i><strong>作用域硬隔离</strong><small>user / agent / story / branch</small></span>
         </div>
       </section>
       <section class="extraction-form-section prompt-preview-section">
-        <header><span>05</span><div><strong>当前生效的完整模型 Input</strong><small>来自同一个服务端编译器，与真实抽取共用代码；运行时占位符会替换为当轮数据</small></div><button id="copyExtractionPrompt" class="button secondary compact" type="button"><i data-lucide="copy"></i>复制 Input</button></header>
+        <header><span>05</span><div><strong>当前生效的完整模型 Input</strong><small>来自同一个服务端编译器，与真实抽取共用代码；运行时占位符会替换为待抽取批次</small></div><button id="copyExtractionPrompt" class="button secondary compact" type="button"><i data-lucide="copy"></i>复制 Input</button></header>
         <details class="compiled-prompt" open>
           <summary><span><i data-lucide="terminal-square"></i>查看 System + User Input</span><small>当前已生效版本，未保存的表单修改尚未编译</small></summary>
           <div class="compiled-prompt-layer"><span>SYSTEM</span><pre>${escapeHtml(promptSystem)}</pre></div>
@@ -1403,7 +1422,12 @@ function renderEventExtractionSettings() {
   const contextTurnsInput = $('#extractionContextTurns');
   contextTurnsInput?.addEventListener('input', () => {
     const turns = Math.max(1, Math.min(10, Number(contextTurnsInput.value) || 1));
-    $('#turnWindowMessageLimit').textContent = `最多注入 ${Math.min(20, turns * 2)} 条历史消息，不含当轮`;
+    $('#turnWindowMessageLimit').textContent = `最多注入 ${Math.min(20, turns * 2)} 条批次之前的历史消息，不含待抽取批次`;
+  });
+  const intervalTurnsInput = $('#extractionIntervalTurns');
+  intervalTurnsInput?.addEventListener('input', () => {
+    const turns = Math.max(1, Math.min(20, Number(intervalTurnsInput.value) || 1));
+    $('#extractionTriggerPreview').value = `累计第 ${turns} 个 assistant 回复落库后`;
   });
   $('#eventExtractionForm').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -1416,6 +1440,7 @@ function renderEventExtractionSettings() {
         name: formData.get('name'),
         enabled: formData.has('enabled'),
         include_assistant: formData.has('include_assistant'),
+        extraction_interval_turns: Number(formData.get('extraction_interval_turns')),
         context_turns: Number(formData.get('context_turns')),
         max_events_per_turn: Number(formData.get('max_events_per_turn')),
         min_importance: Number(formData.get('min_importance')),
@@ -2065,6 +2090,7 @@ $('#messageInput').addEventListener('keydown', (event) => {
 $('#messageInput').addEventListener('input', (event) => {
   event.target.style.height = 'auto';
   event.target.style.height = `${Math.min(event.target.scrollHeight, 140)}px`;
+  updateMessageLength();
 });
 $('#openTraceButton').addEventListener('click', () => openTraceDrawer().catch((error) => toast(error.message, 'error')));
 $('#closeTraceButton').addEventListener('click', closeTraceDrawer);

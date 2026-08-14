@@ -110,7 +110,10 @@ textarea { resize: vertical; line-height: 1.55; }
 @keyframes pulse { 0%, 100% { opacity: .35; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-3px); } }
 .composer { display: grid; grid-template-columns: minmax(0, 1fr) 38px; gap: 9px; width: min(780px, calc(100% - 40px)); margin: 0 auto 18px; padding: 8px 9px 8px 14px; background: #fff; border: 1px solid #cfd9dc; border-radius: 8px; box-shadow: 0 7px 22px rgba(36, 58, 66, 0.08); }
 .composer:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,.1), 0 7px 22px rgba(36,58,66,.08); }
-.composer textarea { max-height: 140px; padding: 7px 0; border: 0; box-shadow: none; resize: none; }
+.composer-input-wrap { position: relative; min-width: 0; }
+.composer textarea { width: 100%; max-height: 140px; padding: 7px 58px 7px 0; border: 0; box-shadow: none; resize: none; }
+.message-length { position: absolute; right: 0; bottom: 8px; color: #94a3b8; font: 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.message-length.over-limit { color: #c2413a; font-weight: 700; }
 .send-button { display: grid; place-items: center; align-self: end; width: 36px; height: 36px; color: #fff; background: var(--primary); border: 0; border-radius: 6px; }
 .send-button:hover { background: var(--primary-hover); }
 .send-button svg { width: 18px; }

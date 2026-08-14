@@ -117,7 +117,10 @@
               </div>
               <div id="messageList" class="message-list" aria-live="polite"></div>
               <form id="composerForm" class="composer">
-                <textarea id="messageInput" rows="1" placeholder="输入消息…" aria-label="消息内容"></textarea>
+                <div class="composer-input-wrap">
+                  <textarea id="messageInput" rows="1" placeholder="输入消息…" aria-label="消息内容" aria-describedby="messageLength"></textarea>
+                  <span id="messageLength" class="message-length">0 / 1000</span>
+                </div>
                 <button id="sendButton" class="send-button" type="submit" title="发送" aria-label="发送"><i data-lucide="arrow-up"></i></button>
               </form>
             </section>
@@ -326,7 +329,7 @@
               <div class="timeline-legend" aria-label="执行方式图例">
                 <span><i class="legend-mark sync"></i>本轮同步</span>
                 <span><i class="legend-mark demand"></i>按需 / 阈值</span>
-                <span><i class="legend-mark blocking"></i>轮后阻塞等待</span>
+                <span><i class="legend-mark blocking"></i>阈值轮阻塞等待</span>
               </div>
               <button id="openArchitectureAssistant" class="button primary compact" data-open-architecture-assistant><i data-lucide="bot"></i><span>问架构 AI</span></button>
             </div>
@@ -339,7 +342,7 @@
                   <span class="timeline-kicker">MEMORY AGENT SYSTEM ARCHITECTURE</span>
                   <h3>Memory Agent 系统架构</h3>
                 </div>
-                <div class="runtime-mode"><i data-lucide="lock-keyhole"></i><span><strong>当前实现</strong><small>阻塞式轮后抽取</small></span></div>
+                <div class="runtime-mode"><i data-lucide="lock-keyhole"></i><span><strong>当前实现</strong><small id="architectureRuntimeExtractionMode">阻塞式 · 每 X 轮抽取</small></span></div>
                 <div class="scope-chain" aria-label="记忆隔离键">
                   <code>user_id</code><i data-lucide="chevron-right"></i>
                   <code>agent_id</code><i data-lucide="chevron-right"></i>
@@ -351,7 +354,7 @@
               <section class="architecture-thresholds" aria-label="当前运行阈值">
                 <div><span>主模型近期窗口</span><strong id="architectureMainWindow">16 条消息 · 约 8 轮</strong><small>超出部分不进入本次 Input</small></div>
                 <div><span>历史理解窗口（指代消歧）</span><strong id="architectureExtractionWindow">2 轮 · 最多 4 条</strong><small>只用于理解“它 / 那件事”指的是什么</small></div>
-                <div><span>单轮写入门槛</span><strong id="architectureEventThreshold">3 事件 · importance ≥ 0.35</strong><small>低于门槛的新事件不落库</small></div>
+                <div><span>单次抽取门槛</span><strong id="architectureEventThreshold">每 X 轮 · 最多 3X 事件</strong><small>低于门槛的新事件不落库</small></div>
                 <div><span>长对话压缩</span><strong id="architectureCompressionStatus">滚动摘要未启用</strong><small>当前没有 token 阈值</small></div>
               </section>
 
@@ -385,7 +388,7 @@
                     <div class="architecture-node" data-phase="pre"><i data-lucide="badge-check"></i><span><strong>角色固定属性</strong><small>agent 全局，每轮固定注入</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="user-round"></i><span><strong>用户记忆</strong><small>结构化状态 + 用户事件</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="book-heart"></i><span><strong>我们的故事</strong><small>角色言行 + 共同承诺，按用户隔离</small></span></div>
-                    <div class="architecture-node" data-phase="write"><i data-lucide="scan-text"></i><span><strong>轮后抽取与重算</strong><small>结构化更新 → 派生 → 事件 → 触发</small></span></div>
+                    <div class="architecture-node" data-phase="write"><i data-lucide="scan-text"></i><span><strong id="architectureExtractionNodeTitle">每 X 轮抽取与重算</strong><small>结构化更新 → 派生 → 事件 → 触发</small></span></div>
                   </section>
 
                   <div class="architecture-map-connector" aria-hidden="true"><i data-lucide="arrow-right"></i><span>模型 / 持久化</span></div>
@@ -459,8 +462,8 @@
                 </div>
                 <a class="flow-node grid-col-8 has-arrow config-flow-node" href="#schemaTable" data-phase="write" data-config-link data-jump-page="schemas" data-jump-schema-tab="extraction" data-jump-target="#schemaTable">
                   <span class="step-number">07</span><i data-lucide="scan-text"></i>
-                  <strong>轮后抽取</strong>
-                  <small id="architectureExtractionTrigger">assistant 落库后启动；同一 HTTP 请求继续等待</small>
+                  <strong id="architectureExtractionStepTitle">每 X 轮抽取</strong>
+                  <small id="architectureExtractionTrigger">第 X 个 assistant 落库后启动；同一 HTTP 请求继续等待</small>
                   <span class="timing blocking">阻塞等待</span>
                 </a>
                 <div class="flow-node grid-col-9" data-phase="write">
@@ -493,13 +496,13 @@
                   <span>当前执行合同</span>
                 </div>
                 <div class="turn-boundary semantic-end grid-col-2 span-3" data-phase="generate write">
-                  <span>A · 语义轮结束</span><strong>assistant 消息已生成并落库</strong><small>这是记忆抽取的精确触发点，但浏览器尚未收到回包。</small>
+                  <span>A · 语义轮结束</span><strong>assistant 消息已生成并落库</strong><small>完整轮次计数 +1；累计达到 X 轮时启动记忆抽取。</small>
                 </div>
                 <div class="turn-wait grid-col-5 span-2" data-phase="write">
-                  <i data-lucide="hourglass"></i><strong>仍在同一 /api/chat</strong><small>抽取 → 对齐 → 提交 → 后置触发</small>
+                  <i data-lucide="hourglass"></i><strong>仅阈值轮继续等待</strong><small>抽取 → 对齐 → 提交 → 后置触发</small>
                 </div>
                 <div class="turn-boundary system-end grid-col-7 span-2" data-phase="write">
-                  <span>B · 系统轮完成</span><strong>记忆与触发器已提交</strong><small>服务端返回回复、Trace 和调度结果。</small>
+                  <span>B · 系统轮完成</span><strong>本轮调度已完成</strong><small>非阈值轮跳过抽取；阈值轮完成提交后返回。</small>
                 </div>
                 <div class="next-turn-unlock grid-col-9" data-phase="write">
                   <i data-lucide="unlock-keyhole"></i><strong>下一轮解锁</strong><small>前端恢复发送；服务端会话锁释放</small>
@@ -509,7 +512,7 @@
               <section class="timeline-grid swimlane write-order-lane" aria-label="记忆抽取与结构化记忆重算顺序">
                 <div class="lane-label">
                   <i data-lucide="list-ordered"></i>
-                  <strong>轮后写入顺序</strong>
+                  <strong>阈值轮写入顺序</strong>
                   <span>同阶段 ≠ 同时点</span>
                 </div>
                 <div class="write-order-node extract grid-col-2 span-2 has-arrow" data-phase="write">
@@ -545,15 +548,15 @@
                 </div>
                 <div class="memory-trigger grid-col-4 control" data-phase="pre">
                   <span class="memory-kind">控制层</span><strong>用户显式要求</strong>
-                  <small>user + agent；通过边界后当轮 upsert 并常驻</small><b>立即</b>
+                  <small>user + agent；显式控制走快通道，其余随批次 upsert 并常驻</small><b>立即 / 每 X 轮</b>
                 </div>
                 <div class="memory-trigger grid-col-5 state" data-phase="pre write">
                   <span class="memory-kind">状态层</span><strong>关系与场景</strong>
-                  <small>读 active 当前值；事件提交后计算增量与阶段</small><b>每轮 + 轮后</b>
+                  <small>读 active 当前值；批次提交后计算增量与阶段</small><b>每轮读 + 每 X 轮写</b>
                 </div>
                 <div class="memory-trigger grid-col-6 graph" data-phase="pre write">
                   <span class="memory-kind">故事层</span><strong>我们的故事</strong>
-                  <small>角色言行、共同物品和承诺；按用户与故事分支存储</small><b>按需 + 轮后</b>
+                  <small>角色言行、共同物品和承诺；按用户与故事分支存储</small><b>按需 + 每 X 轮</b>
                 </div>
                 <div class="memory-trigger grid-col-7 vector" data-phase="pre">
                   <span class="memory-kind">检索层</span><strong>事件图谱与向量</strong>
@@ -561,11 +564,11 @@
                 </div>
                 <div class="memory-trigger grid-col-8 profile" data-phase="write">
                   <span class="memory-kind">画像层</span><strong>稳定偏好</strong>
-                  <small>显式确认或多次证据达标后更新，拒绝偶发噪声</small><b>轮后</b>
+                  <small>显式确认或多次证据达标后更新，拒绝偶发噪声</small><b>每 X 轮</b>
                 </div>
                 <div class="memory-trigger grid-col-9 action" data-phase="write">
                   <span class="memory-kind">动作层</span><strong>条件规则</strong>
-                  <small>轮后记忆写入完成后读取结构化当前值并判定</small><b>写入后</b>
+                  <small>阈值轮记忆写入完成后读取结构化当前值并判定</small><b>写入后</b>
                 </div>
               </section>
 

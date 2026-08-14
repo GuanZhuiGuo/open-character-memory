@@ -11,7 +11,8 @@ import { checkArkHealth } from './lib/ark.js';
 import { config } from './lib/config.js';
 import { db, initializeDatabase } from './lib/db.js';
 import {
-  EXTRACTION_CONTEXT_MAX_MESSAGES, EXTRACTION_CONTEXT_MAX_TURNS, formatRetrievedMemory,
+  EXTRACTION_CONTEXT_MAX_MESSAGES, EXTRACTION_CONTEXT_MAX_TURNS, EXTRACTION_INTERVAL_MAX_TURNS,
+  formatRetrievedMemory,
   getEventExtractionProfile, getExtractionPromptContract, getRetrievalProfile, listEvents,
   listGraph, listMemoryForAdmin, listMemorySchemas, RELATIONSHIP_STAGE_THRESHOLDS,
   retrieveMemory, setMemoryValue
@@ -36,6 +37,8 @@ const ADMIN_SESSION_COOKIE = 'memory_admin_session';
 const USER_SESSION_COOKIE = 'memory_user_session';
 const ADMIN_SESSION_SECONDS = 12 * 60 * 60;
 const USER_SESSION_SECONDS = 7 * 24 * 60 * 60;
+const CHAT_MESSAGE_MAX_CHARACTERS = 1000;
+const REGISTRATION_USER_LIMIT = 15;
 
 class HttpError extends Error {
   constructor(status, message, code = 'REQUEST_FAILED', details = null) {
@@ -313,6 +316,7 @@ function listScenes() {
     rp.event_top_k AS retrieval_event_top_k,
     ep.id AS event_extraction_profile_id, ep.name AS event_extraction_profile_name,
     ep.enabled AS event_extraction_enabled, ep.context_turns AS event_extraction_context_turns,
+    ep.extraction_interval_turns AS event_extraction_interval_turns,
     (SELECT COUNT(*) FROM agents a WHERE a.scene_id = s.id AND a.enabled = 1) AS character_count,
     (SELECT COUNT(*) FROM memory_schemas ms
       WHERE ms.enabled = 1 AND (ms.scenario_type = 'all' OR ms.scenario_type = s.scenario_type)) AS field_count,
@@ -336,6 +340,7 @@ function architectureOverview(sceneId) {
   const intimacySchema = db.prepare("SELECT constraints_json FROM memory_schemas WHERE key = 'relationship.intimacy'").get();
   const intimacyConstraints = parseJson(intimacySchema?.constraints_json, {});
   const extractionTurns = Number(extraction?.context_turns || 0);
+  const extractionIntervalTurns = Math.max(1, Number(extraction?.extraction_interval_turns || 1));
   return {
     scene: { id: scene.id, name: scene.name, scenarioType: scene.scenario_type },
     thresholds: {
@@ -346,10 +351,16 @@ function architectureOverview(sceneId) {
         overflowBehavior: '超出的旧消息不进入主模型 Input，原始消息仍保留在数据库'
       },
       extraction: {
+        intervalTurns: extractionIntervalTurns,
+        intervalConfigurableRange: [1, EXTRACTION_INTERVAL_MAX_TURNS],
         contextTurns: extractionTurns,
         messageLimit: Math.min(EXTRACTION_CONTEXT_MAX_MESSAGES, extractionTurns * 2),
         configurableRange: [1, EXTRACTION_CONTEXT_MAX_TURNS],
         maxEventsPerTurn: Number(extraction?.max_events_per_turn || 0),
+        maxEventsPerBatch: Math.min(
+          30,
+          Number(extraction?.max_events_per_turn || 0) * extractionIntervalTurns
+        ),
         minImportance: Number(extraction?.min_importance || 0),
         includeAssistant: Boolean(extraction?.include_assistant)
       },
@@ -382,14 +393,15 @@ function architectureOverview(sceneId) {
     timing: {
       sameTimePoint: false,
       sameBlockingPhase: true,
-      triggerPoint: extraction?.trigger_point || 'after_assistant_message_persisted',
+      triggerPoint: extraction?.trigger_point || 'after_every_x_assistant_messages_persisted',
+      extractionIntervalTurns,
       executionMode: extraction?.execution_mode || 'blocking_after_assistant',
       steps: [
-        { order: 1, key: 'extract', label: '记忆抽取模型返回结构化操作' },
+        { order: 1, key: 'extract', label: `累计 ${extractionIntervalTurns} 个完整轮次后，记忆抽取模型返回结构化操作` },
         { order: 2, key: 'structured', label: '写入 structured_updates 和 relationship_deltas' },
         { order: 3, key: 'derived', label: '亲密度写入时同步重算 relationship.stage' },
         { order: 4, key: 'events', label: '对齐并写入事件、声明、图边和向量' },
-        { order: 5, key: 'triggers', label: '轮后记忆写入完成后执行条件触发器' }
+        { order: 5, key: 'triggers', label: '达到阈值的轮次完成记忆写入后执行条件触发器' }
       ]
     },
     index: getArchitectureIndexStatus()
@@ -447,12 +459,21 @@ function updateEventExtractionProfile(sceneId, body) {
   const name = safeText(body.name ?? current.name, 100).trim();
   if (!name) throw new Error('事件抽取配置名称不能为空');
   db.prepare(`UPDATE event_extraction_profiles SET
-    name = ?, enabled = ?, context_turns = ?, include_assistant = ?, max_events_per_turn = ?,
+    name = ?, enabled = ?, extraction_interval_turns = ?, context_turns = ?,
+    include_assistant = ?, max_events_per_turn = ?,
     min_importance = ?, allowed_event_types_json = ?, update_signals_json = ?,
     event_instruction = ?, entity_instruction = ?, relation_instruction = ?, custom_rules = ?, updated_at = ?
     WHERE scene_id = ?`).run(
     name,
     booleanSetting(body.enabled, current.enabled),
+    numericSetting(
+      body,
+      'extraction_interval_turns',
+      current.extraction_interval_turns,
+      1,
+      EXTRACTION_INTERVAL_MAX_TURNS,
+      true
+    ),
     numericSetting(body, 'context_turns', current.context_turns, 1, EXTRACTION_CONTEXT_MAX_TURNS, true),
     booleanSetting(body.include_assistant, current.include_assistant),
     numericSetting(body, 'max_events_per_turn', current.max_events_per_turn, 1, 10, true),
@@ -713,6 +734,15 @@ async function handleApi(request, response, url) {
 
   if (pathname === '/api/auth/register' && method === 'POST') {
     const body = await readBody(request);
+    const userCount = Number(db.prepare('SELECT COUNT(*) AS count FROM users').get().count);
+    if (userCount >= REGISTRATION_USER_LIMIT) {
+      throw new HttpError(
+        409,
+        '当前体验用户已满，请联系韩康获得体验账户。',
+        'REGISTRATION_USER_LIMIT_REACHED',
+        { limit: REGISTRATION_USER_LIMIT }
+      );
+    }
     const username = normalizeUsername(body.username);
     const password = validatePassword(body.password);
     const displayName = safeText(body.display_name, 60).trim();
@@ -974,13 +1004,23 @@ async function handleApi(request, response, url) {
 
   if (pathname === '/api/chat' && method === 'POST') {
     const body = await readBody(request);
-    if (!body.message?.trim()) throw new Error('消息不能为空');
+    const message = String(body.message || '').trim();
+    if (!message) throw new HttpError(400, '消息不能为空', 'EMPTY_MESSAGE');
+    const messageCharacters = Array.from(message).length;
+    if (messageCharacters > CHAT_MESSAGE_MAX_CHARACTERS) {
+      throw new HttpError(
+        400,
+        `单条消息最多 ${CHAT_MESSAGE_MAX_CHARACTERS} 字，当前为 ${messageCharacters} 字。`,
+        'CHAT_MESSAGE_TOO_LONG',
+        { limit: CHAT_MESSAGE_MAX_CHARACTERS, actual: messageCharacters }
+      );
+    }
     const userId = assertUserAccess(principal, body.user_id);
     sendJson(response, 200, await chat({
       userId,
       agentId: body.agent_id,
       conversationId: body.conversation_id || '',
-      message: body.message
+      message
     }));
     return;
   }
