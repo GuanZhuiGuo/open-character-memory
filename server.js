@@ -12,8 +12,9 @@ import { config } from './lib/config.js';
 import { db, initializeDatabase } from './lib/db.js';
 import {
   EXTRACTION_CONTEXT_MAX_MESSAGES, EXTRACTION_CONTEXT_MAX_TURNS, formatRetrievedMemory,
-  getEventExtractionProfile, getRetrievalProfile, listEvents, listGraph, listMemoryForAdmin,
-  listMemorySchemas, RELATIONSHIP_STAGE_THRESHOLDS, retrieveMemory, setMemoryValue
+  getEventExtractionProfile, getExtractionPromptContract, getRetrievalProfile, listEvents,
+  listGraph, listMemoryForAdmin, listMemorySchemas, RELATIONSHIP_STAGE_THRESHOLDS,
+  retrieveMemory, setMemoryValue
 } from './lib/memory.js';
 import { getTrace, listTraces } from './lib/trace.js';
 import { listPlots, listTools, listTriggers } from './lib/triggers.js';
@@ -246,7 +247,8 @@ function updateEventExtractionProfile(sceneId, body) {
   if (!name) throw new Error('事件抽取配置名称不能为空');
   db.prepare(`UPDATE event_extraction_profiles SET
     name = ?, enabled = ?, context_turns = ?, include_assistant = ?, max_events_per_turn = ?,
-    min_importance = ?, allowed_event_types_json = ?, update_signals_json = ?, custom_rules = ?, updated_at = ?
+    min_importance = ?, allowed_event_types_json = ?, update_signals_json = ?,
+    event_instruction = ?, entity_instruction = ?, relation_instruction = ?, custom_rules = ?, updated_at = ?
     WHERE scene_id = ?`).run(
     name,
     booleanSetting(body.enabled, current.enabled),
@@ -254,7 +256,11 @@ function updateEventExtractionProfile(sceneId, body) {
     booleanSetting(body.include_assistant, current.include_assistant),
     numericSetting(body, 'max_events_per_turn', current.max_events_per_turn, 1, 10, true),
     numericSetting(body, 'min_importance', current.min_importance, 0, 1),
-    json(eventTypes), json(updateSignals), safeText(body.custom_rules ?? current.custom_rules, 4000),
+    json(eventTypes), json(updateSignals),
+    safeText(body.event_instruction ?? current.event_instruction, 4000),
+    safeText(body.entity_instruction ?? current.entity_instruction, 4000),
+    safeText(body.relation_instruction ?? current.relation_instruction, 4000),
+    safeText(body.custom_rules ?? current.custom_rules, 4000),
     nowIso(), sceneId
   );
   return getEventExtractionProfile(sceneId);
@@ -312,6 +318,10 @@ function saveSchema(body, id = null) {
     valueType: body.value_type ?? current?.value_type ?? 'string',
     scope: body.scope ?? current?.scope ?? 'user_agent',
     description: safeText(body.description ?? current?.description ?? '', 1000),
+    extractionInstruction: safeText(
+      body.extraction_instruction ?? current?.extraction_instruction ?? body.description ?? current?.description ?? '',
+      2000
+    ),
     defaultJson: json(body.default_value ?? parseJson(current?.default_json)),
     constraintsJson: json(body.constraints ?? parseJson(current?.constraints_json, {})),
     promptTemplate: safeText(body.prompt_template ?? current?.prompt_template ?? '', 1000),
@@ -326,21 +336,23 @@ function saveSchema(body, id = null) {
   const timestamp = nowIso();
   if (current) {
     db.prepare(`UPDATE memory_schemas SET key = ?, label = ?, category = ?, scenario_type = ?,
-      value_type = ?, scope = ?, description = ?, default_json = ?, constraints_json = ?,
-      prompt_template = ?, pinned = ?, required = ?, extraction_mode = ?, sensitivity = ?,
-      enabled = ?, sort_order = ?, updated_at = ? WHERE id = ?`)
+      value_type = ?, scope = ?, description = ?, extraction_instruction = ?, default_json = ?,
+      constraints_json = ?, prompt_template = ?, pinned = ?, required = ?, extraction_mode = ?,
+      sensitivity = ?, enabled = ?, sort_order = ?, updated_at = ? WHERE id = ?`)
       .run(values.key, values.label, values.category, values.scenarioType, values.valueType, values.scope,
-        values.description, values.defaultJson, values.constraintsJson, values.promptTemplate, values.pinned,
-        values.required, values.extractionMode, values.sensitivity, values.enabled, values.sortOrder, timestamp, id);
+        values.description, values.extractionInstruction, values.defaultJson, values.constraintsJson,
+        values.promptTemplate, values.pinned, values.required, values.extractionMode, values.sensitivity,
+        values.enabled, values.sortOrder, timestamp, id);
   } else {
     db.prepare(`INSERT INTO memory_schemas
-      (id, key, label, category, scenario_type, value_type, scope, description, default_json,
-       constraints_json, prompt_template, pinned, required, extraction_mode, sensitivity, enabled,
-       sort_order, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      (id, key, label, category, scenario_type, value_type, scope, description,
+       extraction_instruction, default_json, constraints_json, prompt_template, pinned, required,
+       extraction_mode, sensitivity, enabled, sort_order, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(values.id, values.key, values.label, values.category, values.scenarioType, values.valueType,
-        values.scope, values.description, values.defaultJson, values.constraintsJson, values.promptTemplate,
-        values.pinned, values.required, values.extractionMode, values.sensitivity, values.enabled,
+        values.scope, values.description, values.extractionInstruction, values.defaultJson,
+        values.constraintsJson, values.promptTemplate, values.pinned, values.required,
+        values.extractionMode, values.sensitivity, values.enabled,
         values.sortOrder, timestamp, timestamp);
   }
   return db.prepare('SELECT * FROM memory_schemas WHERE id = ?').get(values.id);
@@ -515,6 +527,11 @@ async function handleApi(request, response, url) {
   }
   if (extractionProfileMatch && method === 'PUT') {
     sendJson(response, 200, updateEventExtractionProfile(extractionProfileMatch[1], await readBody(request)));
+    return;
+  }
+  const extractionContractMatch = pathname.match(/^\/api\/scenes\/([^/]+)\/extraction-contract$/);
+  if (extractionContractMatch && method === 'GET') {
+    sendJson(response, 200, getExtractionPromptContract(extractionContractMatch[1]));
     return;
   }
   if (pathname === '/api/architecture/overview' && method === 'GET') {

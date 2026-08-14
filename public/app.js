@@ -18,6 +18,7 @@ const state = {
   eventListIncludeHistory: false,
   graphData: null,
   graphNetwork: null,
+  graphNodeDetails: new Map(),
   graphIncludeHistory: false,
   graphTypes: { entity: true, event: true, claim: true },
   retrievalProfile: null,
@@ -26,6 +27,7 @@ const state = {
   schemas: [],
   schemaTab: 'fields',
   eventExtractionProfile: null,
+  extractionContract: null,
   plots: [],
   triggers: [],
   tools: [],
@@ -648,10 +650,12 @@ function renderGraph(graph) {
   state.graphData = graph;
   state.graphNetwork?.destroy();
   state.graphNetwork = null;
+  state.graphNodeDetails = new Map();
   metrics([
     ['实体', graph.entities.length],
     ['关系边', graph.edges.length],
     ['剧情事件', graph.events.length],
+    ['事件实体链接', (graph.eventEntities || []).length],
     ['有效声明', graph.claims.filter((item) => item.status === 'active').length]
   ]);
   const visible = (item) => state.graphIncludeHistory || item.status === 'active';
@@ -712,6 +716,15 @@ function graphNodeLabel(value, limit = 22) {
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
 
+function graphEventEntityRole(role) {
+  return ({
+    mentioned: '事件涉及',
+    claim_subject: '声明主体',
+    relation_source: '关系源点',
+    relation_target: '关系终点'
+  })[role] || role;
+}
+
 function renderGraphInspector(node) {
   const root = $('#graphInspector');
   if (!root || !node) return;
@@ -721,7 +734,17 @@ function renderGraphInspector(node) {
     </div>
     <h4>${escapeHtml(node.title)}</h4>
     ${node.description ? `<p>${escapeHtml(node.description)}</p>` : ''}
-    <dl>${node.fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || '-')}</dd></div>`).join('')}</dl>`;
+    <dl>${node.fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || '-')}</dd></div>`).join('')}</dl>
+    ${node.relatedEvents?.length ? `<section class="graph-related-section"><header><span>关联事件</span><b>${node.relatedEvents.length}</b></header>${node.relatedEvents.map((item) => `<button type="button" data-focus-graph-node="${escapeHtml(item.nodeId)}"><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.storyTime || '未设定剧情时间')}</small></span><em>${escapeHtml(item.roles.join('·'))}</em><i data-lucide="locate-fixed"></i></button>`).join('')}</section>` : ''}
+    ${node.relatedEntities?.length ? `<section class="graph-related-section"><header><span>关联实体</span><b>${node.relatedEntities.length}</b></header>${node.relatedEntities.map((item) => `<button type="button" data-focus-graph-node="${escapeHtml(item.nodeId)}"><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.type)}</small></span><em>${escapeHtml(item.roles.join('·'))}</em><i data-lucide="locate-fixed"></i></button>`).join('')}</section>` : ''}`;
+  $$('[data-focus-graph-node]', root).forEach((button) => button.addEventListener('click', () => {
+    const nodeId = button.dataset.focusGraphNode;
+    if (!state.graphNetwork || !state.graphNodeDetails.has(nodeId)) return;
+    state.graphNetwork.selectNodes([nodeId]);
+    state.graphNetwork.focus(nodeId, { scale: Math.max(state.graphNetwork.getScale(), 0.9), animation: { duration: 260 } });
+    renderGraphInspector(state.graphNodeDetails.get(nodeId));
+  }));
+  refreshIcons();
 }
 
 function buildGraphNetwork(graph) {
@@ -733,6 +756,40 @@ function buildGraphNetwork(graph) {
   const nodeDetails = new Map();
   const visibleNodeIds = new Set();
   const inactiveColor = { background: '#f1f5f9', border: '#94a3b8', highlight: { background: '#e2e8f0', border: '#64748b' } };
+  const eventEntityLinks = new Map();
+  const relatedEventsByEntity = new Map();
+  const relatedEntitiesByEvent = new Map();
+  for (const association of graph.eventEntities || []) {
+    if (!state.graphIncludeHistory && association.event_status !== 'active') continue;
+    const pairKey = `${association.event_id}:${association.entity_id}`;
+    const pair = eventEntityLinks.get(pairKey) || { ...association, roles: [] };
+    const roleLabel = graphEventEntityRole(association.role);
+    if (!pair.roles.includes(roleLabel)) pair.roles.push(roleLabel);
+    eventEntityLinks.set(pairKey, pair);
+
+    const entityEvents = relatedEventsByEntity.get(association.entity_id) || new Map();
+    const relatedEvent = entityEvents.get(association.event_id) || {
+      nodeId: `event:${association.event_id}`,
+      title: association.event_title,
+      storyTime: association.story_time,
+      status: association.event_status,
+      roles: []
+    };
+    if (!relatedEvent.roles.includes(roleLabel)) relatedEvent.roles.push(roleLabel);
+    entityEvents.set(association.event_id, relatedEvent);
+    relatedEventsByEntity.set(association.entity_id, entityEvents);
+
+    const eventEntities = relatedEntitiesByEvent.get(association.event_id) || new Map();
+    const relatedEntity = eventEntities.get(association.entity_id) || {
+      nodeId: `entity:${association.entity_id}`,
+      name: association.entity_name,
+      type: association.entity_type,
+      roles: []
+    };
+    if (!relatedEntity.roles.includes(roleLabel)) relatedEntity.roles.push(roleLabel);
+    eventEntities.set(association.entity_id, relatedEntity);
+    relatedEntitiesByEvent.set(association.event_id, eventEntities);
+  }
 
   if (state.graphTypes.entity) {
     for (const entity of graph.entities.filter(visible)) {
@@ -747,7 +804,8 @@ function buildGraphNetwork(graph) {
       const aliases = parseJson(entity.aliases_json, []);
       nodeDetails.set(id, {
         kind: 'entity', kindLabel: '实体', title: entity.canonical_name, status: entity.status,
-        description: '', fields: [['类型', entity.entity_type], ['别名', aliases.join('、')], ['更新', formatDate(entity.updated_at)]]
+        description: '', fields: [['类型', entity.entity_type], ['别名', aliases.join('、')], ['更新', formatDate(entity.updated_at)]],
+        relatedEvents: [...(relatedEventsByEntity.get(entity.id)?.values() || [])]
       });
     }
   }
@@ -763,7 +821,8 @@ function buildGraphNetwork(graph) {
       });
       nodeDetails.set(id, {
         kind: 'event', kindLabel: '事件', title: event.title, status: event.status,
-        description: event.summary, fields: [['事件类型', event.event_type], ['剧情时间', event.story_time], ['重要度', event.importance], ['事件 Key', event.event_key]]
+        description: event.summary, fields: [['事件类型', event.event_type], ['剧情时间', event.story_time], ['重要度', event.importance], ['事件 Key', event.event_key]],
+        relatedEntities: [...(relatedEntitiesByEvent.get(event.id)?.values() || [])]
       });
     }
   }
@@ -792,6 +851,19 @@ function buildGraphNetwork(graph) {
       edges.push({ id: `edge:${relation.id}`, from, to, label: relation.predicate, status: relation.status });
     }
   }
+  for (const association of eventEntityLinks.values()) {
+    const from = `event:${association.event_id}`;
+    const to = `entity:${association.entity_id}`;
+    if (visibleNodeIds.has(from) && visibleNodeIds.has(to)) {
+      edges.push({
+        id: `event-entity:${association.event_id}:${association.entity_id}`,
+        from,
+        to,
+        label: association.roles.join('·'),
+        status: association.event_status
+      });
+    }
+  }
   for (const claim of graph.claims.filter(visible)) {
     const claimId = `claim:${claim.id}`;
     const subjectId = `entity:${claim.subject_entity_id}`;
@@ -818,6 +890,7 @@ function buildGraphNetwork(graph) {
     refreshIcons();
     return;
   }
+  state.graphNodeDetails = nodeDetails;
   const networkEdges = edges.map((edge) => ({
     ...edge,
     arrows: { to: { enabled: true, scaleFactor: 0.55 } },
@@ -1007,6 +1080,18 @@ function renderMemoryHistory(history) {
   refreshIcons();
 }
 
+async function loadExtractionConfiguration(sceneId) {
+  if (!sceneId) {
+    state.eventExtractionProfile = null;
+    state.extractionContract = null;
+    return;
+  }
+  [state.eventExtractionProfile, state.extractionContract] = await Promise.all([
+    api(`/api/scenes/${encodeURIComponent(sceneId)}/event-extraction-profile`),
+    api(`/api/scenes/${encodeURIComponent(sceneId)}/extraction-contract`)
+  ]);
+}
+
 async function loadSchemas() {
   const [schemas, scenes] = await Promise.all([api('/api/memory/schemas'), api('/api/scenes')]);
   state.schemas = schemas;
@@ -1014,9 +1099,7 @@ async function loadSchemas() {
   if (!scenes.some((scene) => scene.id === state.currentSceneId)) {
     state.currentSceneId = sceneForAgent()?.id || scenes[0]?.id || '';
   }
-  state.eventExtractionProfile = state.currentSceneId
-    ? await api(`/api/scenes/${encodeURIComponent(state.currentSceneId)}/event-extraction-profile`)
-    : null;
+  await loadExtractionConfiguration(state.currentSceneId);
   renderSchemas();
 }
 
@@ -1034,7 +1117,7 @@ function renderSceneList() {
     state.currentSceneId = button.dataset.sceneId;
     localStorage.setItem('memory_studio_scene', state.currentSceneId);
     $('#schemaCategoryFilter').value = '';
-    state.eventExtractionProfile = await api(`/api/scenes/${encodeURIComponent(state.currentSceneId)}/event-extraction-profile`);
+    await loadExtractionConfiguration(state.currentSceneId);
     renderSchemas();
   }));
 }
@@ -1070,8 +1153,8 @@ function renderSchemas() {
   $('#schemaFieldToolbar').classList.toggle('hidden', !fieldsMode);
   $('#addSchemaButton').classList.toggle('hidden', !fieldsMode);
   $('#schemaModeHint').textContent = fieldsMode
-    ? '定义当前场景的固定字段与更新策略'
-    : '定义一轮结束后哪些内容进入事件图谱';
+    ? '定义字段、独立抽取说明与回复注入模板'
+    : '设置轮次窗口，并编排结构化字段、事件、实体和关系的实际提示词';
   if (!fieldsMode) {
     renderEventExtractionSettings();
     return;
@@ -1085,7 +1168,7 @@ function renderSchemas() {
   $('#schemaTable').innerHTML = filtered.length ? `
     <table class="data-table schema-table"><thead><tr><th style="width:28%">字段</th><th style="width:13%">分类</th><th style="width:13%">归属</th><th style="width:15%">类型 / 作用域</th><th style="width:15%">更新策略</th><th style="width:9%">注入</th><th style="width:7%;text-align:right">操作</th></tr></thead>
       <tbody>${filtered.map((item) => `<tr>
-        <td><span class="cell-main">${escapeHtml(item.label)}</span><code>${escapeHtml(item.key)}</code><span class="cell-sub schema-description">${escapeHtml(item.description || '暂无说明')}</span></td>
+        <td><span class="cell-main">${escapeHtml(item.label)}</span><code>${escapeHtml(item.key)}</code><span class="cell-sub schema-description"><b>字段说明</b>${escapeHtml(item.description || '暂无说明')}</span><span class="cell-sub schema-extraction-note"><b>抽取说明</b>${escapeHtml(item.extraction_instruction || item.description || '未配置')}</span></td>
         <td>${escapeHtml(item.category)}</td><td><span class="badge ${item.scenario_type === 'all' ? '' : 'blue'}">${item.scenario_type === 'all' ? '共享基线' : '当前场景'}</span></td>
         <td><span class="cell-main">${escapeHtml(item.value_type)}</span><span class="cell-sub">${escapeHtml(item.scope)}</span></td>
         <td><code>${escapeHtml(item.extraction_mode)}</code></td><td>${item.pinned ? '<span class="badge blue">每轮</span>' : '<span class="badge">按需</span>'}</td>
@@ -1097,6 +1180,7 @@ function renderSchemas() {
 
 function renderEventExtractionSettings() {
   const profile = state.eventExtractionProfile;
+  const contract = state.extractionContract;
   if (!profile) {
     $('#schemaSummary').innerHTML = '';
     $('#schemaTable').innerHTML = emptyState('scan-text', '当前场景尚无事件抽取配置');
@@ -1105,50 +1189,72 @@ function renderEventExtractionSettings() {
   }
   $('#schemaSummary').innerHTML = [
     ['状态', profile.enabled ? '已启用' : '已停用'],
-    ['执行方式', '同步阻塞'],
-    ['消歧上下文', `${profile.context_turns} 轮`],
-    ['单轮上限', `${profile.max_events_per_turn} 事件`]
+    ['轮结束点', 'assistant 落库'],
+    ['历史消歧窗口', `${profile.context_turns} 轮 / 最多 ${contract?.runtime?.historyMessageLimit || profile.context_turns * 2} 条`],
+    ['单轮写入上限', `${profile.max_events_per_turn} 事件`]
   ].map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
+  $('#schemaResultCount').textContent = '4 类抽取对象';
 
   const configuredTypes = profile.allowed_event_types || [];
   const knownTypes = new Set(eventTypeOptions.map(([value]) => value));
   const options = [...eventTypeOptions, ...configuredTypes.filter((value) => !knownTypes.has(value)).map((value) => [value, value])];
+  const fieldInstructions = contract?.fieldInstructions || [];
+  const promptSystem = contract?.prompt?.system || '当前无可用预览';
+  const promptUser = contract?.prompt?.user || '当前无可用预览';
   $('#schemaTable').innerHTML = `<section class="extraction-settings">
     <div class="extraction-runtime-contract">
-      <div><span>A</span><i data-lucide="message-square"></i><strong>assistant 消息落库</strong><small>语义轮结束，立即触发抽取</small></div>
+      <div><span>TURN END</span><i data-lucide="message-square"></i><strong>assistant 回复落库</strong><small>1 轮 = user 消息 + assistant 回复</small></div>
       <i data-lucide="arrow-right"></i>
-      <div class="active"><span>BLOCKING</span><i data-lucide="scan-text"></i><strong>抽取与事件对齐</strong><small>仍在同一 /api/chat 请求</small></div>
+      <div class="active"><span>ONE MODEL OUTPUT</span><i data-lucide="scan-text"></i><strong>结构字段 + 事件 + 图谱</strong><small>同一次抽取，统一对齐当轮证据</small></div>
       <i data-lucide="arrow-right"></i>
-      <div><span>B</span><i data-lucide="database"></i><strong>提交后返回</strong><small>触发器完成，下一轮解锁</small></div>
+      <div><span>COMMIT BARRIER</span><i data-lucide="database"></i><strong>状态派生与图谱提交</strong><small>提交完成后 /api/chat 才返回</small></div>
     </div>
     <form id="eventExtractionForm" class="extraction-form">
       <section class="extraction-form-section">
-        <header><span>01</span><div><strong>运行契约</strong><small>场景内所有角色共用</small></div></header>
-        <div class="form-grid two">
-          <label><span>配置名称</span><input name="name" value="${escapeHtml(profile.name)}" required></label>
-          <label><span>执行模式</span><input value="blocking_after_assistant" disabled></label>
+        <header><span>01</span><div><strong>轮次、结束点与触发机制</strong><small>场景内所有角色共用，当轮内容与历史消歧窗口分开传入</small></div></header>
+        <div class="turn-definition-banner">
+          <div><i data-lucide="repeat-2"></i><span><strong>一轮如何计算</strong><small>1 条 user 消息 + 1 条 assistant 回复</small></span></div>
+          <div><i data-lucide="flag"></i><span><strong>一轮何时结束</strong><small>assistant 回复成功写入 messages 表</small></span></div>
+          <div><i data-lucide="lock-keyhole"></i><span><strong>下一轮屏障</strong><small>同步抽取与提交完成后才解锁</small></span></div>
+        </div>
+        <div class="form-grid three extraction-runtime-fields">
+          <label><span>历史消歧窗口（轮）</span><input id="extractionContextTurns" name="context_turns" type="number" min="1" max="10" step="1" value="${profile.context_turns}" required><small id="turnWindowMessageLimit">最多注入 ${contract?.runtime?.historyMessageLimit || profile.context_turns * 2} 条历史消息，不含当轮</small></label>
+          <label><span>触发点（系统固定）</span><input value="assistant 回复落库后" disabled><small>after_assistant_message_persisted</small></label>
+          <label><span>执行模式（系统固定）</span><input value="同一请求同步阻塞" disabled><small>blocking_after_assistant</small></label>
         </div>
         <div class="extraction-switches">
           <label class="strategy-toggle"><span><strong>启用轮后抽取</strong><small>关闭后仅保留用户显式控制快通道</small></span><span class="toggle-control"><input name="enabled" type="checkbox" ${profile.enabled ? 'checked' : ''}><i></i></span></label>
-          <label class="strategy-toggle"><span><strong>注入助手回复</strong><small>只用于消歧，不作为用户事实证据</small></span><span class="toggle-control"><input name="include_assistant" type="checkbox" ${profile.include_assistant ? 'checked' : ''}><i></i></span></label>
+          <label class="strategy-toggle"><span><strong>将 assistant 回复传入抽取模型</strong><small>只用于理解当轮上下文，不能单独作为用户事实</small></span><span class="toggle-control"><input name="include_assistant" type="checkbox" ${profile.include_assistant ? 'checked' : ''}><i></i></span></label>
         </div>
       </section>
       <section class="extraction-form-section">
-        <header><span>02</span><div><strong>候选范围</strong><small>控制模型能看到的上下文与单轮写入量</small></div></header>
+        <header><span>02</span><div><strong>四类抽取对象与提示词来源</strong><small>字段级指令与场景级指令最终编译为同一次模型 Input</small></div></header>
+        <div class="extraction-object-grid">
+          <article><span class="object-sequence">A</span><i data-lucide="list-tree"></i><div><strong>结构化字段</strong><small>${fieldInstructions.length} 个字段，使用每个字段的“抽取说明”</small><code>structured_updates[]</code></div><button class="icon-button bordered" type="button" id="openStructuredFields" title="管理字段抽取说明"><i data-lucide="arrow-up-right"></i></button></article>
+          <article><span class="object-sequence">B</span><i data-lucide="calendar-clock"></i><div><strong>事件</strong><small>经历、约定、关系节点与剧情进展</small><code>events[]</code></div></article>
+          <article><span class="object-sequence">C</span><i data-lucide="circle-dot"></i><div><strong>实体</strong><small>存在于事件内，写入 entities 并建立事件链接</small><code>events[].entities[]</code></div></article>
+          <article><span class="object-sequence">D</span><i data-lucide="git-branch"></i><div><strong>关系与声明</strong><small>稳定边写 relations，可版本化事实写 claims</small><code>relations[] + claims[]</code></div></article>
+        </div>
+        <div class="object-instruction-stack">
+          <label><span>事件抽取指令</span><textarea name="event_instruction" rows="3">${escapeHtml(profile.event_instruction || '')}</textarea><small>与系统硬规则、事件类型白名单共同生效。</small></label>
+          <label><span>实体抽取指令</span><textarea name="entity_instruction" rows="3">${escapeHtml(profile.entity_instruction || '')}</textarea><small>实体不独立漂浮，只有被事件接受后才写库并关联。</small></label>
+          <label><span>关系与声明抽取指令</span><textarea name="relation_instruction" rows="3">${escapeHtml(profile.relation_instruction || '')}</textarea><small>relations 是实体边；claims 是可 supersede/retract 的有效事实槽位。</small></label>
+        </div>
+      </section>
+      <section class="extraction-form-section">
+        <header><span>03</span><div><strong>事件阈值、类型与更新判定</strong><small>模型先按提示词生成候选，服务端再执行白名单、上限和重要度硬过滤</small></div></header>
         <div class="form-grid three">
-          <label><span>消歧上下文（轮）</span><input name="context_turns" type="number" min="1" max="10" step="1" value="${profile.context_turns}" required></label>
+          <label><span>配置名称</span><input name="name" value="${escapeHtml(profile.name)}" required></label>
           <label><span>单轮最大事件数</span><input name="max_events_per_turn" type="number" min="1" max="10" step="1" value="${profile.max_events_per_turn}" required></label>
           <label><span>新建事件最低重要度</span><input name="min_importance" type="number" min="0" max="1" step="0.05" value="${profile.min_importance}" required></label>
         </div>
         <div class="event-type-field"><span>允许的事件类型</span><div class="event-type-options">${options.map(([value, label]) => `<label><input type="checkbox" name="allowed_event_types" value="${escapeHtml(value)}" ${configuredTypes.includes(value) ? 'checked' : ''}><span><code>${escapeHtml(value)}</code>${escapeHtml(label)}</span></label>`).join('')}</div></div>
-      </section>
-      <section class="extraction-form-section">
-        <header><span>03</span><div><strong>更新判定</strong><small>把“又记一条”改为对原事件槽位的更新</small></div></header>
         <label><span>事件更新信号（换行或逗号分隔）</span><textarea name="update_signals" rows="3">${escapeHtml((profile.update_signals || []).join('\n'))}</textarea></label>
-        <label><span>场景附加抽取规则</span><textarea name="custom_rules" rows="5">${escapeHtml(profile.custom_rules || '')}</textarea></label>
+        <label><span>场景全局附加规则</span><textarea name="custom_rules" rows="4">${escapeHtml(profile.custom_rules || '')}</textarea><small>同时约束四类抽取对象，不能覆盖系统硬保护。</small></label>
       </section>
       <section class="extraction-form-section guard-section">
-        <header><span>04</span><div><strong>系统硬保护</strong><small>管理员配置不能覆盖</small></div></header>
+        <header><span>04</span><div><strong>字段指令清单与系统硬保护</strong><small>这些字段指令会被逐条编译进模型 Input，manual / derived 还会被服务端拒绝写入</small></div></header>
+        <div class="field-instruction-list">${fieldInstructions.map((item) => `<div><span><strong>${escapeHtml(item.label)}</strong><code>${escapeHtml(item.key)}</code></span><em>${escapeHtml(item.extraction_mode)}</em><p>${escapeHtml(item.extraction_instruction || '未配置抽取说明')}</p></div>`).join('')}</div>
         <div class="extraction-guards">
           <span><i data-lucide="shield-check"></i><strong>只写当轮新增或更正</strong><small>历史上下文只消歧</small></span>
           <span><i data-lucide="shield-check"></i><strong>旧值保留为 superseded</strong><small>active 是默认回答视图</small></span>
@@ -1156,9 +1262,31 @@ function renderEventExtractionSettings() {
           <span><i data-lucide="shield-check"></i><strong>作用域硬隔离</strong><small>user / agent / story / branch</small></span>
         </div>
       </section>
-      <footer class="extraction-form-actions"><span><i data-lucide="info"></i>配置将参与下一轮抽取 Prompt 和服务端过滤。</span><button class="button primary" type="submit"><i data-lucide="save"></i>保存事件抽取</button></footer>
+      <section class="extraction-form-section prompt-preview-section">
+        <header><span>05</span><div><strong>当前生效的完整模型 Input</strong><small>来自同一个服务端编译器，与真实抽取共用代码；运行时占位符会替换为当轮数据</small></div><button id="copyExtractionPrompt" class="button secondary compact" type="button"><i data-lucide="copy"></i>复制 Input</button></header>
+        <details class="compiled-prompt" open>
+          <summary><span><i data-lucide="terminal-square"></i>查看 System + User Input</span><small>当前已生效版本，未保存的表单修改尚未编译</small></summary>
+          <div class="compiled-prompt-layer"><span>SYSTEM</span><pre>${escapeHtml(promptSystem)}</pre></div>
+          <div class="compiled-prompt-layer"><span>USER INPUT</span><pre>${escapeHtml(promptUser)}</pre></div>
+        </details>
+      </section>
+      <footer class="extraction-form-actions"><span><i data-lucide="info"></i>保存后立即重新编译预览，并从下一轮开始生效。</span><button class="button primary" type="submit"><i data-lucide="save"></i>保存抽取配置</button></footer>
     </form>
   </section>`;
+  $('#openStructuredFields')?.addEventListener('click', () => {
+    state.schemaTab = 'fields';
+    renderSchemas();
+    $('#schemaTable')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  $('#copyExtractionPrompt')?.addEventListener('click', async () => {
+    await navigator.clipboard.writeText(`SYSTEM\n${promptSystem}\n\nUSER INPUT\n${promptUser}`);
+    toast('已复制当前生效的抽取 Input');
+  });
+  const contextTurnsInput = $('#extractionContextTurns');
+  contextTurnsInput?.addEventListener('input', () => {
+    const turns = Math.max(1, Math.min(10, Number(contextTurnsInput.value) || 1));
+    $('#turnWindowMessageLimit').textContent = `最多注入 ${Math.min(20, turns * 2)} 条历史消息，不含当轮`;
+  });
   $('#eventExtractionForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
@@ -1174,10 +1302,14 @@ function renderEventExtractionSettings() {
         min_importance: Number(formData.get('min_importance')),
         allowed_event_types: formData.getAll('allowed_event_types'),
         update_signals: updateSignals,
+        event_instruction: formData.get('event_instruction'),
+        entity_instruction: formData.get('entity_instruction'),
+        relation_instruction: formData.get('relation_instruction'),
         custom_rules: formData.get('custom_rules')
       }
     });
-    toast('事件抽取配置已生效');
+    await loadExtractionConfiguration(state.currentSceneId);
+    toast('抽取配置已生效，完整 Input 已重新编译');
     renderSchemas();
   });
   refreshIcons();
@@ -1265,7 +1397,7 @@ function editSchema(id = '') {
   const scene = currentScene();
   const item = state.schemas.find((schema) => schema.id === id) || {
     key: '', label: '', category: '自定义', scenario_type: scene?.scenario_type || 'all', value_type: 'string', scope: 'user_agent',
-    description: '', default: null, constraints: {}, prompt_template: '', pinned: 0, required: 0,
+    description: '', extraction_instruction: '', default: null, constraints: {}, prompt_template: '', pinned: 0, required: 0,
     extraction_mode: 'explicit_only', sensitivity: 'normal', enabled: 1
   };
   openModal({
@@ -1274,9 +1406,10 @@ function editSchema(id = '') {
       <div class="form-grid two"><label><span>Key</span><input name="key" value="${escapeHtml(item.key)}" placeholder="profile.favorite_topic" required></label><label><span>显示名称</span><input name="label" value="${escapeHtml(item.label)}" required></label></div>
       <div class="form-grid two"><label><span>分类</span><input name="category" value="${escapeHtml(item.category)}" required></label><label><span>字段归属</span><select name="scenario_type"><option value="${escapeHtml(scene?.scenario_type || 'all')}" ${item.scenario_type === scene?.scenario_type ? 'selected' : ''}>当前场景 · ${escapeHtml(scene?.name || '')}</option><option value="all" ${item.scenario_type === 'all' ? 'selected' : ''}>所有场景 · 共享基线</option></select></label></div>
       <div class="form-grid two"><label><span>值类型</span><select name="value_type">${['string','number','boolean','enum','string_list','object'].map((value) => `<option ${item.value_type === value ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label><span>作用域</span><select name="scope">${['user','user_agent','user_agent_story','user_agent_story_branch'].map((value) => `<option ${item.scope === value ? 'selected' : ''}>${value}</option>`).join('')}</select></label></div>
-      <label><span>字段说明</span><textarea name="description" rows="2">${escapeHtml(item.description)}</textarea></label>
+      <label><span>字段说明</span><textarea name="description" rows="2">${escapeHtml(item.description)}</textarea><small>仅用于管理后台解释字段含义，不直接发给抽取模型。</small></label>
+      <label class="extraction-instruction-field"><span>抽取说明</span><textarea name="extraction_instruction" rows="3" placeholder="明确什么证据可以写入、什么情况必须更新或忽略">${escapeHtml(item.extraction_instruction || item.description || '')}</textarea><small>会连同 Key、类型、作用域、抽取模式和约束一起编译进记忆抽取 Input。</small></label>
       <div class="form-grid two"><label><span>默认值 JSON</span><textarea name="default_value" rows="4">${escapeHtml(JSON.stringify(item.default, null, 2))}</textarea></label><label><span>约束 JSON</span><textarea name="constraints" rows="4">${escapeHtml(JSON.stringify(item.constraints || {}, null, 2))}</textarea></label></div>
-      <label><span>Prompt 注入模板</span><input name="prompt_template" value="${escapeHtml(item.prompt_template)}" placeholder="用户偏好：{{value}}。"></label>
+      <label><span>回复 Prompt 注入模板</span><input name="prompt_template" value="${escapeHtml(item.prompt_template)}" placeholder="用户偏好：{{value}}。"><small>只在聊天回复前将已存储的值注入主模型，不参与记忆抽取。</small></label>
       <div class="form-grid two"><label><span>抽取策略</span><select name="extraction_mode">${['explicit_only','evidence_required','computed','derived','manual'].map((value) => `<option ${item.extraction_mode === value ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label><span>敏感级别</span><select name="sensitivity">${['normal','personal','instruction','sensitive'].map((value) => `<option ${item.sensitivity === value ? 'selected' : ''}>${value}</option>`).join('')}</select></label></div>
       <div class="form-grid two"><label class="checkbox-row"><input name="pinned" type="checkbox" ${item.pinned ? 'checked' : ''}><span>每轮常驻注入</span></label><label class="checkbox-row"><input name="required" type="checkbox" ${item.required ? 'checked' : ''}><span>必填字段</span></label></div>`,
     onSubmit: async (formData) => {

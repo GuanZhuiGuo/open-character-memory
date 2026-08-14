@@ -651,8 +651,10 @@ textarea { resize: vertical; line-height: 1.55; }
 .relationship-banner > svg { width: 14px; height: 14px; color: #9caac0; }
 .relationship-banner span { color: #7c899c; font-size: 8px; }
 .relationship-banner strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.schema-table td { height: 66px; }
-.schema-description { max-width: 250px; }
+.schema-table td { height: 92px; }
+.schema-description, .schema-extraction-note { max-width: 270px; line-height: 1.45; white-space: normal; }
+.schema-description b, .schema-extraction-note b { display: inline-block; margin-right: 5px; color: #7b8799; font-size: 7px; font-weight: 700; }
+.schema-extraction-note { color: #315d95; }
 .persona-workspace { display: flex; flex-direction: column; }
 .persona-workspace .persona-grid { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr); }
 .plot-scope-note { display: flex; align-items: center; gap: 6px; margin: 8px 0 4px; padding: 8px 9px; color: #627089; background: #f3f6fb; border-radius: 5px; font-size: 9px; }
@@ -692,6 +694,17 @@ textarea { resize: vertical; line-height: 1.55; }
 .graph-inspector dl div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px; padding: 9px 0; border-bottom: 1px solid #edf1f6; }
 .graph-inspector dt { color: #8a96a8; font-size: 9px; }
 .graph-inspector dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: #344054; font-size: 10px; font-weight: 600; }
+.graph-related-section { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.graph-related-section > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; color: #667085; font-size: 9px; font-weight: 700; }
+.graph-related-section > header b { display: grid; place-items: center; min-width: 20px; height: 20px; color: #2457ad; background: #eaf2ff; border-radius: 4px; font-size: 8px; }
+.graph-related-section > button { display: grid; grid-template-columns: minmax(0, 1fr) auto 14px; align-items: center; gap: 7px; width: 100%; min-height: 48px; padding: 7px 8px; color: inherit; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 5px; text-align: left; cursor: pointer; }
+.graph-related-section > button + button { margin-top: 6px; }
+.graph-related-section > button:hover { background: #eef5ff; border-color: #a8c2eb; }
+.graph-related-section button span, .graph-related-section button strong, .graph-related-section button small { display: block; min-width: 0; }
+.graph-related-section button strong { overflow: hidden; color: #344054; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.graph-related-section button small { margin-top: 3px; overflow: hidden; color: #8a96a8; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.graph-related-section button em { max-width: 70px; overflow: hidden; color: #3562ae; font-size: 7px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.graph-related-section button svg { width: 13px; color: #4d79c7; }
 .graph-legend { display: flex; align-items: center; gap: 16px; min-height: 38px; padding: 0 12px; color: #7b8799; background: #f8fafc; border-top: 1px solid var(--line); font-size: 9px; }
 .graph-legend > span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .graph-line { display: inline-block; width: 22px; height: 0; border-top: 2px solid #8aa5cc; }
@@ -834,11 +847,40 @@ textarea { resize: vertical; line-height: 1.55; }
 .extraction-form-section > header strong { font-size: 11px; }
 .extraction-form-section > header small { margin-top: 3px; color: #8a96a8; font-size: 8px; }
 .extraction-form label { display: flex; flex-direction: column; gap: 6px; color: #46535b; font-size: 10px; font-weight: 600; }
+.extraction-form label > small, .modal label > small { color: #8490a2; font-size: 8px; font-weight: 400; line-height: 1.45; }
 .extraction-form input:not([type="checkbox"]), .extraction-form select { height: 38px; padding: 0 10px; }
 .extraction-form textarea { width: 100%; padding: 9px 10px; }
 .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .extraction-switches { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 12px; }
 .extraction-form label.strategy-toggle { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; min-height: 56px; padding: 9px 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; }
+.turn-definition-banner { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.turn-definition-banner > div { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 9px; min-height: 62px; padding: 9px 10px; background: #f8fbff; border: 1px solid #dce7f6; border-radius: 6px; }
+.turn-definition-banner svg { width: 18px; color: #3569b8; }
+.turn-definition-banner strong, .turn-definition-banner small { display: block; }
+.turn-definition-banner strong { color: #344054; font-size: 9px; }
+.turn-definition-banner small { margin-top: 4px; color: #7b8799; font-size: 8px; line-height: 1.4; }
+.extraction-runtime-fields input:disabled { color: #526f9d; background: #f4f7fb; }
+.extraction-object-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.extraction-object-grid article { position: relative; display: grid; grid-template-columns: 24px 28px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 82px; padding: 10px; background: #f8fafc; border: 1px solid #dfe7f1; border-radius: 6px; }
+.extraction-object-grid article > svg { width: 19px; color: #3569b8; }
+.extraction-object-grid .object-sequence { display: grid; place-items: center; width: 22px; height: 22px; color: #3562ae; background: #e8f1ff; border-radius: 4px; font: 8px/1 ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+.extraction-object-grid article div { min-width: 0; }
+.extraction-object-grid strong, .extraction-object-grid small, .extraction-object-grid code { display: block; }
+.extraction-object-grid strong { font-size: 10px; }
+.extraction-object-grid small { margin-top: 4px; color: #7b8799; font-size: 8px; line-height: 1.4; }
+.extraction-object-grid code { margin-top: 6px; color: #315d95; font-size: 7px; }
+.extraction-object-grid .icon-button { width: 28px; height: 28px; }
+.extraction-object-grid .icon-button svg { width: 13px; }
+.object-instruction-stack { display: grid; gap: 10px; margin-top: 12px; }
+.object-instruction-stack label { padding: 11px; background: #fff; border: 1px solid #dfe7f1; border-radius: 6px; }
+.field-instruction-list { max-height: 250px; margin-bottom: 12px; overflow: auto; background: #fff; border: 1px solid #e1e7ef; border-radius: 6px; }
+.field-instruction-list > div { display: grid; grid-template-columns: minmax(160px, .8fr) 100px minmax(220px, 1.2fr); align-items: center; gap: 9px; min-height: 52px; padding: 8px 10px; border-bottom: 1px solid #edf1f6; }
+.field-instruction-list > div:last-child { border-bottom: 0; }
+.field-instruction-list span, .field-instruction-list strong, .field-instruction-list code { display: block; min-width: 0; }
+.field-instruction-list strong { font-size: 9px; }
+.field-instruction-list code { margin-top: 3px; overflow: hidden; color: #526f9d; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.field-instruction-list em { color: #3562ae; font: 7px/1 ui-monospace, SFMono-Regular, Menlo, monospace; font-style: normal; }
+.field-instruction-list p { margin: 0; color: #667085; font-size: 8px; line-height: 1.45; }
 .event-type-field { margin-top: 14px; }
 .event-type-field > span { display: block; margin-bottom: 7px; color: #46535b; font-size: 10px; font-weight: 600; }
 .event-type-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
@@ -857,6 +899,18 @@ textarea { resize: vertical; line-height: 1.55; }
 .extraction-form-actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 17px; background: #f8fafc; }
 .extraction-form-actions > span { display: inline-flex; align-items: center; gap: 6px; color: #667085; font-size: 9px; }
 .extraction-form-actions > span svg { width: 14px; color: #4d79c7; }
+.prompt-preview-section { background: #f8fbff; }
+.prompt-preview-section > header { align-items: flex-start; }
+.prompt-preview-section > header .button { flex: 0 0 auto; margin-left: auto; }
+.compiled-prompt { overflow: hidden; background: #fff; border: 1px solid #dbe4f1; border-radius: 6px; }
+.compiled-prompt summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; padding: 0 11px; color: #344054; background: #f4f7fb; cursor: pointer; }
+.compiled-prompt summary span { display: inline-flex; align-items: center; gap: 7px; font-size: 9px; font-weight: 700; }
+.compiled-prompt summary svg { width: 14px; color: #3569b8; }
+.compiled-prompt summary small { color: #8490a2; font-size: 8px; }
+.compiled-prompt-layer { display: grid; grid-template-columns: 90px minmax(0, 1fr); border-top: 1px solid #e4eaf2; }
+.compiled-prompt-layer > span { padding: 12px 10px; color: #3562ae; background: #f8fafc; font: 8px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+.compiled-prompt-layer pre { max-height: 360px; margin: 0; padding: 12px; overflow: auto; color: #344054; background: #fff; font: 9px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.extraction-instruction-field { padding: 10px; background: #f7faff; border: 1px solid #cdddf4; border-radius: 6px; }
 
 .legend-mark.blocking { background: #c17a1b; }
 .timing.blocking { color: #8a500d; background: #fff0d8; }
@@ -1019,6 +1073,13 @@ textarea { resize: vertical; line-height: 1.55; }
   .extraction-runtime-contract { grid-template-columns: 1fr; }
   .extraction-runtime-contract > svg { display: none; }
   .form-grid.three, .extraction-switches { grid-template-columns: 1fr; }
+  .turn-definition-banner, .extraction-object-grid { grid-template-columns: 1fr; }
+  .field-instruction-list > div { grid-template-columns: 1fr; gap: 5px; padding: 10px; }
+  .prompt-preview-section > header { flex-wrap: wrap; }
+  .prompt-preview-section > header .button { width: 100%; margin-left: 35px; }
+  .compiled-prompt summary { align-items: flex-start; flex-direction: column; justify-content: center; padding-top: 9px; padding-bottom: 9px; }
+  .compiled-prompt-layer { grid-template-columns: 1fr; }
+  .compiled-prompt-layer > span { padding: 8px 10px; border-bottom: 1px solid #e4eaf2; }
   .event-type-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .extraction-guards { grid-template-columns: 1fr; }
   .extraction-form-actions { align-items: stretch; flex-direction: column; }

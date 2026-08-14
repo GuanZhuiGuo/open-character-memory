@@ -10,8 +10,9 @@ process.env.ARK_API_KEY = '';
 
 const { db, initializeDatabase } = await import('../lib/db.js');
 const {
-  ensureEntity, getEventExtractionProfile, getMemoryValue, getRetrievalProfile, listEvents,
-  reconcileExtractedEvent, retrieveMemory, setMemoryValue, storeEvent
+  ensureEntity, getEventExtractionProfile, getExtractionPromptContract, getMemoryValue,
+  getRetrievalProfile, listEvents, listGraph, reconcileExtractedEvent, retrieveMemory,
+  setMemoryValue, storeEvent
 } = await import('../lib/memory.js');
 const { evaluateTriggers, getActivePlots } = await import('../lib/triggers.js');
 const { json, localEmbedding, nowIso, uid } = await import('../lib/utils.js');
@@ -82,6 +83,23 @@ test('每个场景只有一份记忆设置，角色明确归属场景', () => {
   assert.equal(extraction.execution_mode, 'blocking_after_assistant');
   assert.equal(extraction.trigger_point, 'after_assistant_message_persisted');
   assert.equal(extraction.allowed_event_types.includes('meeting'), true);
+});
+
+test('抽取合同显示真实轮次窗口并使用独立字段抽取说明', () => {
+  db.prepare(`UPDATE memory_schemas SET extraction_instruction = ?
+    WHERE key = 'identity.preferred_address'`)
+    .run('只在用户明确指定今后称呼时写入。');
+  const contract = getExtractionPromptContract('scene_companion');
+  const addressField = contract.fieldInstructions.find((item) => item.key === 'identity.preferred_address');
+  assert.equal(contract.runtime.turnDefinition, '1 轮 = 1 条 user 消息 + 1 条 assistant 回复');
+  assert.equal(contract.runtime.contextTurns, 2);
+  assert.equal(contract.runtime.historyMessageLimit, 4);
+  assert.equal(addressField.extraction_instruction, '只在用户明确指定今后称呼时写入。');
+  assert.match(contract.prompt.user, /只在用户明确指定今后称呼时写入/);
+  assert.match(contract.prompt.user, /事件抽取指令/);
+  assert.match(contract.prompt.user, /实体抽取指令/);
+  assert.match(contract.prompt.user, /关系与声明抽取指令/);
+  assert.doesNotMatch(contract.prompt.user, /称呼用户为：\{\{value\}\}/);
 });
 
 test('结构化记忆按用户隔离，相同值不重复生成版本', () => {
@@ -186,6 +204,41 @@ test('模型产生新事件 key 时，对齐器仍将会面地点更新到原事
   assert.equal(retrieval.diagnostics.pipeline.afterActiveGuard, 1);
   assert.equal(retrieval.events.some((item) => item.summary.includes('银座')), true);
   assert.match(retrieval.diagnostics.candidates.find((item) => item.status === 'superseded').decision, /状态硬过滤/);
+});
+
+test('事件实体关系独立落库，图谱可从实体反查事件', async () => {
+  const timestamp = nowIso();
+  db.prepare(`INSERT INTO users (id, name, display_name, avatar_color, created_at, updated_at)
+    VALUES ('user_graph_link', '图谱用户', '图谱用户', '#2563eb', ?, ?)`).run(timestamp, timestamp);
+  const scope = { ...baseScope, userId: 'user_graph_link' };
+  const stored = await storeEvent({
+    event_key: 'event_library_meeting', event_type: 'meeting', title: '在图书馆见面',
+    summary: '小雨和林晚在市图书馆见面。', importance: 0.8,
+    entities: [{ name: '小雨', type: 'person' }, { name: '市图书馆', type: 'place' }],
+    relations: [{
+      source: { name: '小雨', type: 'person' }, predicate: '前往',
+      target: { name: '市图书馆', type: 'place' }, operation: 'create'
+    }],
+    claims: [{ subject: { name: '在图书馆见面', type: 'event' }, predicate: '地点', object: '市图书馆' }]
+  }, scope, 'message_graph_link');
+
+  const graph = listGraph(scope);
+  const linked = graph.eventEntities.filter((item) => item.event_id === stored.id);
+  const names = new Set(linked.map((item) => item.entity_name));
+  assert.deepEqual(names, new Set(['小雨', '市图书馆', '在图书馆见面']));
+  assert.equal(linked.some((item) => item.role === 'mentioned'), true);
+  assert.equal(linked.some((item) => item.role === 'relation_source'), true);
+  assert.equal(linked.some((item) => item.role === 'relation_target'), true);
+  assert.equal(linked.some((item) => item.role === 'claim_subject'), true);
+
+  await storeEvent({
+    event_key: 'event_library_meeting', operation: 'retract', event_type: 'meeting',
+    title: '取消图书馆见面', summary: '用户明确取消了该会面。', importance: 0.8
+  }, scope, 'message_graph_retract');
+  assert.equal(listEvents(scope).length, 0);
+  const versions = listEvents(scope, { includeHistory: true });
+  assert.equal(versions.some((item) => item.status === 'superseded'), true);
+  assert.equal(versions.some((item) => item.status === 'retracted'), true);
 });
 
 function insertEvent({ id, title, summary, type, sequence, metadata = {} }) {
