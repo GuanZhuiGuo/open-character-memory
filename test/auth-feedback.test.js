@@ -155,6 +155,10 @@ test('registered users get read-only configuration, isolated data, own traces, a
 
     const ownTrace = await request(baseUrl, `/api/traces/${chat.payload.traceId}`, { cookie: aliceCookie });
     assert.equal(ownTrace.status, 200);
+    const modelSpan = ownTrace.payload.spans.find((span) => span.name === 'model_response');
+    const modelInput = JSON.parse(modelSpan.input_json);
+    assert.match(modelInput.systemPrompt, /## 角色固定属性/);
+    assert.match(modelInput.systemPrompt, /\[身份\] 林晚/);
     const crossUserTrace = await request(baseUrl, `/api/traces/${chat.payload.traceId}`, { cookie: bobCookie });
     assert.equal(crossUserTrace.status, 403);
 
@@ -177,6 +181,22 @@ test('registered users get read-only configuration, isolated data, own traces, a
       method: 'POST', body: { password: 'test-admin' }
     });
     assert.equal(adminLogin.status, 200);
+    const profileWarning = await request(baseUrl, '/api/agents/agent_linwan', {
+      method: 'PUT', cookie: adminLogin.cookie,
+      body: { system_prompt: `${bootstrap.payload.agents[0].system_prompt}\n新增核心设定` }
+    });
+    assert.equal(profileWarning.status, 409);
+    assert.equal(profileWarning.payload.code, 'ROLE_PROFILE_CHANGE_CONFIRMATION_REQUIRED');
+    assert.ok(profileWarning.payload.details.conversations >= 1);
+    const confirmedProfile = await request(baseUrl, '/api/agents/agent_linwan', {
+      method: 'PUT', cookie: adminLogin.cookie,
+      body: {
+        system_prompt: `${bootstrap.payload.agents[0].system_prompt}\n新增核心设定`,
+        confirm_profile_change: true
+      }
+    });
+    assert.equal(confirmedProfile.status, 200);
+    assert.equal(confirmedProfile.payload.profile_version, 2);
     const adminUsers = await request(baseUrl, '/api/admin/users', { cookie: adminLogin.cookie });
     assert.equal(adminUsers.status, 200);
     assert.ok(adminUsers.payload.some((item) => item.id === alice.id && item.username === 'alice_test'));

@@ -14,13 +14,15 @@
 - 图形化记忆网络：事件、实体、声明和关系边可缩放、筛选并查看节点详情；点击实体可查看并定位关联事件。
 - `active / superseded / retracted` 状态和完整版本历史。`superseded` 表示旧结论已被新版本替代，`retracted` 表示结论被明确撤回或取消；两者均保留证据，但不进入默认回答。
 - 事件对齐器会在模型生成不同 event key 时，仍然将地点/时间更新到原事件槽位。
-- 图关系、有效声明和向量事件混合召回；有序集合使用类型、collection 和 sequence 硬过滤。
-- 场景级召回策略：可配置向量/关键词/图谱通道、阈值、TopK、排序权重和时效半衰期；`Active Only` 是不可关闭的硬保护。
-- 召回测试工作台：展示实时 Embedding 模型/维度/向量预览、余弦相似度、关键词分、加权排序、过滤原因和最终 Prompt 注入片段。
+- 两阶段记忆召回：第一阶段只生成事件名、实体和关系的轻量候选目录；独立 Recall Planner 可请求事件详情或沿图谱关系补充证据，只有通过严格详情门槛的内容才会进入主模型 Input。
+- 场景级召回策略：可分别配置候选目录阈值、纯向量详情阈值、Planner、向量/关键词/图谱通道、TopK、排序权重、图谱跳数和时效半衰期；`Active Only` 是不可关闭的硬保护。
+- 召回测试工作台：展示实时 Embedding 模型/维度/向量预览、候选目录、详情资格、Planner 决策、图谱证据事件、过滤原因和最终 Prompt 注入片段。
+- 角色固定属性按角色全局常驻注入；用户事实写入 `user_memory`；角色和用户共同发生的承诺、物件、对话进展写入按用户-角色-故事-分支隔离的 `shared_story`，不会串到该角色与其他用户的会话。
+- 修改已投入使用的角色人设或固定属性时，系统展示影响范围并要求二次确认，同时保留角色版本历史。
 - 基于结构化记忆的条件触发器、剧情解锁和 function call。
 - 管理员 Trace：查看常驻记忆、召回结果、完整系统 Prompt、模型输入/输出、记忆写入和触发记录。
 - 管理员“系统架构图”：查看入口、Agent Runtime、记忆平面、模型与数据层，以及真实轮次阈值、写入顺序和第 N 次主模型请求的完整 Input 切片；可跳转到对应配置来源。
-- 系统代码问答：将核心代码按职责切片并持久化 Embedding，使用向量 82% + 关键词 18% 混合召回后调用文本模型；仅回答当前系统代码逻辑，并返回文件、行号和召回分数。
+- 系统代码问答：将核心代码按职责切片并持久化 Embedding，使用向量 82% + 关键词 18% 混合召回后调用文本模型；仅回答当前系统代码逻辑，并在每次回答中明确系统版本和代码索引最后 Embedding 时间。
 
 ## 运行
 
@@ -51,7 +53,10 @@ ARK_API_KEY='' npm test
   -> 显式控制记忆快速更新
   -> 常驻结构化记忆加载
   -> 条件触发器 / function call
-  -> 有效 Claim + 事件向量 + 1 跳图关系召回
+  -> 事件/实体/关系轻量候选目录（不进入主模型 Input）
+  -> Recall Planner 二次请求事件详情或图谱证据
+  -> 严格详情门槛 + Active Only + 命名空间硬过滤
+  -> 合并有效 Claim、相关事件和有证据的图关系
   -> Prompt 编译
   -> 角色回复
   -> 持久化助手消息（语义轮结束 / 事件抽取触发点）
@@ -73,7 +78,8 @@ ARK_API_KEY='' npm test
 - 账号与权限：`user_accounts` / `user_sessions`
 - 固定记忆：`memory_schemas` / `memory_values` / `memory_history`
 - 场景配置：`scenes` / `memory_profiles` / `retrieval_profiles` / `event_extraction_profiles`
-- 图谱：`entities` / `entity_edges` / `events` / `event_entities` / `claims`
+- 图谱：`entities` / `entity_edges` / `events` / `event_entities` / `claims`；事件通过 `memory_space` 区分 `user_memory` 与 `shared_story`，关系边通过 `event_id` 指向证据事件
+- 角色记忆：`agents.fixed_attributes_json` / `agents.profile_version` / `agent_profile_history`
 - 向量：`embeddings`
 - 架构问答：`architecture_knowledge_chunks` / `architecture_qa_logs`
 - 剧情与调度：`plots` / `user_plot_states` / `triggers` / `trigger_runs` / `tools` / `tool_runs`

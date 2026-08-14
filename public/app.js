@@ -105,7 +105,11 @@ async function api(path, options = {}) {
   if (!response.ok) {
     const authRequest = ['/api/auth/login', '/api/auth/register', '/api/admin/login'].includes(path);
     if (response.status === 401 && !authRequest) showLogin();
-    throw new Error(payload.error || `请求失败 (${response.status})`);
+    const error = new Error(payload.error || `请求失败 (${response.status})`);
+    error.status = response.status;
+    error.code = payload.code || 'REQUEST_FAILED';
+    error.details = payload.details || null;
+    throw error;
   }
   return payload;
 }
@@ -491,9 +495,11 @@ async function loadCurrentPage() {
 
 function renderArchitectureIndex(index = {}) {
   const ready = Boolean(index.ready);
-  const label = ready ? '代码索引就绪' : `${Number(index.staleChunks || 0)} 个切片待更新`;
+  const version = index.systemVersion ? `v${index.systemVersion}` : '版本未知';
+  const label = `${version} · ${ready ? '代码索引就绪' : `${Number(index.staleChunks || 0)} 个切片待更新`}`;
   const model = (index.models || []).join(' / ') || '首次提问时建立';
-  const meta = `${Number(index.chunks || 0)}/${Number(index.expectedChunks || 0)} chunks · ${model}`;
+  const embeddedAt = index.codeEmbeddingUpdatedAt || index.updatedAt;
+  const meta = `${Number(index.chunks || 0)}/${Number(index.expectedChunks || 0)} chunks · ${model} · Embedding ${embeddedAt ? formatDate(embeddedAt) : '未生成'}`;
   $('#architectureIndexBadge').textContent = label;
   $('#architectureIndexMeta').textContent = meta;
   $('#architectureAssistantIndex').textContent = label;
@@ -699,8 +705,8 @@ function renderEventList() {
   const events = state.events;
   metrics([
     ['事件', events.length],
-    ['当前有效', events.filter((item) => item.status === 'active').length],
-    ['历史版本', events.filter((item) => item.status !== 'active').length],
+    ['用户记忆', events.filter((item) => item.memory_space !== 'shared_story').length],
+    ['我们的故事', events.filter((item) => item.memory_space === 'shared_story').length],
     ['有效声明', events.reduce((sum, item) => sum + item.claims.filter((claim) => claim.status === 'active').length, 0)]
   ]);
   $('#memoryResultCount').textContent = `${events.length} 个事件`;
@@ -726,7 +732,7 @@ function renderEventList() {
       return `<article class="event-timeline-row ${item.status !== 'active' ? 'history' : ''}">
         <div class="event-time-marker"><time>${escapeHtml(primaryTime)}</time><span>${escapeHtml(formatDate(item.created_at))}</span><i>${String(index + 1).padStart(2, '0')}</i></div>
         <div class="event-list-record">
-          <header><div><span class="badge blue">${escapeHtml(eventTypeLabel(item.event_type))}</span><span class="badge ${item.status === 'active' ? '' : 'red'}" title="${escapeHtml(statusInfo(item.status).detail)}">${escapeHtml(statusLabel(item.status))}</span>${collection ? `<span class="badge">${escapeHtml(collection)}${item.sequence_no !== null ? ` · #${item.sequence_no}` : ''}</span>` : ''}</div><span class="event-importance">importance ${Number(item.importance).toFixed(2)}</span></header>
+          <header><div><span class="badge blue">${escapeHtml(eventTypeLabel(item.event_type))}</span><span class="badge ${item.memory_space === 'shared_story' ? 'amber' : ''}">${item.memory_space === 'shared_story' ? '我们的故事' : '用户记忆'}</span><span class="badge ${item.canonicality === 'provisional' ? 'amber' : 'blue'}">${item.canonicality === 'provisional' ? '待用户承接' : '已确认'}</span><span class="badge ${item.status === 'active' ? '' : 'red'}" title="${escapeHtml(statusInfo(item.status).detail)}">${escapeHtml(statusLabel(item.status))}</span>${collection ? `<span class="badge">${escapeHtml(collection)}${item.sequence_no !== null ? ` · #${item.sequence_no}` : ''}</span>` : ''}</div><span class="event-importance">importance ${Number(item.importance).toFixed(2)}</span></header>
           <h4>${escapeHtml(item.title)}</h4>
           <p>${escapeHtml(item.summary || '无事件摘要')}</p>
           ${claims.length ? `<div class="event-claim-list">${claims.map((claim) => `<span><b>${escapeHtml(claim.subject)}</b><i>${escapeHtml(claim.predicate)}</i><strong>${escapeHtml(claim.object_name || claim.object_text)}</strong><em title="${escapeHtml(statusInfo(claim.status).detail)}">${escapeHtml(statusLabel(claim.status))}</em></span>`).join('')}</div>` : '<div class="event-no-claims">未产生声明槽位</div>'}
@@ -915,13 +921,15 @@ function buildGraphNetwork(graph) {
       visibleNodeIds.add(id);
       nodes.push({
         id, label: graphNodeLabel(event.title), shape: 'box', margin: 12,
-        color: event.status === 'active' ? { background: '#2563eb', border: '#1d4ed8', highlight: { background: '#1d4ed8', border: '#1e40af' } } : inactiveColor,
+        color: event.status === 'active' ? (event.memory_space === 'shared_story'
+          ? { background: '#7c3aed', border: '#6d28d9', highlight: { background: '#6d28d9', border: '#5b21b6' } }
+          : { background: '#2563eb', border: '#1d4ed8', highlight: { background: '#1d4ed8', border: '#1e40af' } }) : inactiveColor,
         font: { color: event.status === 'active' ? '#ffffff' : '#475569', size: 13, face: '-apple-system', bold: { color: '#ffffff' } },
         borderWidth: 1.5, title: `${event.title}\n${event.summary}`
       });
       nodeDetails.set(id, {
         kind: 'event', kindLabel: '事件', title: event.title, status: event.status,
-        description: event.summary, fields: [['事件类型', event.event_type], ['剧情时间', event.story_time], ['重要度', event.importance], ['事件 Key', event.event_key]],
+        description: event.summary, fields: [['记忆空间', event.memory_space === 'shared_story' ? '我们的故事' : '用户记忆'], ['确认状态', event.canonicality === 'provisional' ? '待用户承接' : '已确认'], ['来源说话者', event.source_speaker], ['事件类型', event.event_type], ['剧情时间', event.story_time], ['重要度', event.importance], ['事件 Key', event.event_key]],
         relatedEntities: [...(relatedEntitiesByEvent.get(event.id)?.values() || [])]
       });
     }
@@ -1047,6 +1055,7 @@ function renderRetrievalResult(payload) {
   const embedding = retrieval.queryEmbedding;
   const pipeline = retrieval.diagnostics.pipeline;
   const candidates = retrieval.diagnostics.candidates;
+  const planner = retrieval.planner || {};
   const preview = embedding.vectorPreview.map((value) => Number(value).toFixed(6)).join(', ');
   return `<div class="retrieval-result">
     <section class="retrieval-section embedding-section">
@@ -1066,15 +1075,23 @@ function renderRetrievalResult(payload) {
         <div><span>作用域候选</span><strong>${pipeline.scopedCandidates}</strong></div><i data-lucide="chevron-right"></i>
         <div><span>Active 硬过滤</span><strong>${pipeline.afterActiveGuard}</strong></div><i data-lucide="chevron-right"></i>
         <div><span>意图过滤</span><strong>${pipeline.afterIntentFilter}</strong></div><i data-lucide="chevron-right"></i>
-        <div><span>阈值通过</span><strong>${pipeline.afterRelevanceThreshold}</strong></div><i data-lucide="chevron-right"></i>
+        <div><span>轻量目录</span><strong>${pipeline.afterCatalogThreshold}</strong></div><i data-lucide="chevron-right"></i>
+        <div><span>可展开详情</span><strong>${pipeline.expansionEligible}</strong></div><i data-lucide="chevron-right"></i>
+        <div><span>二阶段合并</span><strong>${pipeline.afterRelevanceThreshold}</strong></div><i data-lucide="chevron-right"></i>
         <div class="selected"><span>最终 TopK</span><strong>${pipeline.selected}</strong></div>
       </div>
+      <div class="retrieval-planner-result">
+        <span class="strategy-icon"><i data-lucide="brain-circuit"></i></span>
+        <div><strong>LLM 二次召回规划器 · ${escapeHtml(planner.status || '未运行')}</strong><small>${escapeHtml(planner.reason || '当前没有候选需要展开')}</small></div>
+        <div class="planner-facts"><span>决策 <b>${escapeHtml(planner.decision || 'none')}</b></span><span>指定事件 <b>${(planner.expandEventIds || []).length}</b></span><span>二次 Query <b>${(planner.followUpQueries || []).length}</b></span></div>
+      </div>
       <div class="retrieval-candidate-table data-surface">${candidates.length ? `
-        <table class="data-table"><thead><tr><th style="width:24%">事件候选</th><th style="width:11%">向量相似度</th><th style="width:11%">关键词</th><th style="width:10%">重要度</th><th style="width:10%">时效性</th><th style="width:11%">综合分</th><th style="width:13%">向量状态</th><th style="width:12%">决策</th></tr></thead>
+        <table class="data-table"><thead><tr><th style="width:21%">事件候选</th><th style="width:9%">向量相似度</th><th style="width:8%">关键词</th><th style="width:8%">重要度</th><th style="width:8%">时效性</th><th style="width:9%">综合分</th><th style="width:11%">召回阶段</th><th style="width:12%">向量状态</th><th style="width:14%">决策</th></tr></thead>
         <tbody>${candidates.map((item) => `<tr class="${item.selected ? 'selected-row' : ''}">
           <td><span class="cell-main">${escapeHtml(item.title)}</span><span class="cell-sub">${escapeHtml(item.eventType)} · ${escapeHtml(statusLabel(item.status))}</span></td>
           <td><code>${scoreText(item.similarity)}</code></td><td><code>${scoreText(item.keywordScore)}</code></td>
           <td>${scoreText(item.importance)}</td><td>${scoreText(item.recencyScore)}</td><td><strong>${scoreText(item.finalScore)}</strong></td>
+          <td><span class="badge ${item.selected ? 'blue' : (item.expansionEligible ? 'amber' : '')}">${item.selected ? '已展开' : (item.expansionEligible ? '可展开' : (item.inCatalog ? '仅目录' : '未入目录'))}</span></td>
           <td><span class="badge ${item.vectorSource === 'disabled' ? '' : (item.vectorCompatible ? 'blue' : 'red')}">${item.vectorSource === 'disabled' ? '通道关闭' : (item.vectorCompatible ? (item.vectorSource === 'stored' ? '已存向量' : '降级重算') : '维度不兼容')}</span></td>
           <td><span class="badge ${item.selected ? 'blue' : (item.decision.includes('硬过滤') ? 'red' : 'amber')}">${escapeHtml(item.decision)}</span></td>
         </tr>`).join('')}</tbody></table>` : emptyState('scan-search', '作用域内没有可计算的事件向量')}</div>
@@ -1094,16 +1111,16 @@ function renderRetrievalLab() {
   if (result) {
     metrics([
       ['Embedding', result.retrieval.queryEmbedding.fallback ? '本地降级' : `${result.retrieval.queryEmbedding.dimensions} 维`],
-      ['作用域候选', result.retrieval.diagnostics.pipeline.scopedCandidates],
+      ['轻量目录', result.retrieval.diagnostics.pipeline.afterCatalogThreshold],
       ['最终事件', result.retrieval.events.length],
       ['耗时', `${result.durationMs} ms`]
     ]);
   } else {
     metrics([
       ['召回通道', retrievalChannelNames(profile)],
-      ['向量阈值', profile.min_similarity],
+      ['目录 / 详情门槛', `${profile.catalog_min_similarity} / ${profile.vector_only_min_similarity}`],
       ['事件 TopK', profile.event_top_k],
-      ['状态保护', 'Active Only']
+      ['二次规划', profile.planner_enabled ? '已启用' : '关闭']
     ]);
   }
   $('#memoryResultCount').textContent = result ? `${result.retrieval.events.length} 个事件召回` : '待测试';
@@ -1113,7 +1130,7 @@ function renderRetrievalLab() {
       <button id="runRetrievalButton" class="button primary" type="submit"><i data-lucide="play"></i><span>运行召回</span></button>
     </form>
     <div class="retrieval-strategy-bar">
-      <div><span class="strategy-icon"><i data-lucide="sliders-horizontal"></i></span><div><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(retrievalChannelNames(profile))} · similarity ≥ ${profile.min_similarity} · TopK ${profile.event_top_k}</small></div></div>
+      <div><span class="strategy-icon"><i data-lucide="sliders-horizontal"></i></span><div><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(retrievalChannelNames(profile))} · 目录 ${profile.catalog_min_similarity} → 详情 ${profile.vector_only_min_similarity} · ${profile.planner_enabled ? 'LLM 二次规划' : '确定性召回'} · TopK ${profile.event_top_k}</small></div></div>
       <button class="button secondary compact" data-open-retrieval-settings><i data-lucide="external-link"></i><span>${isAdmin() ? '召回策略' : '查看召回策略'}</span></button>
     </div>
     <div id="retrievalOutput">${result ? renderRetrievalResult(result) : '<div class="retrieval-empty"><i data-lucide="scan-search"></i><strong>尚未运行召回测试</strong></div>'}</div>
@@ -1143,7 +1160,8 @@ async function runRetrievalTest(event) {
         user_id: state.currentUserId,
         agent_id: state.currentAgentId,
         story_id: 'main_story',
-        branch_id: 'main'
+        branch_id: 'main',
+        conversation_id: state.currentConversationId || ''
       }
     });
     renderRetrievalLab();
@@ -1453,14 +1471,19 @@ async function editRetrievalProfile() {
           <label class="strategy-toggle"><span><strong>关键词召回</strong><small>文本重叠候选</small></span><span class="toggle-control"><input name="keyword_enabled" type="checkbox" ${profile.keyword_enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>图谱扩展</strong><small>Claims + entity edges</small></span><span class="toggle-control"><input name="graph_enabled" type="checkbox" ${profile.graph_enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>意图硬过滤</strong><small>事件类型与 collection</small></span><span class="toggle-control"><input name="intent_filter_enabled" type="checkbox" ${profile.intent_filter_enabled ? 'checked' : ''}><i></i></span></label>
+          <label class="strategy-toggle"><span><strong>LLM 二次规划</strong><small>先看轻量目录，按需展开详情</small></span><span class="toggle-control"><input name="planner_enabled" type="checkbox" ${profile.planner_enabled ? 'checked' : ''}><i></i></span></label>
         </div>
         <div class="strategy-locked-guard"><i data-lucide="lock-keyhole"></i><div><strong>仅当前有效版本</strong><span>已被新版本替代、已撤回的记录永不进入回答候选</span></div><span class="badge blue">强制开启</span></div>
       </section>
       <section class="strategy-modal-section">
-        <div class="strategy-section-title"><span>02</span><div><strong>阈值与 TopK</strong><small>候选进入与最终截断</small></div></div>
+        <div class="strategy-section-title"><span>02</span><div><strong>两阶段门槛与 TopK</strong><small>进入目录不等于注入详情</small></div></div>
+        <div class="retrieval-stage-note"><span><b>阶段 1</b> 只给规划器事件名、实体和关系</span><i data-lucide="arrow-right"></i><span><b>阶段 2</b> 仅展开通过严格证据门槛的详情</span></div>
         <div class="form-grid strategy-number-grid">
-          <label><span>向量相似度阈值</span><input name="min_similarity" type="number" min="0" max="1" step="0.01" value="${profile.min_similarity}" required></label>
-          <label><span>关键词阈值</span><input name="min_keyword_score" type="number" min="0" max="1" step="0.01" value="${profile.min_keyword_score}" required></label>
+          <label><span>轻量目录相似度</span><input name="catalog_min_similarity" type="number" min="0" max="1" step="0.01" value="${profile.catalog_min_similarity}" required><small>宽进，只暴露名称和关系</small></label>
+          <label><span>纯向量详情相似度</span><input name="vector_only_min_similarity" type="number" min="0" max="1" step="0.01" value="${profile.vector_only_min_similarity}" required><small>无关键词或图谱证据时的硬门槛</small></label>
+          <label><span>关键词详情阈值</span><input name="min_keyword_score" type="number" min="0" max="1" step="0.01" value="${profile.min_keyword_score}" required></label>
+          <label><span>规划器候选上限</span><input name="planner_max_candidates" type="number" min="1" max="30" step="1" value="${profile.planner_max_candidates}" required></label>
+          <label><span>图谱扩展跳数</span><input name="graph_hops" type="number" min="0" max="2" step="1" value="${profile.graph_hops}" required></label>
           <label><span>事件 TopK</span><input name="event_top_k" type="number" min="1" max="50" step="1" value="${profile.event_top_k}" required></label>
           <label><span>声明 TopK</span><input name="claim_top_k" type="number" min="1" max="100" step="1" value="${profile.claim_top_k}" required></label>
           <label><span>关系边 TopK</span><input name="edge_top_k" type="number" min="1" max="100" step="1" value="${profile.edge_top_k}" required></label>
@@ -1485,7 +1508,9 @@ async function editRetrievalProfile() {
         vector_enabled: formData.has('vector_enabled'),
         keyword_enabled: formData.has('keyword_enabled'),
         graph_enabled: formData.has('graph_enabled'),
-        intent_filter_enabled: formData.has('intent_filter_enabled')
+        intent_filter_enabled: formData.has('intent_filter_enabled'),
+        planner_enabled: formData.has('planner_enabled'),
+        min_similarity: Number(formData.get('vector_only_min_similarity'))
       });
       state.retrievalProfile = await api(`/api/scenes/${encodeURIComponent(scene.id)}/retrieval-profile`, {
         method: 'PUT', body
@@ -1547,15 +1572,78 @@ async function loadPersona() {
   $('#personaDescription').value = agent.description;
   $('#personaGreeting').value = agent.greeting;
   $('#personaPrompt').value = agent.system_prompt;
+  renderPersonaFixedAttributes(parseJson(agent.fixed_attributes_json, {}));
   $('#personaScenario').textContent = scene?.name || scenarioLabel(agent.scenario_type);
   $('#personaHeaderName').textContent = agent.name;
-  $('#personaHeaderMeta').textContent = `${scene?.name || scenarioLabel(agent.scenario_type)} · 专属人设与剧情配置`;
+  $('#personaHeaderMeta').textContent = `${scene?.name || scenarioLabel(agent.scenario_type)} · 人设 v${Number(agent.profile_version || 1)} · 专属剧情配置`;
   $('#personaAvatar').textContent = agent.name.slice(0, 1);
   $('#personaAvatar').style.background = agent.avatar_color;
   $('#pageMeta').textContent = `${scene?.name || scenarioLabel(agent.scenario_type)} · ${agent.name}专属配置`;
   state.plots = await api(`/api/plots?agent_id=${encodeURIComponent(state.currentAgentId)}`);
   renderPlots();
   applyRoleUi();
+}
+
+function renderPersonaFixedAttributes(attributes = {}) {
+  const entries = Object.entries(attributes || {});
+  $('#personaFixedAttributes').innerHTML = (entries.length ? entries : [['', '']]).map(([key, value]) => `
+    <div class="persona-attribute-row">
+      <input class="persona-attribute-key" value="${escapeHtml(key)}" maxlength="60" placeholder="属性名，例如 身份">
+      <input class="persona-attribute-value" value="${escapeHtml(value)}" maxlength="600" placeholder="固定值">
+      <button type="button" class="icon-button bordered remove-persona-attribute" title="删除属性" aria-label="删除属性" data-write-only><i data-lucide="trash-2"></i></button>
+    </div>`).join('');
+  $$('.remove-persona-attribute', $('#personaFixedAttributes')).forEach((button) => button.addEventListener('click', () => {
+    button.closest('.persona-attribute-row')?.remove();
+    if (!$('#personaFixedAttributes').children.length) renderPersonaFixedAttributes({});
+  }));
+  refreshIcons();
+}
+
+function collectPersonaFixedAttributes() {
+  const attributes = {};
+  $$('.persona-attribute-row', $('#personaFixedAttributes')).forEach((row) => {
+    const key = $('.persona-attribute-key', row).value.trim();
+    const value = $('.persona-attribute-value', row).value.trim();
+    if (key && value) attributes[key] = value;
+  });
+  return attributes;
+}
+
+async function persistPersona(confirmProfileChange = false) {
+  await api(`/api/agents/${encodeURIComponent(state.currentAgentId)}`, {
+    method: 'PUT',
+    body: {
+      name: $('#personaName').value,
+      scene_id: $('#personaScene').value,
+      description: $('#personaDescription').value,
+      greeting: $('#personaGreeting').value,
+      system_prompt: $('#personaPrompt').value,
+      fixed_attributes: collectPersonaFixedAttributes(),
+      confirm_profile_change: confirmProfileChange
+    }
+  });
+  await loadBootstrap();
+  await navigate('persona');
+  toast('角色人设已保存');
+}
+
+function confirmPersonaProfileChange(error) {
+  const details = error.details || {};
+  const changedFields = (details.changedFields || []).join('、') || '角色核心人设';
+  openModal({
+    title: '确认修改角色核心人设',
+    submitLabel: '确认修改并保留历史',
+    width: 620,
+    body: `<div class="profile-change-warning"><i data-lucide="triangle-alert"></i><div><strong>这次修改可能与既有故事产生矛盾</strong><p>将修改：${escapeHtml(changedFields)}。系统不会自动改写既有用户记忆，而会保留本次人设版本记录。</p></div></div>
+      <div class="impact-metrics">
+        <div><span>相关会话</span><strong>${Number(details.conversations || 0)}</strong></div>
+        <div><span>事件记忆</span><strong>${Number(details.events || 0)}</strong></div>
+        <div><span>有效声明</span><strong>${Number(details.claims || 0)}</strong></div>
+        <div><span>结构化记忆</span><strong>${Number(details.structuredMemories || 0)}</strong></div>
+      </div>
+      <p class="modal-note">建议先确认新设定是否会改变角色身份、核心性格或与用户已经共同经历的事实。确认后角色版本将升级，旧记忆仍可追溯。</p>`,
+    onSubmit: async () => persistPersona(true)
+  });
 }
 
 function renderPersonaAgentList() {
@@ -2034,19 +2122,23 @@ $('#editRetrievalProfileButton').addEventListener('click', () => editRetrievalPr
 $('#personaForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   if (!isAdmin()) return;
-  await api(`/api/agents/${encodeURIComponent(state.currentAgentId)}`, {
-    method: 'PUT',
-    body: {
-      name: $('#personaName').value,
-      scene_id: $('#personaScene').value,
-      description: $('#personaDescription').value,
-      greeting: $('#personaGreeting').value,
-      system_prompt: $('#personaPrompt').value
-    }
-  });
-  await loadBootstrap();
-  navigate('persona');
-  toast('角色人设已保存');
+  try {
+    await persistPersona(false);
+  } catch (error) {
+    if (error.code === 'ROLE_PROFILE_CHANGE_CONFIRMATION_REQUIRED') confirmPersonaProfileChange(error);
+    else toast(error.message, 'error');
+  }
+});
+$('#addPersonaAttribute').addEventListener('click', () => {
+  const row = document.createElement('div');
+  row.className = 'persona-attribute-row';
+  row.innerHTML = `<input class="persona-attribute-key" maxlength="60" placeholder="属性名，例如 身份">
+    <input class="persona-attribute-value" maxlength="600" placeholder="固定值">
+    <button type="button" class="icon-button bordered remove-persona-attribute" title="删除属性" aria-label="删除属性" data-write-only><i data-lucide="trash-2"></i></button>`;
+  $('.remove-persona-attribute', row).addEventListener('click', () => row.remove());
+  $('#personaFixedAttributes').append(row);
+  refreshIcons();
+  $('.persona-attribute-key', row).focus();
 });
 $('#personaScene').addEventListener('change', (event) => {
   const scene = state.bootstrap.scenes.find((item) => item.id === event.target.value);

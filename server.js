@@ -38,10 +38,11 @@ const ADMIN_SESSION_SECONDS = 12 * 60 * 60;
 const USER_SESSION_SECONDS = 7 * 24 * 60 * 60;
 
 class HttpError extends Error {
-  constructor(status, message, code = 'REQUEST_FAILED') {
+  constructor(status, message, code = 'REQUEST_FAILED', details = null) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -229,14 +230,79 @@ function updateAgent(id, body) {
   const sceneId = body.scene_id || current.scene_id || 'scene_companion';
   const scene = db.prepare('SELECT * FROM scenes WHERE id = ? AND enabled = 1').get(sceneId);
   if (!scene) throw new Error('角色必须归属于一个有效场景');
-  db.prepare(`UPDATE agents SET name = ?, scene_id = ?, scenario_type = ?, description = ?, system_prompt = ?,
-    greeting = ?, avatar_color = ?, enabled = ?, updated_at = ? WHERE id = ?`)
-    .run(
-      safeText(body.name ?? current.name, 80), scene.id, scene.scenario_type,
-      safeText(body.description ?? current.description, 500), safeText(body.system_prompt ?? current.system_prompt, 30000),
-      safeText(body.greeting ?? current.greeting, 1000), body.avatar_color || current.avatar_color,
-      body.enabled === undefined ? current.enabled : Number(Boolean(body.enabled)), nowIso(), id
+  const rawAttributes = body.fixed_attributes ?? parseJson(current.fixed_attributes_json, {});
+  if (!rawAttributes || typeof rawAttributes !== 'object' || Array.isArray(rawAttributes)) {
+    throw new Error('角色固定属性必须是键值对象');
+  }
+  const fixedAttributes = {};
+  for (const [rawKey, rawValue] of Object.entries(rawAttributes).slice(0, 30)) {
+    const key = safeText(rawKey, 60).trim();
+    const value = safeText(rawValue, 600).trim();
+    if (key && value) fixedAttributes[key] = value;
+  }
+  const nextProfile = {
+    name: safeText(body.name ?? current.name, 80),
+    sceneId: scene.id,
+    scenarioType: scene.scenario_type,
+    description: safeText(body.description ?? current.description, 500),
+    systemPrompt: safeText(body.system_prompt ?? current.system_prompt, 30000),
+    greeting: safeText(body.greeting ?? current.greeting, 1000),
+    fixedAttributes
+  };
+  const currentAttributes = parseJson(current.fixed_attributes_json, {}) || {};
+  const changedProtectedFields = [
+    nextProfile.name !== current.name ? '角色名称' : '',
+    nextProfile.sceneId !== current.scene_id ? '所属场景' : '',
+    nextProfile.systemPrompt !== current.system_prompt ? '核心人设提示词' : '',
+    json(fixedAttributes) !== json(currentAttributes) ? '角色固定属性' : ''
+  ].filter(Boolean);
+  const impact = changedProtectedFields.length ? {
+    conversations: Number(db.prepare('SELECT COUNT(*) AS count FROM conversations WHERE agent_id = ?').get(id).count),
+    events: Number(db.prepare('SELECT COUNT(*) AS count FROM events WHERE agent_id = ?').get(id).count),
+    claims: Number(db.prepare('SELECT COUNT(*) AS count FROM claims WHERE agent_id = ?').get(id).count),
+    structuredMemories: Number(db.prepare("SELECT COUNT(*) AS count FROM memory_values WHERE agent_id = ? AND status = 'active'").get(id).count)
+  } : { conversations: 0, events: 0, claims: 0, structuredMemories: 0 };
+  const affectedMemoryCount = impact.events + impact.claims + impact.structuredMemories;
+  if (changedProtectedFields.length && (affectedMemoryCount || impact.conversations)
+    && body.confirm_profile_change !== true) {
+    throw new HttpError(
+      409,
+      '修改角色核心人设可能与已经产生的记忆和共同剧情矛盾，需要二次确认',
+      'ROLE_PROFILE_CHANGE_CONFIRMATION_REQUIRED',
+      { changedFields: changedProtectedFields, ...impact, currentVersion: Number(current.profile_version || 1) }
     );
+  }
+  const timestamp = nowIso();
+  const nextVersion = changedProtectedFields.length ? Number(current.profile_version || 1) + 1 : Number(current.profile_version || 1);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare(`UPDATE agents SET name = ?, scene_id = ?, scenario_type = ?, description = ?, system_prompt = ?,
+      greeting = ?, avatar_color = ?, enabled = ?, fixed_attributes_json = ?, profile_version = ?, updated_at = ? WHERE id = ?`)
+      .run(
+        nextProfile.name, nextProfile.sceneId, nextProfile.scenarioType,
+        nextProfile.description, nextProfile.systemPrompt, nextProfile.greeting,
+        body.avatar_color || current.avatar_color,
+        body.enabled === undefined ? current.enabled : Number(Boolean(body.enabled)),
+        json(fixedAttributes), nextVersion, timestamp, id
+      );
+    if (changedProtectedFields.length) {
+      db.prepare(`INSERT INTO agent_profile_history
+        (id, agent_id, old_profile_json, new_profile_json, affected_memory_count,
+         warning_acknowledged, version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        uid('agent_profile'), id, json({
+          name: current.name,
+          sceneId: current.scene_id,
+          scenarioType: current.scenario_type,
+          systemPrompt: current.system_prompt,
+          fixedAttributes: currentAttributes
+        }), json(nextProfile), affectedMemoryCount, Number(Boolean(body.confirm_profile_change)), nextVersion, timestamp
+      );
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
   return db.prepare('SELECT * FROM agents WHERE id = ?').get(id);
 }
 
@@ -295,9 +361,19 @@ function architectureOverview(sceneId) {
         eventTopK: Number(retrieval.event_top_k),
         claimTopK: Number(retrieval.claim_top_k),
         edgeTopK: Number(retrieval.edge_top_k),
-        minSimilarity: Number(retrieval.min_similarity)
+        catalogMinSimilarity: Number(retrieval.catalog_min_similarity),
+        vectorOnlyMinSimilarity: Number(retrieval.vector_only_min_similarity),
+        minSimilarity: Number(retrieval.min_similarity),
+        plannerEnabled: Boolean(retrieval.planner_enabled),
+        plannerMaxCandidates: Number(retrieval.planner_max_candidates),
+        graphHops: Number(retrieval.graph_hops)
       } : null
     },
+    memoryOwnership: [
+      { key: 'role_profile', label: '角色固定属性', scope: 'agent', injection: 'always' },
+      { key: 'user_memory', label: '用户记忆', scope: 'user_agent_story_branch', injection: 'pinned_or_retrieved' },
+      { key: 'shared_story', label: '我们的故事', scope: 'user_agent_story_branch', injection: 'retrieved_only' }
+    ],
     compression: {
       rollingSummaryEnabled: false,
       tokenThreshold: null,
@@ -403,6 +479,11 @@ function updateRetrievalProfile(sceneId, body) {
     graphEnabled: booleanSetting(body.graph_enabled, current.graph_enabled),
     intentFilterEnabled: booleanSetting(body.intent_filter_enabled, current.intent_filter_enabled),
     minSimilarity: numericSetting(body, 'min_similarity', current.min_similarity, 0, 1),
+    catalogMinSimilarity: numericSetting(body, 'catalog_min_similarity', current.catalog_min_similarity, 0, 1),
+    vectorOnlyMinSimilarity: numericSetting(body, 'vector_only_min_similarity', current.vector_only_min_similarity, 0, 1),
+    plannerEnabled: booleanSetting(body.planner_enabled, current.planner_enabled),
+    plannerMaxCandidates: numericSetting(body, 'planner_max_candidates', current.planner_max_candidates, 1, 30, true),
+    graphHops: numericSetting(body, 'graph_hops', current.graph_hops, 0, 2, true),
     minKeywordScore: numericSetting(body, 'min_keyword_score', current.min_keyword_score, 0, 1),
     eventTopK: numericSetting(body, 'event_top_k', current.event_top_k, 1, 50, true),
     claimTopK: numericSetting(body, 'claim_top_k', current.claim_top_k, 1, 100, true),
@@ -417,15 +498,22 @@ function updateRetrievalProfile(sceneId, body) {
   if (!values.vectorEnabled && !values.keywordEnabled && !values.graphEnabled) {
     throw new Error('至少启用一种召回通道');
   }
+  if (values.catalogMinSimilarity > values.vectorOnlyMinSimilarity) {
+    throw new Error('轻量候选目录阈值不能高于纯向量详情阈值');
+  }
   db.prepare(`UPDATE retrieval_profiles SET name = ?, vector_enabled = ?, keyword_enabled = ?,
     graph_enabled = ?, intent_filter_enabled = ?, min_similarity = ?, min_keyword_score = ?,
     event_top_k = ?, claim_top_k = ?, edge_top_k = ?, vector_weight = ?, keyword_weight = ?,
-    importance_weight = ?, recency_weight = ?, recency_half_life_days = ?, updated_at = ?
+    importance_weight = ?, recency_weight = ?, recency_half_life_days = ?,
+    catalog_min_similarity = ?, vector_only_min_similarity = ?, planner_enabled = ?,
+    planner_max_candidates = ?, graph_hops = ?, updated_at = ?
     WHERE scene_id = ?`).run(
     values.name, values.vectorEnabled, values.keywordEnabled, values.graphEnabled,
     values.intentFilterEnabled, values.minSimilarity, values.minKeywordScore, values.eventTopK,
     values.claimTopK, values.edgeTopK, values.vectorWeight, values.keywordWeight,
-    values.importanceWeight, values.recencyWeight, values.recencyHalfLifeDays, nowIso(), sceneId
+    values.importanceWeight, values.recencyWeight, values.recencyHalfLifeDays,
+    values.catalogMinSimilarity, values.vectorOnlyMinSimilarity, values.plannerEnabled,
+    values.plannerMaxCandidates, values.graphHops, nowIso(), sceneId
   );
   return getRetrievalProfile(sceneId);
 }
@@ -977,8 +1065,18 @@ async function handleApi(request, response, url) {
     const agent = db.prepare('SELECT * FROM agents WHERE id = ? AND enabled = 1').get(scope.agentId);
     if (!query) throw new Error('请输入召回测试 Query');
     if (!user || !agent) throw new Error('召回测试需要有效的用户和角色');
+    let contextMessages = [];
+    if (body.conversation_id) {
+      const conversation = db.prepare(`SELECT * FROM conversations
+        WHERE id = ? AND user_id = ? AND agent_id = ?`).get(body.conversation_id, scope.userId, scope.agentId);
+      if (conversation) {
+        contextMessages = db.prepare(`SELECT role, content, created_at FROM (
+          SELECT role, content, created_at FROM messages WHERE conversation_id = ?
+          ORDER BY created_at DESC LIMIT 6) ORDER BY created_at`).all(conversation.id);
+      }
+    }
     const startedAt = performance.now();
-    const retrieval = await retrieveMemory(query, scope);
+    const retrieval = await retrieveMemory(query, scope, { contextMessages });
     const scene = db.prepare('SELECT id, name FROM scenes WHERE id = ?').get(agent.scene_id);
     sendJson(response, 200, {
       query,
@@ -1086,7 +1184,8 @@ export const server = http.createServer(async (request, response) => {
   } catch (error) {
     sendJson(response, error.status || 400, {
       error: error.message || '请求处理失败',
-      code: error.code || 'REQUEST_FAILED'
+      code: error.code || 'REQUEST_FAILED',
+      ...(error.details ? { details: error.details } : {})
     });
   }
 });

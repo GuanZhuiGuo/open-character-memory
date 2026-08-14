@@ -264,6 +264,11 @@
                   </div>
                   <label><span>角色摘要</span><input id="personaDescription"></label>
                   <label><span>开场语</span><textarea id="personaGreeting" rows="2"></textarea></label>
+                  <section class="persona-attributes-editor" aria-labelledby="personaAttributesTitle">
+                    <header><div><span id="personaAttributesTitle">角色固定属性</span><small>每轮固定注入，由管理员维护，不随单个用户剧情改变</small></div><button id="addPersonaAttribute" type="button" class="button secondary compact" data-write-only><i data-lucide="plus"></i><span>新增属性</span></button></header>
+                    <div class="persona-attribute-labels" aria-hidden="true"><span>属性名</span><span>固定值</span><span></span></div>
+                    <div id="personaFixedAttributes" class="persona-attribute-list"></div>
+                  </section>
                   <label class="grow"><span>核心人设提示词</span><textarea id="personaPrompt" rows="14" required></textarea></label>
                 </form>
                 <section class="plot-surface">
@@ -368,7 +373,8 @@
                   <section class="architecture-domain runtime-domain">
                     <header><span>02</span><strong>Agent Runtime</strong><small>Node.js</small></header>
                     <div class="architecture-node" data-phase="pre generate write"><i data-lucide="route"></i><span><strong>会话锁与 Turn Pipeline</strong><small>同一会话串行执行</small></span></div>
-                    <div class="architecture-node" data-phase="pre generate input"><i data-lucide="layers-3"></i><span><strong>Prompt Compiler</strong><small>硬规则 + 状态 + 召回 + 近期消息</small></span></div>
+                    <div class="architecture-node" data-phase="pre generate input"><i data-lucide="layers-3"></i><span><strong>Prompt Compiler</strong><small>硬规则 + 角色属性 + 状态 + 最终召回</small></span></div>
+                    <div class="architecture-node" data-phase="pre"><i data-lucide="brain-circuit"></i><span><strong>Recall Planner</strong><small>轻量目录 → LLM 决策 → 详情展开</small></span></div>
                     <div class="architecture-node" data-phase="input"><i data-lucide="scan-search"></i><span><strong>Architecture RAG</strong><small>代码切片 + 混合检索 + 证据约束</small></span></div>
                   </section>
 
@@ -376,8 +382,9 @@
 
                   <section class="architecture-domain memory-domain">
                     <header><span>03</span><strong>记忆与自动化平面</strong><small>Scoped</small></header>
-                    <div class="architecture-node" data-phase="pre"><i data-lucide="pin"></i><span><strong>结构化当前状态</strong><small>pinned 字段与 active 版本</small></span></div>
-                    <div class="architecture-node" data-phase="pre"><i data-lucide="share-2"></i><span><strong>混合召回</strong><small>Claim + 事件向量 + 图谱邻居</small></span></div>
+                    <div class="architecture-node" data-phase="pre"><i data-lucide="badge-check"></i><span><strong>角色固定属性</strong><small>agent 全局，每轮固定注入</small></span></div>
+                    <div class="architecture-node" data-phase="pre"><i data-lucide="user-round"></i><span><strong>用户记忆</strong><small>结构化状态 + 用户事件</small></span></div>
+                    <div class="architecture-node" data-phase="pre"><i data-lucide="book-heart"></i><span><strong>我们的故事</strong><small>角色言行 + 共同承诺，按用户隔离</small></span></div>
                     <div class="architecture-node" data-phase="write"><i data-lucide="scan-text"></i><span><strong>轮后抽取与重算</strong><small>结构化更新 → 派生 → 事件 → 触发</small></span></div>
                   </section>
 
@@ -385,12 +392,19 @@
 
                   <section class="architecture-domain infra-domain">
                     <header><span>04</span><strong>模型与数据层</strong><small>External + Local</small></header>
-                    <div class="architecture-node" data-phase="generate write input"><i data-lucide="sparkles"></i><span><strong>Ark Responses</strong><small>角色回复、记忆抽取、架构回答</small></span></div>
+                    <div class="architecture-node" data-phase="generate write input"><i data-lucide="sparkles"></i><span><strong>Ark Responses</strong><small>角色回复、召回规划、记忆抽取、架构回答</small></span></div>
                     <div class="architecture-node" data-phase="pre write input"><i data-lucide="binary"></i><span><strong>Ark Embeddings</strong><small>事件与代码切片向量化</small></span></div>
                     <div class="architecture-node" data-phase="pre write input"><i data-lucide="database"></i><span><strong>SQLite</strong><small>状态、图谱、向量、Trace、问答日志</small></span></div>
                   </section>
                 </div>
-                <footer><i data-lucide="shield-check"></i><span>所有业务记忆按 user + agent + story + branch 隔离；架构代码索引不含环境变量文件与密钥。</span></footer>
+                <div class="memory-ownership-strip" aria-label="三类记忆所有权">
+                  <div><i data-lucide="badge-check"></i><span><strong>角色固定属性</strong><small>scope: agent · 管理员维护 · 修改需二次确认</small></span></div>
+                  <i data-lucide="plus"></i>
+                  <div><i data-lucide="user-round"></i><span><strong>用户记忆</strong><small>scope: user + agent · 用户事实与结构化状态</small></span></div>
+                  <i data-lucide="plus"></i>
+                  <div><i data-lucide="book-heart"></i><span><strong>我们的故事</strong><small>scope: user + agent + story + branch · 角色言行与共同经历</small></span></div>
+                </div>
+                <footer><i data-lucide="shield-check"></i><span>用户记忆与“我们的故事”按 user + agent + story + branch 隔离；架构代码索引不含环境变量文件与密钥。</span></footer>
               </section>
 
               <div class="timeline-grid phase-row" aria-hidden="true">
@@ -422,13 +436,13 @@
                 <div class="flow-node grid-col-4 has-arrow" data-phase="pre">
                   <span class="step-number">03</span><i data-lucide="pin"></i>
                   <strong>常驻记忆加载</strong>
-                  <small>硬规则、角色、人设与已解锁剧情</small>
+                  <small>硬规则、角色固定属性、人设与已解锁剧情</small>
                   <span class="timing sync">每轮</span>
                 </div>
                 <div class="flow-node grid-col-5 has-arrow" data-phase="pre">
                   <span class="step-number">04</span><i data-lucide="search"></i>
-                  <strong>混合召回</strong>
-                  <small>Active Claim、图邻居、向量事件</small>
+                  <strong>两阶段召回</strong>
+                  <small>轻量目录 → 独立 LLM 规划 → 详情与图谱证据</small>
                   <span class="timing demand">按需</span>
                 </div>
                 <div class="flow-node grid-col-6 has-arrow" data-phase="pre">
@@ -455,6 +469,21 @@
                   <small>写入、后置触发完成后才返回 API</small>
                   <span class="timing blocking">完成后解锁</span>
                 </div>
+              </section>
+
+              <section class="timeline-grid swimlane retrieval-lane" aria-label="两阶段记忆召回机制">
+                <div class="lane-label">
+                  <i data-lucide="scan-search"></i>
+                  <strong>召回展开</strong>
+                  <span>宽目录 · 严详情</span>
+                </div>
+                <div class="retrieval-architecture-step grid-col-2 has-arrow" data-phase="pre"><span>01</span><strong>混合候选</strong><small>向量、关键词、实体、图边</small></div>
+                <div class="retrieval-architecture-step grid-col-3 has-arrow" data-phase="pre"><span>02</span><strong>Active / Scope</strong><small>先剔除旧版本和跨用户数据</small></div>
+                <div class="retrieval-architecture-step catalog grid-col-4 has-arrow" data-phase="pre"><span>03</span><strong>轻量目录</strong><small>只含事件名、实体、关系</small></div>
+                <div class="retrieval-architecture-step planner grid-col-5 has-arrow" data-phase="pre"><span>04 · MODEL</span><strong>LLM 召回规划</strong><small>决定 event id、实体或二次 Query</small></div>
+                <div class="retrieval-architecture-step gate grid-col-6 has-arrow" data-phase="pre"><span>05</span><strong>严格详情门</strong><small>关键词 / 实体 / 图证据，或高相似度</small></div>
+                <div class="retrieval-architecture-step graph grid-col-7 has-arrow" data-phase="pre"><span>06</span><strong>图谱证据事件</strong><small>关系边回指 event_id 并展开</small></div>
+                <div class="retrieval-architecture-step merge grid-col-8 span-2" data-phase="pre"><span>07</span><strong>去重合并后注入</strong><small>只有最终详情进入主回复模型；目录和被拒候选留在 Trace</small></div>
               </section>
 
               <section class="timeline-grid swimlane turn-boundary-lane" aria-label="一轮对话的结束点与下一轮解锁点">
@@ -511,24 +540,24 @@
                   <small>每轮追加，只读留痕，不直接裁决事实</small><b>每轮</b>
                 </div>
                 <div class="memory-trigger grid-col-3 control" data-phase="pre">
-                  <span class="memory-kind">控制层</span><strong>管理员固定字段</strong>
-                  <small>启用且 pinned，按 scope 每轮注入</small><b>每轮</b>
+                  <span class="memory-kind">角色层</span><strong>角色固定属性</strong>
+                  <small>agent 全局配置；核心修改需二次确认并留版本</small><b>每轮</b>
                 </div>
                 <div class="memory-trigger grid-col-4 control" data-phase="pre">
                   <span class="memory-kind">控制层</span><strong>用户显式要求</strong>
-                  <small>识别戏外永久要求，通过边界后当轮 upsert</small><b>立即</b>
+                  <small>user + agent；通过边界后当轮 upsert 并常驻</small><b>立即</b>
                 </div>
                 <div class="memory-trigger grid-col-5 state" data-phase="pre write">
                   <span class="memory-kind">状态层</span><strong>关系与场景</strong>
                   <small>读 active 当前值；事件提交后计算增量与阶段</small><b>每轮 + 轮后</b>
                 </div>
                 <div class="memory-trigger grid-col-6 graph" data-phase="pre write">
-                  <span class="memory-kind">图谱层</span><strong>事件与剧情</strong>
-                  <small>实体命中后查 1-2 跳；新事件达到证据门槛才写入</small><b>按需</b>
+                  <span class="memory-kind">故事层</span><strong>我们的故事</strong>
+                  <small>角色言行、共同物品和承诺；按用户与故事分支存储</small><b>按需 + 轮后</b>
                 </div>
                 <div class="memory-trigger grid-col-7 vector" data-phase="pre">
-                  <span class="memory-kind">语义层</span><strong>向量经历</strong>
-                  <small>问题相关时取 TopK 候选，不负责新旧裁决</small><b>按需</b>
+                  <span class="memory-kind">检索层</span><strong>事件图谱与向量</strong>
+                  <small>轻量目录经规划与严格详情门后才进入 Input</small><b>按需</b>
                 </div>
                 <div class="memory-trigger grid-col-8 profile" data-phase="write">
                   <span class="memory-kind">画像层</span><strong>稳定偏好</strong>
@@ -549,9 +578,9 @@
                 <div class="context-pool grid-col-2 span-2" data-phase="pre">
                   <div class="block-title"><span>候选上下文池</span><b>P0-P3</b></div>
                   <div class="context-tiers">
-                    <span><b>P0</b>安全边界 · 角色人设 · 常驻控制</span>
+                    <span><b>P0</b>安全边界 · 角色人设与固定属性 · 常驻控制</span>
                     <span><b>P1</b>当前关系 · 当前场景 · Active Claims</span>
-                    <span><b>P2</b>图谱邻居 · 向量 TopK · 已解锁剧情</span>
+                    <span><b>P2</b>二阶段展开事件 · 图谱证据 · 已解锁剧情</span>
                     <span><b>P3</b><i id="architectureRecentContext">最近 16 条原文</i> · 当前消息已包含</span>
                   </div>
                 </div>
@@ -598,7 +627,7 @@
                     <div>
                       <span class="request-index">REQUEST #N</span>
                       <strong>第 N 次文本模型请求</strong>
-                      <small>N 为当前会话内的主模型调用序号</small>
+                      <small>N 为当前会话内的主回复模型调用序号；召回规划器是回复前的独立模型请求</small>
                     </div>
                     <div class="request-facts">
                       <code>POST /responses</code>
@@ -618,7 +647,7 @@
                         </div>
                         <a class="input-source config-source" href="#personaPrompt" data-config-link data-jump-page="persona" data-jump-target="#personaPrompt">
                           <span class="source-order">02</span>
-                          <div><strong>角色人设提示词</strong><small>agent.system_prompt</small></div>
+                          <div><strong>角色人设与固定属性</strong><small>agent.system_prompt + fixed_attributes_json</small></div>
                           <span class="source-jump">人设与剧情<i data-lucide="external-link"></i></span>
                         </a>
                         <a class="input-source config-source" href="#schemaTable" data-config-link data-jump-page="schemas" data-jump-target="#schemaTable">
@@ -638,7 +667,7 @@
                         </a>
                         <a class="input-source config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="retrieval" data-jump-target="#memoryContent">
                           <span class="source-order">06</span>
-                          <div><strong>本轮记忆召回片段</strong><small>Active Claims + 事件 TopK + 图谱关系</small></div>
+                          <div><strong>本轮最终展开记忆</strong><small>严格门通过的 Active Claims + 事件详情 + 图谱证据事件</small></div>
                           <span class="source-jump">召回测试<i data-lucide="external-link"></i></span>
                         </a>
                       </div>
@@ -672,7 +701,7 @@
                         <div><dt>temperature</dt><dd>0.7</dd></div>
                         <div><dt>max_output_tokens</dt><dd>1200</dd></div>
                         <div><dt>stream</dt><dd>false</dd></div>
-                        <div><dt>tools</dt><dd>[]</dd></div>
+                        <div><dt>tools</dt><dd>[] · 主回复请求</dd></div>
                       </dl>
                       <div class="model-target"><i data-lucide="bot"></i><span><strong>Ark Responses</strong><small>生成角色回复</small></span></div>
                     </section>
@@ -680,7 +709,7 @@
 
                   <div class="input-exclusion-strip">
                     <span><i data-lucide="circle-slash-2"></i>不进入主模型 Input</span>
-                    <i>向量数值</i><i>已替代 / 已撤回记录</i><i>其他用户或分支</i><i>Trace 与密钥</i>
+                    <i>轻量候选目录</i><i>未通过详情门事件</i><i>向量数值</i><i>已替代 / 已撤回记录</i><i>其他用户或分支</i><i>Trace 与密钥</i>
                     <a href="#automationContent" data-config-link data-jump-page="automation" data-jump-tab="tools" data-jump-target="#automationContent">Function tools 在模型外由条件触发器执行<i data-lucide="external-link"></i></a>
                   </div>
                 </div>
