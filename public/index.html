@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light">
+  <meta name="app-base-path" content="__APP_BASE_PATH__">
+  <title>记忆 Agent 工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-size='18' font-family='Arial' font-weight='700' fill='white'%3EM%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="loginOverlay" class="modal-backdrop login-backdrop">
+    <form id="loginForm" class="modal login-modal">
+      <div class="brand-mark" aria-hidden="true">M</div>
+      <h1>记忆 Agent 工作台</h1>
+      <input class="hidden" name="username" value="admin" autocomplete="username" tabindex="-1" aria-hidden="true">
+      <label class="field-label" for="adminPassword">管理员密码</label>
+      <input id="adminPassword" name="password" type="password" autocomplete="current-password" placeholder="输入密码" required>
+      <p id="loginError" class="form-error" role="alert"></p>
+      <button class="button primary wide" type="submit">登录</button>
+    </form>
+  </div>
+
+  <div id="app" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark small">M</span>
+        <span>记忆 Agent</span>
+      </div>
+      <nav class="nav-list" aria-label="主导航">
+        <button class="nav-item active" data-page="chat" aria-label="角色对话"><i data-lucide="messages-square"></i><span>角色对话</span></button>
+        <button class="nav-item" data-page="memory" aria-label="记忆查询"><i data-lucide="database"></i><span>记忆查询</span></button>
+        <button class="nav-item" data-page="schemas" aria-label="记忆设置"><i data-lucide="list-tree"></i><span>记忆设置</span></button>
+        <button class="nav-item" data-page="persona" aria-label="人设与剧情"><i data-lucide="badge-check"></i><span>人设与剧情</span></button>
+        <button class="nav-item" data-page="automation" aria-label="触发与工具"><i data-lucide="workflow"></i><span>触发与工具</span></button>
+        <button class="nav-item" data-page="timeline" aria-label="系统架构图"><i data-lucide="network"></i><span>系统架构图</span></button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="admin-identity">
+          <span class="status-dot"></span>
+          <div><strong>管理员</strong><small>已验证</small></div>
+        </div>
+        <button id="logoutButton" class="icon-button" title="退出登录" aria-label="退出登录"><i data-lucide="log-out"></i></button>
+      </div>
+    </aside>
+
+    <section class="workspace">
+      <header class="topbar">
+        <div>
+          <h2 id="pageTitle">角色对话</h2>
+          <div id="pageMeta" class="page-meta">main_story / main</div>
+        </div>
+        <div class="topbar-actions">
+          <button id="modelHealth" class="status-button" title="检查模型连接"><span class="status-dot"></span><span>Ark 已配置</span></button>
+          <div id="topbarScene" class="scene-context" title="角色所属场景">
+            <i data-lucide="layout-template"></i><span id="topbarSceneName">场景</span>
+          </div>
+          <label class="select-wrap agent-select-wrap" title="当前角色">
+            <i data-lucide="bot"></i>
+            <select id="agentSelect" aria-label="选择角色"></select>
+          </label>
+          <label class="select-wrap" title="当前用户">
+            <span id="userAvatar" class="mini-avatar">U</span>
+            <select id="userSelect" aria-label="切换用户"></select>
+          </label>
+          <button id="addUserButton" class="icon-button bordered" title="新增用户" aria-label="新增用户"><i data-lucide="user-plus"></i></button>
+        </div>
+      </header>
+
+      <main class="page-stack">
+        <section id="page-chat" class="page active">
+          <div class="chat-layout">
+            <aside class="conversation-panel">
+              <div class="panel-toolbar">
+                <strong>对话</strong>
+                <button id="newConversationButton" class="icon-button" title="新建对话" aria-label="新建对话"><i data-lucide="square-pen"></i></button>
+              </div>
+              <div id="conversationList" class="conversation-list"></div>
+            </aside>
+            <section class="chat-panel">
+              <div class="chat-header">
+                <div class="agent-identity">
+                  <span id="agentAvatar" class="avatar">L</span>
+                  <div><strong id="chatAgentName">林晚</strong><small id="chatAgentDescription">陪伴型角色</small></div>
+                </div>
+                <button id="openTraceButton" class="button secondary compact"><i data-lucide="scan-search"></i><span>Trace</span></button>
+              </div>
+              <div id="messageList" class="message-list" aria-live="polite"></div>
+              <form id="composerForm" class="composer">
+                <textarea id="messageInput" rows="1" placeholder="输入消息…" aria-label="消息内容"></textarea>
+                <button id="sendButton" class="send-button" type="submit" title="发送" aria-label="发送"><i data-lucide="arrow-up"></i></button>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section id="page-memory" class="page admin-page">
+          <div class="memory-workbench">
+            <aside class="object-sidebar memory-instance-sidebar">
+              <div class="object-sidebar-heading">
+                <span class="eyebrow">MEMORY INSTANCE</span>
+                <h3>记忆实例</h3>
+                <p>每个用户与角色组合独立存储、召回和更新。</p>
+              </div>
+              <div class="instance-connector" aria-label="用户和角色组成一份记忆实例">
+                <label class="instance-party">
+                  <span>用户</span>
+                  <select id="memoryUserSelect" aria-label="选择记忆所属用户"></select>
+                </label>
+                <span class="relation-symbol" title="一对一记忆实例"><i data-lucide="arrow-left-right"></i></span>
+                <label class="instance-party">
+                  <span>角色</span>
+                  <select id="memoryAgentSelect" aria-label="选择记忆所属角色"></select>
+                </label>
+              </div>
+              <div class="instance-identity">
+                <div><span>所属场景</span><strong id="memorySceneName">-</strong></div>
+                <div><span>当前剧情</span><strong>主剧情 / 主分支</strong></div>
+                <div class="instance-key"><span>实例键</span><code id="memoryInstanceKey">-</code></div>
+              </div>
+              <div class="sidebar-divider"></div>
+              <div class="sidebar-section-label">记忆分类</div>
+              <nav id="memoryCategoryList" class="category-nav" aria-label="记忆分类"></nav>
+            </aside>
+
+            <section class="object-workspace memory-results">
+              <header class="object-workspace-header">
+                <div>
+                  <div class="title-with-badge"><h3 id="memoryInstanceTitle">记忆状态</h3><span class="badge blue">用户 × 角色 1:1</span></div>
+                  <p id="memoryInstanceDescription">查看该组合当前生效的结构化状态与事件证据。</p>
+                </div>
+                <div class="segmented memory-tab-list" role="tablist">
+                  <button class="active" data-memory-tab="values">结构化记忆</button>
+                  <button data-memory-tab="events">事件列表</button>
+                  <button data-memory-tab="graph">事件图谱</button>
+                  <button data-memory-tab="retrieval">召回测试</button>
+                  <button data-memory-tab="history">变更记录</button>
+                </div>
+              </header>
+              <div id="memoryFilters" class="results-toolbar">
+                <label class="search-box"><i data-lucide="search"></i><input id="memorySearch" placeholder="搜索字段、Key 或当前值"></label>
+                <select id="memoryCategoryFilter" class="mobile-filter" aria-label="筛选分类"><option value="">全部分类</option></select>
+                <span id="memoryResultCount" class="result-count">0 项</span>
+              </div>
+              <div id="memorySummary" class="metric-strip compact-metrics"></div>
+              <div id="memoryContent" class="memory-content"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="page-schemas" class="page admin-page">
+          <div class="configuration-layout">
+            <aside class="object-sidebar">
+              <div class="object-sidebar-heading">
+                <span class="eyebrow">SCENES</span>
+                <h3>场景</h3>
+                <p>一个场景只绑定一份生效的记忆设置。</p>
+              </div>
+              <div id="sceneList" class="object-list" aria-label="场景列表"></div>
+              <div class="relationship-rule"><i data-lucide="link-2"></i><span><strong>1 : 1</strong> 场景与记忆设置</span></div>
+            </aside>
+
+            <section class="object-workspace">
+              <header class="object-workspace-header settings-header">
+                <div class="object-title-block">
+                  <span id="schemaSceneIcon" class="object-icon"><i data-lucide="layout-template"></i></span>
+                  <div>
+                    <div class="title-with-badge"><h3 id="schemaProfileName">记忆设置</h3><span id="schemaScenarioBadge" class="badge blue">-</span></div>
+                    <p id="schemaProfileDescription">选择场景查看生效字段。</p>
+                  </div>
+                </div>
+                <div class="header-actions">
+                  <button id="editMemoryProfileButton" class="button secondary compact"><i data-lucide="settings-2"></i><span>配置说明</span></button>
+                  <button id="editRetrievalProfileButton" class="button secondary compact"><i data-lucide="sliders-horizontal"></i><span>召回策略</span></button>
+                  <button id="addSchemaButton" class="button primary"><i data-lucide="plus"></i><span>新建字段</span></button>
+                </div>
+              </header>
+              <div class="relationship-banner">
+                <div><i data-lucide="layout-template"></i><span>场景</span><strong id="schemaSceneName">-</strong></div>
+                <i data-lucide="arrow-right"></i>
+                <div><i data-lucide="list-tree"></i><span>唯一记忆设置</span><strong id="schemaProfileShortName">-</strong></div>
+                <i data-lucide="arrow-right"></i>
+                <div><i data-lucide="bot"></i><span>使用角色</span><strong id="schemaCharacterCount">0 个</strong></div>
+              </div>
+              <div class="settings-mode-bar">
+                <div class="segmented" role="tablist" aria-label="记忆设置类型">
+                  <button class="active" data-schema-tab="fields">结构化字段</button>
+                  <button data-schema-tab="extraction">事件抽取</button>
+                </div>
+                <span id="schemaModeHint">定义当前场景的固定字段与更新策略</span>
+              </div>
+              <div id="schemaFieldToolbar" class="results-toolbar">
+                <label class="search-box"><i data-lucide="search"></i><input id="schemaSearch" placeholder="搜索字段名称或 Key"></label>
+                <select id="schemaCategoryFilter" aria-label="字段分类"><option value="">全部分类</option></select>
+                <span id="schemaResultCount" class="result-count">0 个字段</span>
+              </div>
+              <div id="schemaSummary" class="metric-strip compact-metrics"></div>
+              <div id="schemaTable" class="data-surface"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="page-persona" class="page admin-page">
+          <div class="configuration-layout persona-layout">
+            <aside class="object-sidebar">
+              <div class="object-sidebar-heading">
+                <span class="eyebrow">CHARACTERS</span>
+                <h3>角色</h3>
+                <p>每个角色归属一个场景，并拥有一套人设与剧情。</p>
+              </div>
+              <div id="personaAgentList" class="object-list" aria-label="角色列表"></div>
+              <div class="relationship-rule"><i data-lucide="network"></i><span><strong>N : 1</strong> 角色与场景</span></div>
+              <div class="relationship-rule"><i data-lucide="link-2"></i><span><strong>1 : 1</strong> 角色与人设剧情</span></div>
+            </aside>
+
+            <section class="object-workspace persona-workspace">
+              <header class="object-workspace-header">
+                <div class="object-title-block">
+                  <span id="personaAvatar" class="object-avatar">角</span>
+                  <div>
+                    <div class="title-with-badge"><h3 id="personaHeaderName">角色人设与剧情</h3><span class="badge blue">角色 1:1</span></div>
+                    <p id="personaHeaderMeta">选择角色进行配置。</p>
+                  </div>
+                </div>
+                <button class="button primary" type="submit" form="personaForm"><i data-lucide="save"></i><span>保存人设</span></button>
+              </header>
+
+              <div class="persona-grid">
+                <form id="personaForm" class="form-surface">
+                  <div class="surface-heading"><div><h3>核心人设</h3><span id="personaScenario" class="badge blue">-</span></div><span class="count-label">每轮固定注入</span></div>
+                  <div class="form-grid two">
+                    <label><span>角色名称</span><input id="personaName" required></label>
+                    <label><span>所属场景</span><select id="personaScene" required></select></label>
+                  </div>
+                  <label><span>角色摘要</span><input id="personaDescription"></label>
+                  <label><span>开场语</span><textarea id="personaGreeting" rows="2"></textarea></label>
+                  <label class="grow"><span>核心人设提示词</span><textarea id="personaPrompt" rows="14" required></textarea></label>
+                </form>
+                <section class="plot-surface">
+                  <div class="surface-heading"><div><h3>专属剧情</h3><span id="plotCount" class="count-label">0 条</span></div><button id="addPlotButton" class="button secondary compact"><i data-lucide="plus"></i><span>新增剧情</span></button></div>
+                  <div class="plot-scope-note"><i data-lucide="lock-keyhole"></i><span>仅绑定当前角色，不被同场景其他角色共享</span></div>
+                  <div id="plotList" class="plot-list"></div>
+                </section>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="page-automation" class="page admin-page">
+          <div class="section-toolbar">
+            <div class="segmented" role="tablist">
+              <button class="active" data-automation-tab="triggers">条件触发器</button>
+              <button data-automation-tab="tools">Function tools</button>
+            </div>
+            <button id="addTriggerButton" class="button primary"><i data-lucide="plus"></i><span>新建触发器</span></button>
+          </div>
+          <div id="automationContent" class="data-surface"></div>
+        </section>
+
+        <section id="page-timeline" class="page admin-page timeline-page">
+          <div class="section-toolbar timeline-toolbar">
+            <div class="segmented" role="tablist" aria-label="系统架构图视角">
+              <button class="active" data-timeline-view="all" role="tab" aria-selected="true">全链路</button>
+              <button data-timeline-view="pre" role="tab" aria-selected="false">上下文与阈值</button>
+              <button data-timeline-view="input" role="tab" aria-selected="false">模型 Input</button>
+              <button data-timeline-view="write" role="tab" aria-selected="false">写入与重算</button>
+            </div>
+            <div class="architecture-toolbar-actions">
+              <div class="timeline-legend" aria-label="执行方式图例">
+                <span><i class="legend-mark sync"></i>本轮同步</span>
+                <span><i class="legend-mark demand"></i>按需 / 阈值</span>
+                <span><i class="legend-mark blocking"></i>轮后阻塞等待</span>
+              </div>
+              <button id="openArchitectureAssistant" class="button primary compact" data-open-architecture-assistant><i data-lucide="bot"></i><span>问架构 AI</span></button>
+            </div>
+          </div>
+
+          <div class="timeline-frame">
+            <div id="timelineCanvas" class="timeline-canvas" data-focus="all">
+              <header class="timeline-titlebar">
+                <div>
+                  <span class="timeline-kicker">MEMORY AGENT SYSTEM ARCHITECTURE</span>
+                  <h3>Memory Agent 系统架构</h3>
+                </div>
+                <div class="runtime-mode"><i data-lucide="lock-keyhole"></i><span><strong>当前实现</strong><small>阻塞式轮后抽取</small></span></div>
+                <div class="scope-chain" aria-label="记忆隔离键">
+                  <code>user_id</code><i data-lucide="chevron-right"></i>
+                  <code>agent_id</code><i data-lucide="chevron-right"></i>
+                  <code>story_id</code><i data-lucide="chevron-right"></i>
+                  <code>branch_id</code>
+                </div>
+              </header>
+
+              <section class="architecture-thresholds" aria-label="当前运行阈值">
+                <div><span>主模型近期窗口</span><strong id="architectureMainWindow">16 条消息 · 约 8 轮</strong><small>超出部分不进入本次 Input</small></div>
+                <div><span>事件抽取消歧窗口</span><strong id="architectureExtractionWindow">2 轮 · 最多 4 条</strong><small>按场景配置，可调 1-10 轮</small></div>
+                <div><span>单轮写入门槛</span><strong id="architectureEventThreshold">3 事件 · importance ≥ 0.35</strong><small>低于门槛的新事件不落库</small></div>
+                <div><span>长对话压缩</span><strong id="architectureCompressionStatus">滚动摘要未启用</strong><small>当前没有 token 阈值</small></div>
+              </section>
+
+              <section class="system-architecture-map" aria-label="Memory Agent 系统组件拓扑">
+                <header class="architecture-map-header">
+                  <div><span>COMPONENT TOPOLOGY</span><strong>入口、运行时、记忆平面与基础设施</strong></div>
+                  <div class="architecture-index-state"><i data-lucide="database-zap"></i><span><strong id="architectureIndexBadge">代码索引待检查</strong><small id="architectureIndexMeta">进入页面后读取真实状态</small></span></div>
+                </header>
+                <div class="architecture-map-grid">
+                  <section class="architecture-domain entry-domain">
+                    <header><span>01</span><strong>产品入口</strong><small>Browser</small></header>
+                    <div class="architecture-node" data-phase="pre"><i data-lucide="messages-square"></i><span><strong>用户角色对话</strong><small>POST /api/chat</small></span></div>
+                    <div class="architecture-node" data-phase="pre write"><i data-lucide="settings-2"></i><span><strong>管理员控制台</strong><small>角色、场景、记忆、触发器</small></span></div>
+                    <button type="button" class="architecture-node architecture-ai-node" data-open-architecture-assistant data-phase="input"><i data-lucide="bot"></i><span><strong>系统代码问答</strong><small>仅回答当前代码逻辑</small></span><i data-lucide="arrow-up-right"></i></button>
+                  </section>
+
+                  <div class="architecture-map-connector" aria-hidden="true"><i data-lucide="arrow-right"></i><span>API</span></div>
+
+                  <section class="architecture-domain runtime-domain">
+                    <header><span>02</span><strong>Agent Runtime</strong><small>Node.js</small></header>
+                    <div class="architecture-node" data-phase="pre generate write"><i data-lucide="route"></i><span><strong>会话锁与 Turn Pipeline</strong><small>同一会话串行执行</small></span></div>
+                    <div class="architecture-node" data-phase="pre generate input"><i data-lucide="layers-3"></i><span><strong>Prompt Compiler</strong><small>硬规则 + 状态 + 召回 + 近期消息</small></span></div>
+                    <div class="architecture-node" data-phase="input"><i data-lucide="scan-search"></i><span><strong>Architecture RAG</strong><small>代码切片 + 混合检索 + 证据约束</small></span></div>
+                  </section>
+
+                  <div class="architecture-map-connector" aria-hidden="true"><i data-lucide="arrow-right"></i><span>读写</span></div>
+
+                  <section class="architecture-domain memory-domain">
+                    <header><span>03</span><strong>记忆与自动化平面</strong><small>Scoped</small></header>
+                    <div class="architecture-node" data-phase="pre"><i data-lucide="pin"></i><span><strong>结构化当前状态</strong><small>pinned 字段与 active 版本</small></span></div>
+                    <div class="architecture-node" data-phase="pre"><i data-lucide="share-2"></i><span><strong>混合召回</strong><small>Claim + 事件向量 + 图谱邻居</small></span></div>
+                    <div class="architecture-node" data-phase="write"><i data-lucide="scan-text"></i><span><strong>轮后抽取与重算</strong><small>结构化更新 → 派生 → 事件 → 触发</small></span></div>
+                  </section>
+
+                  <div class="architecture-map-connector" aria-hidden="true"><i data-lucide="arrow-right"></i><span>模型 / 持久化</span></div>
+
+                  <section class="architecture-domain infra-domain">
+                    <header><span>04</span><strong>模型与数据层</strong><small>External + Local</small></header>
+                    <div class="architecture-node" data-phase="generate write input"><i data-lucide="sparkles"></i><span><strong>Ark Responses</strong><small>角色回复、记忆抽取、架构回答</small></span></div>
+                    <div class="architecture-node" data-phase="pre write input"><i data-lucide="binary"></i><span><strong>Ark Embeddings</strong><small>事件与代码切片向量化</small></span></div>
+                    <div class="architecture-node" data-phase="pre write input"><i data-lucide="database"></i><span><strong>SQLite</strong><small>状态、图谱、向量、Trace、问答日志</small></span></div>
+                  </section>
+                </div>
+                <footer><i data-lucide="shield-check"></i><span>所有业务记忆按 user + agent + story + branch 隔离；架构代码索引不含环境变量文件与密钥。</span></footer>
+              </section>
+
+              <div class="timeline-grid phase-row" aria-hidden="true">
+                <div class="lane-heading">处理阶段</div>
+                <div class="phase-block phase-input grid-col-2">输入</div>
+                <div class="phase-block phase-pre grid-col-3 span-4">回复前</div>
+                <div class="phase-block phase-model grid-col-7">生成中</div>
+                <div class="phase-block phase-write grid-col-8 span-2">回复后</div>
+              </div>
+
+              <section class="timeline-grid swimlane execution-lane" aria-label="主执行时序">
+                <div class="lane-label">
+                  <i data-lucide="route"></i>
+                  <strong>主执行时序</strong>
+                  <span>一次 turn</span>
+                </div>
+                <div class="flow-node grid-col-2 has-arrow" data-phase="pre">
+                  <span class="step-number">01</span><i data-lucide="message-square"></i>
+                  <strong>消息进入</strong>
+                  <small>保存用户原文与 evidence id</small>
+                  <span class="timing sync">同步</span>
+                </div>
+                <div class="flow-node grid-col-3 has-arrow" data-phase="pre">
+                  <span class="step-number">02</span><i data-lucide="shield-check"></i>
+                  <strong>作用域校验</strong>
+                  <small>四级 namespace + 快通道改设定</small>
+                  <span class="timing sync">同步</span>
+                </div>
+                <div class="flow-node grid-col-4 has-arrow" data-phase="pre">
+                  <span class="step-number">03</span><i data-lucide="pin"></i>
+                  <strong>常驻记忆加载</strong>
+                  <small>硬规则、角色、人设与已解锁剧情</small>
+                  <span class="timing sync">每轮</span>
+                </div>
+                <div class="flow-node grid-col-5 has-arrow" data-phase="pre">
+                  <span class="step-number">04</span><i data-lucide="search"></i>
+                  <strong>混合召回</strong>
+                  <small>Active Claim、图邻居、向量事件</small>
+                  <span class="timing demand">按需</span>
+                </div>
+                <div class="flow-node grid-col-6 has-arrow" data-phase="pre">
+                  <span class="step-number">05</span><i data-lucide="layers-3"></i>
+                  <strong>上下文编译</strong>
+                  <small>冲突消解、去重、预算装配</small>
+                  <span class="timing sync">同步</span>
+                </div>
+                <div class="flow-node grid-col-7 has-arrow" data-phase="generate">
+                  <span class="step-number">06</span><i data-lucide="bot"></i>
+                  <strong>角色回复</strong>
+                  <small>生成回复并保存 assistant 消息</small>
+                  <span class="timing sync">同步</span>
+                </div>
+                <a class="flow-node grid-col-8 has-arrow config-flow-node" href="#schemaTable" data-phase="write" data-config-link data-jump-page="schemas" data-jump-schema-tab="extraction" data-jump-target="#schemaTable">
+                  <span class="step-number">07</span><i data-lucide="scan-text"></i>
+                  <strong>轮后抽取</strong>
+                  <small id="architectureExtractionTrigger">assistant 落库后启动；同一 HTTP 请求继续等待</small>
+                  <span class="timing blocking">阻塞等待</span>
+                </a>
+                <div class="flow-node grid-col-9" data-phase="write">
+                  <span class="step-number">08</span><i data-lucide="database"></i>
+                  <strong>提交与触发</strong>
+                  <small>写入、后置触发完成后才返回 API</small>
+                  <span class="timing blocking">完成后解锁</span>
+                </div>
+              </section>
+
+              <section class="timeline-grid swimlane turn-boundary-lane" aria-label="一轮对话的结束点与下一轮解锁点">
+                <div class="lane-label">
+                  <i data-lucide="milestone"></i>
+                  <strong>轮次边界</strong>
+                  <span>当前执行合同</span>
+                </div>
+                <div class="turn-boundary semantic-end grid-col-2 span-3" data-phase="generate write">
+                  <span>A · 语义轮结束</span><strong>assistant 消息已生成并落库</strong><small>这是记忆抽取的精确触发点，但浏览器尚未收到回包。</small>
+                </div>
+                <div class="turn-wait grid-col-5 span-2" data-phase="write">
+                  <i data-lucide="hourglass"></i><strong>仍在同一 /api/chat</strong><small>抽取 → 对齐 → 提交 → 后置触发</small>
+                </div>
+                <div class="turn-boundary system-end grid-col-7 span-2" data-phase="write">
+                  <span>B · 系统轮完成</span><strong>记忆与触发器已提交</strong><small>服务端返回回复、Trace 和调度结果。</small>
+                </div>
+                <div class="next-turn-unlock grid-col-9" data-phase="write">
+                  <i data-lucide="unlock-keyhole"></i><strong>下一轮解锁</strong><small>前端恢复发送；服务端会话锁释放</small>
+                </div>
+              </section>
+
+              <section class="timeline-grid swimlane write-order-lane" aria-label="记忆抽取与结构化记忆重算顺序">
+                <div class="lane-label">
+                  <i data-lucide="list-ordered"></i>
+                  <strong>轮后写入顺序</strong>
+                  <span>同阶段 ≠ 同时点</span>
+                </div>
+                <div class="write-order-node extract grid-col-2 span-2 has-arrow" data-phase="write">
+                  <span>01 · EXTRACT</span><strong>记忆抽取</strong><small>模型返回 structured_updates、relationship_deltas 和 events</small>
+                </div>
+                <div class="write-order-node structured grid-col-4 span-2 has-arrow" data-phase="write">
+                  <span>02 · STRUCTURED WRITE</span><strong>写入结构化记忆</strong><small>set / merge / delta，保留版本与证据</small>
+                </div>
+                <div class="write-order-node derived grid-col-6 has-arrow" data-phase="write">
+                  <span>03 · DERIVE</span><strong>同步派生重算</strong><small id="architectureDerivedRule">亲密度 → 关系阶段</small>
+                </div>
+                <div class="write-order-node graph grid-col-7 has-arrow" data-phase="write">
+                  <span>04 · GRAPH</span><strong>事件与声明落库</strong><small>对齐 event + slot，失效旧版本</small>
+                </div>
+                <div class="write-order-node trigger grid-col-8 span-2" data-phase="write">
+                  <span>05 · POST COMMIT</span><strong>后置触发与解锁</strong><small>读取新的 active 状态，完成后才返回 API</small>
+                </div>
+              </section>
+
+              <section class="timeline-grid swimlane memory-lane" aria-label="各种记忆的触发机制">
+                <div class="lane-label">
+                  <i data-lucide="brain-circuit"></i>
+                  <strong>记忆触发</strong>
+                  <span>分层入口</span>
+                </div>
+                <div class="memory-trigger grid-col-2 evidence" data-phase="pre write">
+                  <span class="memory-kind">证据层</span><strong>对话原文</strong>
+                  <small>每轮追加，只读留痕，不直接裁决事实</small><b>每轮</b>
+                </div>
+                <div class="memory-trigger grid-col-3 control" data-phase="pre">
+                  <span class="memory-kind">控制层</span><strong>管理员固定字段</strong>
+                  <small>启用且 pinned，按 scope 每轮注入</small><b>每轮</b>
+                </div>
+                <div class="memory-trigger grid-col-4 control" data-phase="pre">
+                  <span class="memory-kind">控制层</span><strong>用户显式要求</strong>
+                  <small>识别戏外永久要求，通过边界后当轮 upsert</small><b>立即</b>
+                </div>
+                <div class="memory-trigger grid-col-5 state" data-phase="pre write">
+                  <span class="memory-kind">状态层</span><strong>关系与场景</strong>
+                  <small>读 active 当前值；事件提交后计算增量与阶段</small><b>每轮 + 轮后</b>
+                </div>
+                <div class="memory-trigger grid-col-6 graph" data-phase="pre write">
+                  <span class="memory-kind">图谱层</span><strong>事件与剧情</strong>
+                  <small>实体命中后查 1-2 跳；新事件达到证据门槛才写入</small><b>按需</b>
+                </div>
+                <div class="memory-trigger grid-col-7 vector" data-phase="pre">
+                  <span class="memory-kind">语义层</span><strong>向量经历</strong>
+                  <small>问题相关时取 TopK 候选，不负责新旧裁决</small><b>按需</b>
+                </div>
+                <div class="memory-trigger grid-col-8 profile" data-phase="write">
+                  <span class="memory-kind">画像层</span><strong>稳定偏好</strong>
+                  <small>显式确认或多次证据达标后更新，拒绝偶发噪声</small><b>轮后</b>
+                </div>
+                <div class="memory-trigger grid-col-9 action" data-phase="write">
+                  <span class="memory-kind">动作层</span><strong>条件规则</strong>
+                  <small>轮后记忆写入完成后读取结构化当前值并判定</small><b>写入后</b>
+                </div>
+              </section>
+
+              <section class="timeline-grid swimlane compression-lane" aria-label="上下文压缩机制">
+                <div class="lane-label">
+                  <i data-lucide="filter"></i>
+                  <strong>上下文装配</strong>
+                  <span>当前按消息条数</span>
+                </div>
+                <div class="context-pool grid-col-2 span-2" data-phase="pre">
+                  <div class="block-title"><span>候选上下文池</span><b>P0-P3</b></div>
+                  <div class="context-tiers">
+                    <span><b>P0</b>安全边界 · 角色人设 · 常驻控制</span>
+                    <span><b>P1</b>当前关系 · 当前场景 · Active Claims</span>
+                    <span><b>P2</b>图谱邻居 · 向量 TopK · 已解锁剧情</span>
+                    <span><b>P3</b><i id="architectureRecentContext">最近 16 条原文</i> · 当前消息已包含</span>
+                  </div>
+                </div>
+                <div class="compress-step grid-col-4 has-arrow" data-phase="pre">
+                  <span>硬过滤</span><strong>先隔离</strong>
+                  <small>user / agent / story / branch<br>status = active<br>视角与模态一致</small>
+                </div>
+                <div class="compress-step grid-col-5 has-arrow" data-phase="pre">
+                  <span>冲突消解</span><strong>再归一</strong>
+                  <small>event + slot 去重<br>最新明确确认优先<br>剔除 superseded</small>
+                </div>
+                <div class="compress-step grid-col-6 has-arrow" data-phase="pre">
+                  <span>预算装配</span><strong>限定窗口</strong>
+                  <small>P0 不裁剪<br>相关性重排 + TopK<br>对话窗口仅取最近 16 条</small>
+                </div>
+                <div class="prompt-stack grid-col-7" data-phase="generate">
+                  <span>FINAL CONTEXT</span>
+                  <ol>
+                    <li>硬规则 / 人设</li>
+                    <li>常驻控制 / 当前状态</li>
+                    <li>相关图谱 / 历史事件</li>
+                    <li>近期对话 / 当前消息</li>
+                  </ol>
+                </div>
+                <div class="rolling-summary grid-col-8 span-2" data-phase="write">
+                  <div class="block-title"><span>当前实现：无滚动摘要</span><b>NOT ENABLED</b></div>
+                  <div class="rollup-flow">
+                    <span>超出 16 条</span><i data-lucide="arrow-right"></i>
+                    <span>旧消息不进入主模型</span><i data-lucide="arrow-right"></i>
+                    <span>原文仍留库</span>
+                  </div>
+                  <small>相关历史仍可通过结构化记忆、Active Claims、事件向量和图谱召回；当前代码没有 token 阈值。</small>
+                </div>
+              </section>
+
+              <section class="timeline-grid swimlane request-slice-lane" aria-label="第 N 次模型请求完整输入切片">
+                <div class="lane-label">
+                  <i data-lucide="brackets"></i>
+                  <strong>模型 Input 切片</strong>
+                  <span>request #N</span>
+                </div>
+                <div class="request-slice-shell grid-col-2 span-8" data-phase="pre generate input">
+                  <div class="request-slice-head">
+                    <div>
+                      <span class="request-index">REQUEST #N</span>
+                      <strong>第 N 次文本模型请求</strong>
+                      <small>N 为当前会话内的主模型调用序号</small>
+                    </div>
+                    <div class="request-facts">
+                      <code>POST /responses</code>
+                      <code>input.length = 1 + X</code>
+                      <code id="architectureInputLimit">0 &lt; X &le; 16</code>
+                    </div>
+                  </div>
+
+                  <div class="input-slice-layout">
+                    <section class="input-envelope system-envelope" aria-label="System 输入组成">
+                      <header><div><code>input[0]</code><strong>system</strong></div><span>Prompt Compiler</span></header>
+                      <div class="input-source-stack">
+                        <div class="input-source locked-source">
+                          <span class="source-order">01</span>
+                          <div><strong>产品硬规则与命名空间</strong><small>安全边界、user / agent / story / branch 隔离</small></div>
+                          <span class="source-readonly"><i data-lucide="lock-keyhole"></i>系统只读</span>
+                        </div>
+                        <a class="input-source config-source" href="#personaPrompt" data-config-link data-jump-page="persona" data-jump-target="#personaPrompt">
+                          <span class="source-order">02</span>
+                          <div><strong>角色人设提示词</strong><small>agent.system_prompt</small></div>
+                          <span class="source-jump">人设与剧情<i data-lucide="external-link"></i></span>
+                        </a>
+                        <a class="input-source config-source" href="#schemaTable" data-config-link data-jump-page="schemas" data-jump-target="#schemaTable">
+                          <span class="source-order">03</span>
+                          <div><strong>结构化字段注入模板</strong><small>pinned 字段的 prompt_template</small></div>
+                          <span class="source-jump">结构化字段<i data-lucide="external-link"></i></span>
+                        </a>
+                        <a class="input-source config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="values" data-jump-target="#memoryContent">
+                          <span class="source-order">04</span>
+                          <div><strong>当前结构化记忆值</strong><small>称呼、回复契约、关系状态与用户边界</small></div>
+                          <span class="source-jump">结构化记忆<i data-lucide="external-link"></i></span>
+                        </a>
+                        <a class="input-source config-source" href="#plotList" data-config-link data-jump-page="persona" data-jump-target="#plotList">
+                          <span class="source-order">05</span>
+                          <div><strong>已解锁剧情指令</strong><small>当前 story / branch 下的 active plot</small></div>
+                          <span class="source-jump">剧情库<i data-lucide="external-link"></i></span>
+                        </a>
+                        <a class="input-source config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="retrieval" data-jump-target="#memoryContent">
+                          <span class="source-order">06</span>
+                          <div><strong>本轮记忆召回片段</strong><small>Active Claims + 事件 TopK + 图谱关系</small></div>
+                          <span class="source-jump">召回测试<i data-lucide="external-link"></i></span>
+                        </a>
+                      </div>
+                    </section>
+
+                    <div class="slice-join" aria-hidden="true"><i data-lucide="plus"></i></div>
+
+                    <section class="input-envelope messages-envelope" aria-label="最近对话输入组成">
+                      <header><div><code>input[1..X]</code><strong>messages</strong></div><span id="architectureMessageLimit">X &le; 16</span></header>
+                      <div class="message-window-note">按时间升序保留 role 与原文；本轮用户消息已经包含在 X 条之内。</div>
+                      <a class="message-slice config-source" href="#messageList" data-config-link data-jump-page="chat" data-jump-target="#messageList">
+                        <span>messages[0..X-2]</span>
+                        <strong>最近历史消息</strong>
+                        <small id="architectureHistoryLimit">最多 15 条 user / assistant 原文</small>
+                        <b>角色对话<i data-lucide="external-link"></i></b>
+                      </a>
+                      <a class="message-slice current-message config-source" href="#messageList" data-config-link data-jump-page="chat" data-jump-target="#messageList">
+                        <span>messages[X-1]</span>
+                        <strong>本轮用户消息</strong>
+                        <small>当前 request 的最后一条 input</small>
+                        <b>角色对话<i data-lucide="external-link"></i></b>
+                      </a>
+                    </section>
+
+                    <div class="slice-join" aria-hidden="true"><i data-lucide="arrow-right"></i></div>
+
+                    <section class="request-params" aria-label="模型请求参数">
+                      <header><i data-lucide="sliders-horizontal"></i><strong>请求参数</strong><span>环境只读</span></header>
+                      <dl>
+                        <div><dt>model</dt><dd>ARK_TEXT_MODEL</dd></div>
+                        <div><dt>temperature</dt><dd>0.7</dd></div>
+                        <div><dt>max_output_tokens</dt><dd>1200</dd></div>
+                        <div><dt>stream</dt><dd>false</dd></div>
+                        <div><dt>tools</dt><dd>[]</dd></div>
+                      </dl>
+                      <div class="model-target"><i data-lucide="bot"></i><span><strong>Ark Responses</strong><small>生成角色回复</small></span></div>
+                    </section>
+                  </div>
+
+                  <div class="input-exclusion-strip">
+                    <span><i data-lucide="circle-slash-2"></i>不进入主模型 Input</span>
+                    <i>向量数值</i><i>superseded / retracted</i><i>其他用户或分支</i><i>Trace 与密钥</i>
+                    <a href="#automationContent" data-config-link data-jump-page="automation" data-jump-tab="tools" data-jump-target="#automationContent">Function tools 在模型外由条件触发器执行<i data-lucide="external-link"></i></a>
+                  </div>
+                </div>
+              </section>
+
+              <section class="timeline-grid swimlane state-lane" aria-label="记忆状态更新机制">
+                <div class="lane-label">
+                  <i data-lucide="refresh-cw"></i>
+                  <strong>状态更新</strong>
+                  <span>有版本当前视图</span>
+                </div>
+                <div class="state-node candidate grid-col-2 has-arrow" data-phase="write">
+                  <span>CANDIDATE</span><strong>候选操作</strong><small>create / update / confirm / retract / ignore</small>
+                </div>
+                <div class="state-node gate grid-col-3 has-arrow" data-phase="write">
+                  <span>POLICY GATE</span><strong>边界与证据门</strong><small>越界或无价值噪声 → ignored，不进入当前视图</small>
+                </div>
+                <div class="state-node resolve grid-col-4 has-arrow" data-phase="write">
+                  <span>IDENTITY</span><strong>事件归一</strong><small>实体别名 + collection + event key 对齐</small>
+                </div>
+                <div class="state-node slot grid-col-5 has-arrow" data-phase="write">
+                  <span>UNIQUE SLOT</span><strong>定位当前槽位</strong><small>story + branch + entity/event + slot</small>
+                </div>
+                <div class="state-node decision grid-col-6 has-arrow" data-phase="write">
+                  <span>COMPARE</span><strong>比较 Active</strong>
+                  <div class="decision-list"><i>同值 → confirm / noop</i><i>变更 → supersede</i><i>撤回 → retract</i></div>
+                </div>
+                <div class="state-node active grid-col-7 has-arrow" data-phase="write">
+                  <span>CURRENT VIEW</span><strong>active vN</strong><small>回答默认只读取当前有效版本</small>
+                </div>
+                <div class="state-node history grid-col-8 has-arrow" data-phase="write">
+                  <span>HISTORY</span><strong>旧版本留存</strong>
+                  <div class="status-pills"><i>superseded</i><i>retracted</i></div>
+                </div>
+                <div class="state-node commit grid-col-9" data-phase="write">
+                  <span>PERSIST</span><strong>证据化提交</strong><small>写入 history / graph / embedding，并记录 Trace</small>
+                </div>
+              </section>
+
+              <section class="timeline-grid swimlane trigger-lane" aria-label="条件触发与函数调用">
+                <div class="lane-label">
+                  <i data-lucide="workflow"></i>
+                  <strong>条件触发</strong>
+                  <span>只读当前状态</span>
+                </div>
+                <div class="trigger-rule grid-col-2 span-2" data-phase="write">
+                  <span>STRUCTURED CONDITION</span>
+                  <code>relationship.intimacy &gt;= 30</code>
+                  <small>条件只能读取配置字段、剧情状态和事件计数</small>
+                </div>
+                <div class="trigger-arrow grid-col-4" data-phase="write"><i data-lucide="arrow-right"></i><span>命中</span></div>
+                <div class="trigger-guard grid-col-5" data-phase="write">
+                  <i data-lucide="shield-check"></i><strong>执行保护</strong><small>once-per-user<br>cooldown<br>idempotency key</small>
+                </div>
+                <div class="action-node grid-col-6" data-phase="write"><i data-lucide="book-open-check"></i><strong>剧情解锁</strong><small>开放 plot thread</small></div>
+                <div class="action-node grid-col-7" data-phase="write"><i data-lucide="braces"></i><strong>Function call</strong><small>服务端可信参数</small></div>
+                <div class="action-node grid-col-8" data-phase="write"><i data-lucide="database-zap"></i><strong>状态派生</strong><small>更新关系阶段</small></div>
+                <div class="action-node grid-col-9" data-phase="write"><i data-lucide="scan-search"></i><strong>Trace 留痕</strong><small>条件、输入、结果</small></div>
+              </section>
+
+              <footer class="timeline-footer">
+                <div><i class="status-dot active"></i><strong>当前回答视图</strong><span>仅 active</span></div>
+                <div><i class="status-dot superseded"></i><strong>历史版本</strong><span>superseded</span></div>
+                <div><i class="status-dot retracted"></i><strong>已撤回</strong><span>retracted</span></div>
+                <div class="timeline-principle"><i data-lucide="badge-check"></i><span>向量负责找候选，事件槽位负责判新旧，原始证据负责可追溯。</span></div>
+              </footer>
+            </div>
+          </div>
+        </section>
+      </main>
+    </section>
+  </div>
+
+  <aside id="traceDrawer" class="trace-drawer" aria-label="Trace 详情">
+    <div class="drawer-header">
+      <div><strong>Agent Trace</strong><small id="traceDrawerMeta">调度记录</small></div>
+      <button id="closeTraceButton" class="icon-button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+    </div>
+    <div class="trace-layout">
+      <div id="traceList" class="trace-list"></div>
+      <div id="traceDetail" class="trace-detail"><div class="empty-state compact"><i data-lucide="scan-search"></i><span>选择一次 Trace</span></div></div>
+    </div>
+  </aside>
+
+  <aside id="architectureAssistant" class="architecture-assistant" aria-label="系统代码问答" aria-hidden="true" inert>
+    <div class="drawer-header architecture-assistant-header">
+      <div><strong>系统代码问答</strong><small>检索当前代码后回答，不回答通用闲聊</small></div>
+      <button id="closeArchitectureAssistant" class="icon-button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+    </div>
+    <div class="architecture-assistant-status">
+      <div><i data-lucide="blocks"></i><span><strong>代码 RAG</strong><small>向量 82% + 关键词 18%</small></span></div>
+      <div><i data-lucide="database-zap"></i><span><strong id="architectureAssistantIndex">索引待检查</strong><small id="architectureAssistantIndexMeta">代码切片状态</small></span></div>
+    </div>
+    <div id="architectureAssistantMessages" class="architecture-assistant-messages" aria-live="polite">
+      <article class="architecture-answer assistant">
+        <div class="architecture-answer-role"><i data-lucide="bot"></i><span>架构助手</span></div>
+        <div class="architecture-answer-content">我只依据当前 Memory Agent Studio 的代码回答。答案会附带检索到的文件与行号，代码证据不足时会明确说明。</div>
+      </article>
+    </div>
+    <div id="architectureSuggestions" class="architecture-suggestions" aria-label="示例问题">
+      <button type="button" data-architecture-question="一轮对话什么时候结束，下一轮什么时候解锁？">一轮什么时候结束？</button>
+      <button type="button" data-architecture-question="结构化记忆重新计算和事件记忆抽取是同一个时间点吗？">重算和抽取同时吗？</button>
+      <button type="button" data-architecture-question="主模型超过 16 条消息后，旧对话怎么处理？">超过 16 条会怎样？</button>
+      <button type="button" data-architecture-question="系统如何避免旧事实和干扰事件进入最终回答？">怎样过滤旧事实？</button>
+    </div>
+    <form id="architectureAssistantForm" class="architecture-assistant-composer">
+      <textarea id="architectureQuestion" rows="2" maxlength="1000" placeholder="询问本系统的代码逻辑、执行顺序或配置…" aria-label="架构问题"></textarea>
+      <button id="askArchitectureButton" class="icon-button primary-icon" type="submit" title="发送" aria-label="发送"><i data-lucide="send"></i></button>
+    </form>
+  </aside>
+
+  <div id="modalRoot"></div>
+  <div id="toastRoot" class="toast-root" aria-live="polite"></div>
+
+  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

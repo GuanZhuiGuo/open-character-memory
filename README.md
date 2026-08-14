@@ -1,0 +1,92 @@
+# Memory Agent Studio
+
+一个面向角色陪聊、AI 教育等多轮场景的可运行记忆 Agent。系统将管理员定义的结构化字段、用户明确偏好、事件图谱、当前状态和向量召回分层管理。
+
+## 已实现
+
+- 用户、角色、故事和分支四级隔离。
+- 管理员可配置固定字段：类型、作用域、默认值、约束、抽取策略、敏感级别和 Prompt 模板。
+- 默认包含称呼、回复语言/风格/详细度、必须/避免项、亲密度、信任度、关系阶段、边界、兴趣、安全约束、知识点掌握度和错因模式。
+- 显式称呼/风格要求走同步快速通道，当轮生效；一般记忆在助手消息持久化后触发轮后抽取。
+- 场景级“事件抽取”配置：上下文轮数、是否包含助手回复、事件类型白名单、更新信号、重要度门槛、单轮上限和自定义规则。
+- 记忆查询包含独立的“结构化记忆”和“事件列表”；事件列表可按故事时间或写入时间排序，并可选择查看已被更新/撤回的历史版本。
+- 事件、实体、关系边、带视角声明和剧情线图谱。
+- 图形化记忆网络：事件、实体、声明和关系边可缩放、筛选并查看节点详情。
+- `active / superseded / retracted` 状态和完整版本历史。
+- 事件对齐器会在模型生成不同 event key 时，仍然将地点/时间更新到原事件槽位。
+- 图关系、有效声明和向量事件混合召回；有序集合使用类型、collection 和 sequence 硬过滤。
+- 场景级召回策略：可配置向量/关键词/图谱通道、阈值、TopK、排序权重和时效半衰期；`Active Only` 是不可关闭的硬保护。
+- 召回测试工作台：展示实时 Embedding 模型/维度/向量预览、余弦相似度、关键词分、加权排序、过滤原因和最终 Prompt 注入片段。
+- 基于结构化记忆的条件触发器、剧情解锁和 function call。
+- 管理员 Trace：查看常驻记忆、召回结果、完整系统 Prompt、模型输入/输出、记忆写入和触发记录。
+- 管理员“系统架构图”：查看入口、Agent Runtime、记忆平面、模型与数据层，以及真实轮次阈值、写入顺序和第 N 次主模型请求的完整 Input 切片；可跳转到对应配置来源。
+- 系统代码问答：将核心代码按职责切片并持久化 Embedding，使用向量 82% + 关键词 18% 混合召回后调用文本模型；仅回答当前系统代码逻辑，并返回文件、行号和召回分数。
+
+## 运行
+
+要求 Node.js 24 或更高版本，无第三方运行时依赖。
+
+```bash
+cp .env.example .env.local
+# 在 .env.local 填写 ARK_API_KEY 和管理员密码
+npm start
+```
+
+打开 `http://127.0.0.1:4173`。当前本地实例的管理员密码由 `.env.local` 中的 `ADMIN_PASSWORD` 控制。
+
+挂载到 Nginx 子路径时设置 `BASE_PATH=/memory-agent`；本地根路径运行时留空。
+
+测试：
+
+```bash
+ARK_API_KEY='' npm test
+```
+
+测试会使用本地确定性向量降级器，不消耗远程 API。
+
+## 运行链路
+
+```text
+用户消息
+  -> 显式控制记忆快速更新
+  -> 常驻结构化记忆加载
+  -> 条件触发器 / function call
+  -> 有效 Claim + 事件向量 + 1 跳图关系召回
+  -> Prompt 编译
+  -> 角色回复
+  -> 持久化助手消息（语义轮结束 / 事件抽取触发点）
+  -> 轮后记忆操作抽取
+  -> 结构化顺序写入 / 派生重算 / 事件对齐与持久化
+  -> 后置触发器执行
+  -> HTTP 返回，释放会话锁（系统轮结束 / 下一轮可发送）
+```
+
+当前运行模式是 `blocking_after_assistant`：轮后抽取与记忆写入仍在同一个 `/api/chat` 请求内，调用方会阻塞等待其中的模型、Embedding 和数据库操作完成。服务端按会话串行化聊天请求，因此同一会话的下一轮不会在本轮释放锁之前开始；该锁不提供通用的数据库读取隔离。
+
+主模型当前只装配最近 16 条消息（约 8 轮），未实现 token 阈值或滚动摘要。陪伴场景的抽取消歧窗口默认 2 轮、最多 4 条消息；该值可按场景配置为 1-10 轮。
+
+## 数据库
+
+本地版使用 Node.js 内置 SQLite，数据位于 `data/memory-agent.db`（已被 Git 忽略）。表按以下边界分组：
+
+- 对话：`users` / `agents` / `conversations` / `messages`
+- 固定记忆：`memory_schemas` / `memory_values` / `memory_history`
+- 场景配置：`scenes` / `memory_profiles` / `retrieval_profiles` / `event_extraction_profiles`
+- 图谱：`entities` / `entity_edges` / `events` / `claims`
+- 向量：`embeddings`
+- 架构问答：`architecture_knowledge_chunks` / `architecture_qa_logs`
+- 剧情与调度：`plots` / `user_plot_states` / `triggers` / `trigger_runs` / `tools` / `tool_runs`
+- 可观测：`traces` / `trace_spans`
+
+生产环境建议 PostgreSQL 16 + pgvector。对话、状态、图边和触发器保留关系表；`embeddings.vector_json` 迁移为 `vector(2048)` 并建 HNSW 索引。当图规模需要高频长路径遍历时，再同步到 Neo4j，当前 1-2 跳场景不需要额外数据库。
+
+## 权限与密钥
+
+- 用户列表、用户新增、记忆值、字段、人设、剧情、触发器和 Trace API 均要求管理员 HttpOnly Session。
+- 所有业务记录必须带 `user_id`，故事记忆额外带 `agent_id / story_id / branch_id`。
+- `.env.local` 和 SQLite 数据库均不进入 Git。Trace 会自动脱敏 Ark Key 和 Bearer Token。
+- 线上应将当前本地管理员密码替换为企业 SSO/RBAC，并使用 KMS 或 Secret Manager 注入 API Key。
+
+## 当前取舍
+
+轮后记忆抽取当前同步执行，会增加回包延迟，但能保证下一轮一定看到已提交的上轮记忆。若改为生产级异步模式，需使用带幂等键、会话序号、重试和死信处理的持久化队列，并明确下一轮是等待前轮提交还是携带“记忆延迟”状态继续。用户明确的称呼、风格和戏外更正仍保持同步通道。

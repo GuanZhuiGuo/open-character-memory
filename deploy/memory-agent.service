@@ -1,0 +1,27 @@
+[Unit]
+Description=Memory Agent Studio
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=memory-agent
+Group=memory-agent
+WorkingDirectory=/opt/memory-agent-studio
+Environment=NODE_ENV=production
+EnvironmentFile=-/etc/memory-agent.env
+ExecStart=/usr/bin/env PORT=4180 BASE_PATH=/memory-agent DATABASE_PATH=/opt/memory-agent-studio/data/memory-agent.db /opt/node-v24/bin/node /opt/memory-agent-studio/server.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/memory-agent-studio/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

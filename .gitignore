@@ -1,0 +1,9 @@
+.env.local
+data/*.db
+data/*.db-*
+node_modules/
+.DS_Store
+playwright-report/
+test-results/
+.playwright-cli/
+output/playwright/
