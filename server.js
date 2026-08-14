@@ -4,7 +4,8 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  chat, createConversation, getConversationMessages, listConversations, MAIN_MODEL_MESSAGE_LIMIT
+  chat, createConversation, DEFAULT_LONG_TERM_MEMORY_UPDATE_INTERVAL_TURNS,
+  getConversationMessages, listConversations, MAIN_MODEL_MESSAGE_LIMIT
 } from './lib/agent.js';
 import { answerArchitectureQuestion, getArchitectureIndexStatus } from './lib/architecture.js';
 import { checkArkHealth } from './lib/ark.js';
@@ -340,7 +341,10 @@ function architectureOverview(sceneId) {
   const intimacySchema = db.prepare("SELECT constraints_json FROM memory_schemas WHERE key = 'relationship.intimacy'").get();
   const intimacyConstraints = parseJson(intimacySchema?.constraints_json, {});
   const extractionTurns = Number(extraction?.context_turns || 0);
-  const extractionIntervalTurns = Math.max(1, Number(extraction?.extraction_interval_turns || 1));
+  const extractionIntervalTurns = Math.max(
+    1,
+    Number(extraction?.extraction_interval_turns || DEFAULT_LONG_TERM_MEMORY_UPDATE_INTERVAL_TURNS)
+  );
   return {
     scene: { id: scene.id, name: scene.name, scenarioType: scene.scenario_type },
     thresholds: {
@@ -353,6 +357,7 @@ function architectureOverview(sceneId) {
       extraction: {
         intervalTurns: extractionIntervalTurns,
         intervalConfigurableRange: [1, EXTRACTION_INTERVAL_MAX_TURNS],
+        alignedWithShortTermMemory: extractionIntervalTurns === Math.floor(MAIN_MODEL_MESSAGE_LIMIT / 2),
         contextTurns: extractionTurns,
         messageLimit: Math.min(EXTRACTION_CONTEXT_MAX_MESSAGES, extractionTurns * 2),
         configurableRange: [1, EXTRACTION_CONTEXT_MAX_TURNS],
@@ -394,10 +399,11 @@ function architectureOverview(sceneId) {
       sameTimePoint: false,
       sameBlockingPhase: true,
       triggerPoint: extraction?.trigger_point || 'after_every_x_assistant_messages_persisted',
+      conversationBoundaryFlush: 'before_first_message_after_conversation_switch',
       extractionIntervalTurns,
       executionMode: extraction?.execution_mode || 'blocking_after_assistant',
       steps: [
-        { order: 1, key: 'extract', label: `累计 ${extractionIntervalTurns} 个完整轮次后，记忆抽取模型返回结构化操作` },
+        { order: 1, key: 'extract', label: `累计 ${extractionIntervalTurns} 个完整轮次，或跨对话发送前，记忆抽取模型返回结构化操作` },
         { order: 2, key: 'structured', label: '写入 structured_updates 和 relationship_deltas' },
         { order: 3, key: 'derived', label: '亲密度写入时同步重算 relationship.stage' },
         { order: 4, key: 'events', label: '对齐并写入事件、声明、图边和向量' },
@@ -1020,6 +1026,7 @@ async function handleApi(request, response, url) {
       userId,
       agentId: body.agent_id,
       conversationId: body.conversation_id || '',
+      previousConversationId: body.previous_conversation_id || '',
       message
     }));
     return;

@@ -203,7 +203,7 @@
                   </div>
                 </div>
                 <div class="header-actions">
-                  <button id="editMemoryProfileButton" class="button secondary compact"><i data-lucide="settings-2"></i><span>配置说明</span></button>
+                  <button id="editMemoryProfileButton" class="button secondary compact"><i data-lucide="info"></i><span>配置说明</span></button>
                   <button id="editRetrievalProfileButton" class="button secondary compact"><i data-lucide="sliders-horizontal"></i><span>召回策略</span></button>
                   <button id="addSchemaButton" class="button primary" data-write-only><i data-lucide="plus"></i><span>新建字段</span></button>
                 </div>
@@ -342,7 +342,7 @@
                   <span class="timeline-kicker">MEMORY AGENT SYSTEM ARCHITECTURE</span>
                   <h3>Memory Agent 系统架构</h3>
                 </div>
-                <div class="runtime-mode"><i data-lucide="lock-keyhole"></i><span><strong>当前实现</strong><small id="architectureRuntimeExtractionMode">阻塞式 · 每 X 轮抽取</small></span></div>
+                <div class="runtime-mode"><i data-lucide="lock-keyhole"></i><span><strong>当前实现</strong><small id="architectureRuntimeExtractionMode">阻塞式 · 每 X 轮更新长期记忆</small></span></div>
                 <div class="scope-chain" aria-label="记忆隔离键">
                   <code>user_id</code><i data-lucide="chevron-right"></i>
                   <code>agent_id</code><i data-lucide="chevron-right"></i>
@@ -352,9 +352,9 @@
               </header>
 
               <section class="architecture-thresholds" aria-label="当前运行阈值">
-                <div><span>主模型近期窗口</span><strong id="architectureMainWindow">16 条消息 · 约 8 轮</strong><small>超出部分不进入本次 Input</small></div>
-                <div><span>历史理解窗口（指代消歧）</span><strong id="architectureExtractionWindow">2 轮 · 最多 4 条</strong><small>只用于理解“它 / 那件事”指的是什么</small></div>
-                <div><span>单次抽取门槛</span><strong id="architectureEventThreshold">每 X 轮 · 最多 3X 事件</strong><small>低于门槛的新事件不落库</small></div>
+                <div><span>短期记忆</span><strong id="architectureMainWindow">最近 16 条消息 · 约 8 轮</strong><small>每轮直接进入主模型 Input，不单独抽取</small></div>
+                <div><span>抽取辅助上下文</span><strong id="architectureExtractionWindow">批次前 2 轮 · 最多 4 条</strong><small>只帮助抽取模型理解“它 / 那件事”，不会重复写入</small></div>
+                <div><span>长期记忆更新阈值</span><strong id="architectureEventThreshold">每 X 轮 · 跨对话补齐尾批次</strong><small>阈值或跨对话边界触发结构化字段、事件与图谱更新</small></div>
                 <div><span>长对话压缩</span><strong id="architectureCompressionStatus">滚动摘要未启用</strong><small>当前没有 token 阈值</small></div>
               </section>
 
@@ -388,7 +388,7 @@
                     <div class="architecture-node" data-phase="pre"><i data-lucide="badge-check"></i><span><strong>角色固定属性</strong><small>agent 全局，每轮固定注入</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="user-round"></i><span><strong>用户记忆</strong><small>结构化状态 + 用户事件</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="book-heart"></i><span><strong>我们的故事</strong><small>角色言行 + 共同承诺，按用户隔离</small></span></div>
-                    <div class="architecture-node" data-phase="write"><i data-lucide="scan-text"></i><span><strong id="architectureExtractionNodeTitle">每 X 轮抽取与重算</strong><small>结构化更新 → 派生 → 事件 → 触发</small></span></div>
+                    <div class="architecture-node" data-phase="write"><i data-lucide="scan-text"></i><span><strong id="architectureExtractionNodeTitle">长期记忆更新（每 X 轮）</strong><small>抽取 → 结构化派生 → 事件图谱 → 触发</small></span></div>
                   </section>
 
                   <div class="architecture-map-connector" aria-hidden="true"><i data-lucide="arrow-right"></i><span>模型 / 持久化</span></div>
@@ -462,8 +462,8 @@
                 </div>
                 <a class="flow-node grid-col-8 has-arrow config-flow-node" href="#schemaTable" data-phase="write" data-config-link data-jump-page="schemas" data-jump-schema-tab="extraction" data-jump-target="#schemaTable">
                   <span class="step-number">07</span><i data-lucide="scan-text"></i>
-                  <strong id="architectureExtractionStepTitle">每 X 轮抽取</strong>
-                  <small id="architectureExtractionTrigger">第 X 个 assistant 落库后启动；同一 HTTP 请求继续等待</small>
+                  <strong id="architectureExtractionStepTitle">长期记忆更新</strong>
+                  <small id="architectureExtractionTrigger">累计 X 轮，或跨对话发送前，抽取并更新长期记忆</small>
                   <span class="timing blocking">阻塞等待</span>
                 </a>
                 <div class="flow-node grid-col-9" data-phase="write">
@@ -496,13 +496,13 @@
                   <span>当前执行合同</span>
                 </div>
                 <div class="turn-boundary semantic-end grid-col-2 span-3" data-phase="generate write">
-                  <span>A · 语义轮结束</span><strong>assistant 消息已生成并落库</strong><small>完整轮次计数 +1；累计达到 X 轮时启动记忆抽取。</small>
+                  <span>A · 语义轮结束</span><strong>assistant 消息已生成并落库</strong><small>完整轮次计数 +1；达到 X 轮，或下次跨对话发送前启动记忆抽取。</small>
                 </div>
                 <div class="turn-wait grid-col-5 span-2" data-phase="write">
-                  <i data-lucide="hourglass"></i><strong>仅阈值轮继续等待</strong><small>抽取 → 对齐 → 提交 → 后置触发</small>
+                  <i data-lucide="hourglass"></i><strong>阈值轮 / 跨对话边界等待</strong><small>抽取 → 对齐 → 提交 → 后置触发</small>
                 </div>
                 <div class="turn-boundary system-end grid-col-7 span-2" data-phase="write">
-                  <span>B · 系统轮完成</span><strong>本轮调度已完成</strong><small>非阈值轮跳过抽取；阈值轮完成提交后返回。</small>
+                  <span>B · 系统轮完成</span><strong>本轮调度已完成</strong><small>连续对话的非阈值轮跳过；跨对话时先补齐上一对话尾批次。</small>
                 </div>
                 <div class="next-turn-unlock grid-col-9" data-phase="write">
                   <i data-lucide="unlock-keyhole"></i><strong>下一轮解锁</strong><small>前端恢复发送；服务端会话锁释放</small>
@@ -718,10 +718,10 @@
                 </div>
               </section>
 
-              <section class="timeline-grid swimlane state-lane" aria-label="记忆状态更新机制">
+              <section class="timeline-grid swimlane state-lane" aria-label="长期记忆更新机制">
                 <div class="lane-label">
                   <i data-lucide="refresh-cw"></i>
-                  <strong>状态更新</strong>
+                  <strong>长期记忆更新</strong>
                   <span>有版本当前视图</span>
                 </div>
                 <div class="state-node candidate grid-col-2 has-arrow" data-phase="write">

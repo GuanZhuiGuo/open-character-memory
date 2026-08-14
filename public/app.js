@@ -12,6 +12,7 @@ const state = {
   currentAgentId: localStorage.getItem('memory_studio_agent') || '',
   currentSceneId: localStorage.getItem('memory_studio_scene') || '',
   currentConversationId: '',
+  previousConversationId: '',
   conversations: [],
   messages: [],
   memoryValues: [],
@@ -331,6 +332,7 @@ function renderAgentHeader() {
 
 async function switchContext() {
   state.currentConversationId = '';
+  state.previousConversationId = '';
   state.messages = [];
   state.retrievalTest = null;
   state.graphData = null;
@@ -385,6 +387,9 @@ function renderWelcome() {
 }
 
 async function openConversation(id) {
+  if (state.currentConversationId && state.currentConversationId !== id) {
+    state.previousConversationId = state.currentConversationId;
+  }
   const payload = await api(`/api/conversations/${encodeURIComponent(id)}?user_id=${encodeURIComponent(state.currentUserId)}`);
   state.currentConversationId = id;
   state.messages = payload.messages;
@@ -464,10 +469,12 @@ async function sendMessage(text) {
         user_id: state.currentUserId,
         agent_id: state.currentAgentId,
         conversation_id: state.currentConversationId,
+        previous_conversation_id: state.previousConversationId,
         message
       }
     });
     state.currentConversationId = result.conversation.id;
+    if (result.diagnostics?.previousMemoryFlushStatus !== 'degraded') state.previousConversationId = '';
     await loadConversations();
     const commitLabel = result.diagnostics?.memoryCommitStatus === 'skipped' ? '记忆抽取已停用' : '记忆已提交';
     toast(`${commitLabel} · Trace ${result.traceId.slice(-6)}`);
@@ -534,18 +541,18 @@ async function loadArchitectureOverview() {
   const extraction = thresholds.extraction;
   const extractionInterval = Math.max(1, Number(extraction.intervalTurns || 1));
   $('#pageMeta').textContent = `${scene.name} · runtime / memory / retrieval`;
-  $('#architectureMainWindow').textContent = `${main.messageLimit} 条消息 · 约 ${main.approximateTurns} 轮`;
-  $('#architectureExtractionWindow').textContent = `${extraction.contextTurns} 轮 · 最多 ${extraction.messageLimit} 条`;
-  $('#architectureEventThreshold').textContent = `每 ${extractionInterval} 轮 · 最多 ${extraction.maxEventsPerBatch} 个事件 · importance ≥ ${extraction.minImportance}`;
-  $('#architectureRuntimeExtractionMode').textContent = `阻塞式 · 每 ${extractionInterval} 轮抽取`;
-  $('#architectureExtractionNodeTitle').textContent = `每 ${extractionInterval} 轮抽取与重算`;
-  $('#architectureExtractionStepTitle').textContent = `每 ${extractionInterval} 轮抽取`;
+  $('#architectureMainWindow').textContent = `最近 ${main.messageLimit} 条消息 · 约 ${main.approximateTurns} 轮`;
+  $('#architectureExtractionWindow').textContent = `批次前 ${extraction.contextTurns} 轮 · 最多 ${extraction.messageLimit} 条`;
+  $('#architectureEventThreshold').textContent = `每 ${extractionInterval} 轮 · 跨对话补齐尾批次 · 最多 ${extraction.maxEventsPerBatch} 个事件`;
+  $('#architectureRuntimeExtractionMode').textContent = `阻塞式 · 每 ${extractionInterval} 轮 / 跨对话更新`;
+  $('#architectureExtractionNodeTitle').textContent = `长期记忆更新（每 ${extractionInterval} 轮）`;
+  $('#architectureExtractionStepTitle').textContent = '长期记忆更新';
   $('#architectureCompressionStatus').textContent = compression.rollingSummaryEnabled ? '滚动摘要已启用' : '滚动摘要未启用';
   $('#architectureRecentContext').textContent = `最近 ${main.messageLimit} 条原文`;
   $('#architectureInputLimit').textContent = `0 < X ≤ ${main.messageLimit}`;
   $('#architectureMessageLimit').textContent = `X ≤ ${main.messageLimit}`;
   $('#architectureHistoryLimit').textContent = `最多 ${Math.max(0, main.messageLimit - 1)} 条 user / assistant 原文`;
-  $('#architectureExtractionTrigger').textContent = `累计第 ${extractionInterval} 个 assistant 落库后启动；该 HTTP 请求阻塞等待`;
+  $('#architectureExtractionTrigger').textContent = `累计 ${extractionInterval} 轮，或跨对话发送前，抽取并更新长期记忆`;
   $('#architectureDerivedRule').textContent = thresholds.relationship.stages
     .slice().reverse().map((item) => `${item.minimum} ${item.stage}`).join(' · ');
   renderArchitectureIndex(index);
@@ -1331,9 +1338,9 @@ function renderEventExtractionSettings() {
   }
   $('#schemaSummary').innerHTML = [
     ['状态', profile.enabled ? '已启用' : '已停用'],
-    ['抽取频率', `每 ${profile.extraction_interval_turns || 1} 轮`],
-    ['历史理解窗口', `${profile.context_turns} 轮 / 最多 ${contract?.runtime?.historyMessageLimit || profile.context_turns * 2} 条`],
-    ['批次写入上限', `${contract?.runtime?.maxEventsPerBatch || Math.min(30, (profile.extraction_interval_turns || 1) * profile.max_events_per_turn)} 事件`]
+    ['长期记忆更新', `每 ${profile.extraction_interval_turns || 8} 轮`],
+    ['抽取辅助上下文', `批次前 ${profile.context_turns} 轮 / 最多 ${contract?.runtime?.historyMessageLimit || profile.context_turns * 2} 条`],
+    ['批次写入上限', `${contract?.runtime?.maxEventsPerBatch || Math.min(30, (profile.extraction_interval_turns || 8) * profile.max_events_per_turn)} 事件`]
   ].map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
   $('#schemaResultCount').textContent = '4 类抽取对象';
 
@@ -1349,26 +1356,26 @@ function renderEventExtractionSettings() {
     <div class="extraction-runtime-contract">
       <div><span>TURN END</span><i data-lucide="message-square"></i><strong>assistant 回复落库</strong><small>1 轮 = user 消息 + assistant 回复</small></div>
       <i data-lucide="arrow-right"></i>
-      <div class="active"><span>EVERY ${profile.extraction_interval_turns || 1} TURNS</span><i data-lucide="scan-text"></i><strong>结构字段 + 事件 + 图谱</strong><small>合并待抽取批次，统一对齐逐条消息证据</small></div>
+      <div class="active"><span>EVERY ${profile.extraction_interval_turns || 8} TURNS</span><i data-lucide="scan-text"></i><strong>长期记忆更新</strong><small>抽取结构字段、事件与图谱，统一对齐逐条消息证据</small></div>
       <i data-lucide="arrow-right"></i>
       <div><span>COMMIT BARRIER</span><i data-lucide="database"></i><strong>状态派生与图谱提交</strong><small>提交完成后 /api/chat 才返回</small></div>
     </div>
     <form id="eventExtractionForm" class="extraction-form" data-config-form>
       <section class="extraction-form-section">
-        <header><span>01</span><div><strong>轮次、结束点与触发机制</strong><small>场景内所有角色共用，待抽取批次与批次之前的消歧历史分开传入</small></div></header>
+        <header><span>01</span><div><strong>短期记忆与长期更新机制</strong><small>短期对话每轮直接进入主模型；达到阈值后，待抽取批次与批次前的辅助上下文分开传入抽取模型</small></div></header>
         <div class="turn-definition-banner">
           <div><i data-lucide="repeat-2"></i><span><strong>一轮如何计算</strong><small>1 条 user 消息 + 1 条 assistant 回复</small></span></div>
           <div><i data-lucide="flag"></i><span><strong>一轮何时结束</strong><small>assistant 回复成功写入 messages 表</small></span></div>
-          <div><i data-lucide="lock-keyhole"></i><span><strong>阈值轮屏障</strong><small>第 X 轮同步抽取与提交完成后才解锁</small></span></div>
+          <div><i data-lucide="lock-keyhole"></i><span><strong>长期更新屏障</strong><small>第 X 轮或跨对话尾批次提交完成后才解锁</small></span></div>
         </div>
         <div class="form-grid two extraction-runtime-fields">
-          <label><span>每 X 轮抽取</span><input id="extractionIntervalTurns" name="extraction_interval_turns" type="number" min="1" max="20" step="1" value="${profile.extraction_interval_turns || 1}" required><small>未达到阈值的完整轮次先保留原始消息；达到 X 轮后合并为一个抽取批次</small></label>
-          <label><span>历史理解窗口（指代消歧，轮）</span><input id="extractionContextTurns" name="context_turns" type="number" min="1" max="10" step="1" value="${profile.context_turns}" required><small id="turnWindowMessageLimit">例如“还是改到银座吧”需要历史才知道改的是哪次会面；最多读取 ${contract?.runtime?.historyMessageLimit || profile.context_turns * 2} 条，不会重复抽取旧事件</small></label>
-          <label><span>触发点（系统固定）</span><input id="extractionTriggerPreview" value="累计第 ${profile.extraction_interval_turns || 1} 个 assistant 回复落库后" disabled><small>after_every_x_assistant_messages_persisted</small></label>
+          <label><span>每 X 轮更新长期记忆</span><input id="extractionIntervalTurns" name="extraction_interval_turns" type="number" min="1" max="${contract?.runtime?.extractionIntervalMaxTurns || 8}" step="1" value="${profile.extraction_interval_turns || 8}" required><small>短期记忆上限约 ${contract?.runtime?.shortTermMemoryTurnCapacity || 8} 轮；X 可调低但不能超过上限。未满 X 轮就切换或新建对话时，会在下一次发送前补写旧对话尾批次</small></label>
+          <label><span>抽取辅助上下文（轮）</span><input id="extractionContextTurns" name="context_turns" type="number" min="1" max="10" step="1" value="${profile.context_turns}" required><small id="turnWindowMessageLimit">取待抽取批次之前的只读对话，用来理解“它、那件事、还是改到银座”等代词或省略表达；最多 ${contract?.runtime?.historyMessageLimit || profile.context_turns * 2} 条，不会重复写入长期记忆</small></label>
+          <label><span>触发点（系统固定）</span><input id="extractionTriggerPreview" value="累计 ${profile.extraction_interval_turns || 8} 轮；或跨对话发送前" disabled><small>threshold_or_conversation_boundary</small></label>
           <label><span>执行模式（系统固定）</span><input value="同一请求同步阻塞" disabled><small>blocking_after_assistant</small></label>
         </div>
         <div class="extraction-switches">
-          <label class="strategy-toggle"><span><strong>启用每 X 轮抽取</strong><small>关闭后仅保留用户显式控制快通道</small></span><span class="toggle-control"><input name="enabled" type="checkbox" ${profile.enabled ? 'checked' : ''}><i></i></span></label>
+          <label class="strategy-toggle"><span><strong>启用长期记忆更新</strong><small>关闭后只保留短期原始对话与用户显式控制快通道</small></span><span class="toggle-control"><input name="enabled" type="checkbox" ${profile.enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>将 assistant 回复传入抽取模型</strong><small>用于识别角色言行与共同故事，不能单独写成用户事实</small></span><span class="toggle-control"><input name="include_assistant" type="checkbox" ${profile.include_assistant ? 'checked' : ''}><i></i></span></label>
         </div>
         <div class="strategy-locked-guard"><i data-lucide="pin"></i><div><strong>显式长期规则快通道</strong><span>“必须 / 一定要 / 不要 / 别再”等明确要求会先区分长期规则与剧情台词，通过边界校验后立即写入“必须遵守 / 避免事项”并固定注入，不等待 X 轮。</span></div><span class="badge blue">同步</span></div>
@@ -1402,7 +1409,7 @@ function renderEventExtractionSettings() {
         <header><span>04</span><div><strong>字段指令清单与系统硬保护</strong><small>这些字段指令会被逐条编译进模型 Input，manual / derived 还会被服务端拒绝写入</small></div></header>
         <div class="field-instruction-list">${fieldInstructions.map((item) => `<div><span><strong>${escapeHtml(item.label)}</strong><code>${escapeHtml(item.key)}</code></span><em>${escapeHtml(item.extraction_mode)}</em><p>${escapeHtml(item.extraction_instruction || '未配置抽取说明')}</p></div>`).join('')}</div>
         <div class="extraction-guards">
-          <span><i data-lucide="shield-check"></i><strong>只写待抽取批次</strong><small>批次之前的历史只用于理解指代</small></span>
+          <span><i data-lucide="shield-check"></i><strong>只写待抽取批次</strong><small>批次前的辅助上下文只用于理解代词、省略和承接关系</small></span>
           <span><i data-lucide="shield-check"></i><strong>旧值标记为“已被新版本替代”</strong><small>当前有效版本才进入默认回答</small></span>
           <span><i data-lucide="shield-check"></i><strong>助手情节不等于用户事实</strong><small>必须有用户承接证据</small></span>
           <span><i data-lucide="shield-check"></i><strong>作用域硬隔离</strong><small>user / agent / story / branch</small></span>
@@ -1431,12 +1438,13 @@ function renderEventExtractionSettings() {
   const contextTurnsInput = $('#extractionContextTurns');
   contextTurnsInput?.addEventListener('input', () => {
     const turns = Math.max(1, Math.min(10, Number(contextTurnsInput.value) || 1));
-    $('#turnWindowMessageLimit').textContent = `最多注入 ${Math.min(20, turns * 2)} 条批次之前的历史消息，不含待抽取批次`;
+    $('#turnWindowMessageLimit').textContent = `最多读取 ${Math.min(20, turns * 2)} 条批次前的只读辅助消息，不含待抽取批次，也不会重复写入长期记忆`;
   });
   const intervalTurnsInput = $('#extractionIntervalTurns');
   intervalTurnsInput?.addEventListener('input', () => {
-    const turns = Math.max(1, Math.min(20, Number(intervalTurnsInput.value) || 1));
-    $('#extractionTriggerPreview').value = `累计第 ${turns} 个 assistant 回复落库后`;
+    const maximum = contract?.runtime?.extractionIntervalMaxTurns || 8;
+    const turns = Math.max(1, Math.min(maximum, Number(intervalTurnsInput.value) || 1));
+    $('#extractionTriggerPreview').value = `累计 ${turns} 轮；或跨对话发送前`;
   });
   $('#eventExtractionForm').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -2091,7 +2099,13 @@ $('#memoryUserSelect').addEventListener('change', async (event) => { state.curre
 $('#memoryAgentSelect').addEventListener('change', async (event) => { state.currentAgentId = event.target.value; await switchContext(); });
 $('#addUserButton').addEventListener('click', addUser);
 $('#usersAddButton').addEventListener('click', addUser);
-$('#newConversationButton').addEventListener('click', () => { state.currentConversationId = ''; renderConversations(); renderWelcome(); $('#messageInput').focus(); });
+$('#newConversationButton').addEventListener('click', () => {
+  if (state.currentConversationId) state.previousConversationId = state.currentConversationId;
+  state.currentConversationId = '';
+  renderConversations();
+  renderWelcome();
+  $('#messageInput').focus();
+});
 $('#composerForm').addEventListener('submit', (event) => { event.preventDefault(); sendMessage($('#messageInput').value); });
 $('#messageInput').addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('#composerForm').requestSubmit(); }
