@@ -31,6 +31,7 @@ const state = {
   schemaTab: 'fields',
   eventExtractionProfile: null,
   extractionContract: null,
+  extractionContractError: '',
   plots: [],
   triggers: [],
   tools: [],
@@ -1220,12 +1221,17 @@ async function loadExtractionConfiguration(sceneId) {
   if (!sceneId) {
     state.eventExtractionProfile = null;
     state.extractionContract = null;
+    state.extractionContractError = '';
     return;
   }
-  [state.eventExtractionProfile, state.extractionContract] = await Promise.all([
+  const [profileResult, contractResult] = await Promise.allSettled([
     api(`/api/scenes/${encodeURIComponent(sceneId)}/event-extraction-profile`),
     api(`/api/scenes/${encodeURIComponent(sceneId)}/extraction-contract`)
   ]);
+  if (profileResult.status === 'rejected') throw profileResult.reason;
+  state.eventExtractionProfile = profileResult.value;
+  state.extractionContract = contractResult.status === 'fulfilled' ? contractResult.value : null;
+  state.extractionContractError = contractResult.status === 'rejected' ? contractResult.reason.message : '';
 }
 
 async function loadSchemas() {
@@ -1336,7 +1342,9 @@ function renderEventExtractionSettings() {
   const options = [...eventTypeOptions, ...configuredTypes.filter((value) => !knownTypes.has(value)).map((value) => [value, value])];
   const fieldInstructions = contract?.fieldInstructions || [];
   const promptSystem = contract?.prompt?.system || '当前无可用预览';
-  const promptUser = contract?.prompt?.user || '当前无可用预览';
+  const promptUser = contract?.prompt?.user || (state.extractionContractError
+    ? `完整 Input 预览加载失败：${state.extractionContractError}`
+    : '当前无可用预览');
   $('#schemaTable').innerHTML = `<section class="extraction-settings">
     <div class="extraction-runtime-contract">
       <div><span>TURN END</span><i data-lucide="message-square"></i><strong>assistant 回复落库</strong><small>1 轮 = user 消息 + assistant 回复</small></div>
@@ -1363,6 +1371,7 @@ function renderEventExtractionSettings() {
           <label class="strategy-toggle"><span><strong>启用每 X 轮抽取</strong><small>关闭后仅保留用户显式控制快通道</small></span><span class="toggle-control"><input name="enabled" type="checkbox" ${profile.enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>将 assistant 回复传入抽取模型</strong><small>用于识别角色言行与共同故事，不能单独写成用户事实</small></span><span class="toggle-control"><input name="include_assistant" type="checkbox" ${profile.include_assistant ? 'checked' : ''}><i></i></span></label>
         </div>
+        <div class="strategy-locked-guard"><i data-lucide="pin"></i><div><strong>显式长期规则快通道</strong><span>“必须 / 一定要 / 不要 / 别再”等明确要求会先区分长期规则与剧情台词，通过边界校验后立即写入“必须遵守 / 避免事项”并固定注入，不等待 X 轮。</span></div><span class="badge blue">同步</span></div>
       </section>
       <section class="extraction-form-section">
         <header><span>02</span><div><strong>四类抽取对象与提示词来源</strong><small>字段级指令与场景级指令最终编译为同一次模型 Input</small></div></header>

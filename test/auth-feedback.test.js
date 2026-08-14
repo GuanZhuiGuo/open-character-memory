@@ -66,10 +66,36 @@ test('registered users get read-only configuration, isolated data, own traces, a
         response.end(JSON.stringify({ model: 'mock-embedding', data: [{ embedding: [0.5, 0.5, 0.5, 0.5] }] }));
         return;
       }
+      const requestBody = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const systemPrompt = requestBody.input?.[0]?.content?.[0]?.text || '';
+      if (systemPrompt.includes('用户长期回复规则分类器')) {
+        response.end(JSON.stringify({
+          id: 'mock-rule-classifier',
+          model: 'mock-text',
+          output_text: JSON.stringify({
+            decision: 'persist',
+            must_add: ['每句话附带动作描写'],
+            avoid_add: ['使用反问句'],
+            must_remove: [],
+            avoid_remove: [],
+            rejected: [],
+            reason: '用户明确设置长期回复规则'
+          })
+        }));
+        return;
+      }
+      if (systemPrompt.includes('只输出严格 JSON')) {
+        response.end(JSON.stringify({
+          id: 'mock-extraction',
+          model: 'mock-text',
+          output_text: '{"structured_updates":[],"relationship_deltas":[],"events":[]}'
+        }));
+        return;
+      }
       response.end(JSON.stringify({
         id: 'mock-response',
         model: 'mock-text',
-        output_text: '{"structured_updates":[],"relationship_deltas":[],"events":[]}'
+        output_text: '这是一次模拟回复。'
       }));
     });
   });
@@ -161,6 +187,27 @@ test('registered users get read-only configuration, isolated data, own traces, a
     assert.match(modelInput.systemPrompt, /\[身份\] 林晚/);
     const crossUserTrace = await request(baseUrl, `/api/traces/${chat.payload.traceId}`, { cookie: bobCookie });
     assert.equal(crossUserTrace.status, 403);
+
+    const ruleChat = await request(baseUrl, '/api/chat', {
+      method: 'POST',
+      cookie: aliceCookie,
+      body: {
+        user_id: alice.id,
+        agent_id: 'agent_linwan',
+        conversation_id: chat.payload.conversation.id,
+        message: '以后每句话必须附带动作描写，不要使用反问句。'
+      }
+    });
+    assert.equal(ruleChat.status, 200);
+    assert.equal(ruleChat.payload.diagnostics.fastUpdates, 2);
+    const ruleTrace = await request(baseUrl, `/api/traces/${ruleChat.payload.traceId}`, { cookie: aliceCookie });
+    assert.equal(ruleTrace.status, 200);
+    const classifierSpan = ruleTrace.payload.spans.find((span) => span.name === 'persistent_instruction_classifier');
+    assert.ok(classifierSpan);
+    const ruleModelSpan = ruleTrace.payload.spans.find((span) => span.name === 'model_response');
+    const ruleModelInput = JSON.parse(ruleModelSpan.input_json);
+    assert.match(ruleModelInput.systemPrompt, /每句话附带动作描写/);
+    assert.match(ruleModelInput.systemPrompt, /使用反问句/);
 
     const feedback = await request(baseUrl, '/api/feedback', {
       method: 'POST',
