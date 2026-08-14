@@ -11,15 +11,41 @@
 </head>
 <body>
   <div id="loginOverlay" class="modal-backdrop login-backdrop">
-    <form id="loginForm" class="modal login-modal">
+    <div class="modal login-modal">
       <div class="brand-mark" aria-hidden="true">M</div>
       <h1>记忆 Agent 工作台</h1>
-      <input class="hidden" name="username" value="admin" autocomplete="username" tabindex="-1" aria-hidden="true">
-      <label class="field-label" for="adminPassword">管理员密码</label>
-      <input id="adminPassword" name="password" type="password" autocomplete="current-password" placeholder="输入密码" required>
+      <div class="segmented auth-mode-switch" role="tablist" aria-label="登录方式">
+        <button class="active" type="button" data-auth-mode="user">用户登录</button>
+        <button type="button" data-auth-mode="register">注册账号</button>
+        <button type="button" data-auth-mode="admin">管理员</button>
+      </div>
+      <form id="userLoginForm" class="auth-form" data-auth-panel="user">
+        <label class="field-label" for="loginUsername">登录名</label>
+        <input id="loginUsername" name="username" autocomplete="username" placeholder="例如 xiaoyu" required>
+        <label class="field-label" for="loginPassword">密码</label>
+        <input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="输入密码" required>
+        <button class="button primary wide" type="submit">登录</button>
+      </form>
+      <form id="registerForm" class="auth-form hidden" data-auth-panel="register">
+        <label class="field-label" for="registerUsername">登录名</label>
+        <input id="registerUsername" name="username" autocomplete="username" placeholder="3-32 位字母、数字或 ._-" required>
+        <label class="field-label" for="registerDisplayName">显示名称</label>
+        <input id="registerDisplayName" name="display_name" autocomplete="nickname" placeholder="聊天中显示的名称" required>
+        <label class="field-label" for="registerPassword">密码</label>
+        <input id="registerPassword" name="password" type="password" autocomplete="new-password" placeholder="至少 8 个字符" minlength="8" required>
+        <label class="field-label" for="registerPasswordConfirm">确认密码</label>
+        <input id="registerPasswordConfirm" name="password_confirm" type="password" autocomplete="new-password" placeholder="再输入一次" minlength="8" required>
+        <p class="auth-permission-note"><i data-lucide="shield-check"></i><span>新账号可查看配置、自己的记忆与 Trace，但不能编辑或查看其他用户数据。</span></p>
+        <button class="button primary wide" type="submit">注册并登录</button>
+      </form>
+      <form id="adminLoginForm" class="auth-form hidden" data-auth-panel="admin">
+        <input class="hidden" name="username" value="admin" autocomplete="username" tabindex="-1" aria-hidden="true">
+        <label class="field-label" for="adminPassword">管理员密码</label>
+        <input id="adminPassword" name="password" type="password" autocomplete="current-password" placeholder="输入管理员密码" required>
+        <button class="button primary wide" type="submit">进入管理台</button>
+      </form>
       <p id="loginError" class="form-error" role="alert"></p>
-      <button class="button primary wide" type="submit">登录</button>
-    </form>
+    </div>
   </div>
 
   <div id="app" class="app-shell hidden">
@@ -35,11 +61,14 @@
         <button class="nav-item" data-page="persona" aria-label="人设与剧情"><i data-lucide="badge-check"></i><span>人设与剧情</span></button>
         <button class="nav-item" data-page="automation" aria-label="触发与工具"><i data-lucide="workflow"></i><span>触发与工具</span></button>
         <button class="nav-item" data-page="timeline" aria-label="系统架构图"><i data-lucide="network"></i><span>系统架构图</span></button>
+        <span class="nav-section-label" data-admin-only>管理</span>
+        <button class="nav-item" data-admin-only data-page="users" aria-label="用户列表"><i data-lucide="users"></i><span>用户列表</span></button>
+        <button class="nav-item" data-admin-only data-page="feedback" aria-label="反馈列表"><i data-lucide="message-square-warning"></i><span>反馈列表</span></button>
       </nav>
       <div class="sidebar-foot">
         <div class="admin-identity">
           <span class="status-dot"></span>
-          <div><strong>管理员</strong><small>已验证</small></div>
+          <div><strong id="sessionRoleLabel">管理员</strong><small id="sessionIdentityMeta">已验证</small></div>
         </div>
         <button id="logoutButton" class="icon-button" title="退出登录" aria-label="退出登录"><i data-lucide="log-out"></i></button>
       </div>
@@ -64,7 +93,7 @@
             <span id="userAvatar" class="mini-avatar">U</span>
             <select id="userSelect" aria-label="切换用户"></select>
           </label>
-          <button id="addUserButton" class="icon-button bordered" title="新增用户" aria-label="新增用户"><i data-lucide="user-plus"></i></button>
+          <button id="addUserButton" class="icon-button bordered" data-admin-only title="新增用户数据档案" aria-label="新增用户数据档案"><i data-lucide="user-plus"></i></button>
         </div>
       </header>
 
@@ -173,7 +202,7 @@
                 <div class="header-actions">
                   <button id="editMemoryProfileButton" class="button secondary compact"><i data-lucide="settings-2"></i><span>配置说明</span></button>
                   <button id="editRetrievalProfileButton" class="button secondary compact"><i data-lucide="sliders-horizontal"></i><span>召回策略</span></button>
-                  <button id="addSchemaButton" class="button primary"><i data-lucide="plus"></i><span>新建字段</span></button>
+                  <button id="addSchemaButton" class="button primary" data-write-only><i data-lucide="plus"></i><span>新建字段</span></button>
                 </div>
               </header>
               <div class="relationship-banner">
@@ -223,11 +252,11 @@
                     <p id="personaHeaderMeta">选择角色进行配置。</p>
                   </div>
                 </div>
-                <button class="button primary" type="submit" form="personaForm"><i data-lucide="save"></i><span>保存人设</span></button>
+                <button class="button primary" data-write-only type="submit" form="personaForm"><i data-lucide="save"></i><span>保存人设</span></button>
               </header>
 
               <div class="persona-grid">
-                <form id="personaForm" class="form-surface">
+                <form id="personaForm" class="form-surface" data-config-form>
                   <div class="surface-heading"><div><h3>核心人设</h3><span id="personaScenario" class="badge blue">-</span></div><span class="count-label">每轮固定注入</span></div>
                   <div class="form-grid two">
                     <label><span>角色名称</span><input id="personaName" required></label>
@@ -238,7 +267,7 @@
                   <label class="grow"><span>核心人设提示词</span><textarea id="personaPrompt" rows="14" required></textarea></label>
                 </form>
                 <section class="plot-surface">
-                  <div class="surface-heading"><div><h3>专属剧情</h3><span id="plotCount" class="count-label">0 条</span></div><button id="addPlotButton" class="button secondary compact"><i data-lucide="plus"></i><span>新增剧情</span></button></div>
+                  <div class="surface-heading"><div><h3>专属剧情</h3><span id="plotCount" class="count-label">0 条</span></div><button id="addPlotButton" class="button secondary compact" data-write-only><i data-lucide="plus"></i><span>新增剧情</span></button></div>
                   <div class="plot-scope-note"><i data-lucide="lock-keyhole"></i><span>仅绑定当前角色，不被同场景其他角色共享</span></div>
                   <div id="plotList" class="plot-list"></div>
                 </section>
@@ -253,9 +282,31 @@
               <button class="active" data-automation-tab="triggers">条件触发器</button>
               <button data-automation-tab="tools">Function tools</button>
             </div>
-            <button id="addTriggerButton" class="button primary"><i data-lucide="plus"></i><span>新建触发器</span></button>
+            <button id="addTriggerButton" class="button primary" data-write-only><i data-lucide="plus"></i><span>新建触发器</span></button>
           </div>
           <div id="automationContent" class="data-surface"></div>
+        </section>
+
+        <section id="page-users" class="page admin-page">
+          <div class="management-page">
+            <header class="management-header">
+              <div><span class="eyebrow">ACCESS & DATA OWNERSHIP</span><h3>用户列表</h3><p>查看注册账号、仅档案用户与各自数据规模。</p></div>
+              <button id="usersAddButton" class="button primary"><i data-lucide="user-plus"></i><span>新增用户档案</span></button>
+            </header>
+            <div id="usersSummary" class="metric-strip compact-metrics"></div>
+            <div id="usersContent" class="data-surface management-table"></div>
+          </div>
+        </section>
+
+        <section id="page-feedback" class="page admin-page">
+          <div class="management-page">
+            <header class="management-header">
+              <div><span class="eyebrow">TURN-LEVEL FEEDBACK</span><h3>反馈列表</h3><p>每条反馈都保留目标消息、完整轮次快照与 Trace ID。</p></div>
+              <span id="feedbackResultCount" class="result-count">0 条反馈</span>
+            </header>
+            <div id="feedbackSummary" class="metric-strip compact-metrics"></div>
+            <div id="feedbackContent" class="feedback-list"></div>
+          </div>
         </section>
 
         <section id="page-timeline" class="page admin-page timeline-page">
@@ -294,7 +345,7 @@
 
               <section class="architecture-thresholds" aria-label="当前运行阈值">
                 <div><span>主模型近期窗口</span><strong id="architectureMainWindow">16 条消息 · 约 8 轮</strong><small>超出部分不进入本次 Input</small></div>
-                <div><span>事件抽取消歧窗口</span><strong id="architectureExtractionWindow">2 轮 · 最多 4 条</strong><small>按场景配置，可调 1-10 轮</small></div>
+                <div><span>历史理解窗口（指代消歧）</span><strong id="architectureExtractionWindow">2 轮 · 最多 4 条</strong><small>只用于理解“它 / 那件事”指的是什么</small></div>
                 <div><span>单轮写入门槛</span><strong id="architectureEventThreshold">3 事件 · importance ≥ 0.35</strong><small>低于门槛的新事件不落库</small></div>
                 <div><span>长对话压缩</span><strong id="architectureCompressionStatus">滚动摘要未启用</strong><small>当前没有 token 阈值</small></div>
               </section>
@@ -510,7 +561,7 @@
                 </div>
                 <div class="compress-step grid-col-5 has-arrow" data-phase="pre">
                   <span>冲突消解</span><strong>再归一</strong>
-                  <small>event + slot 去重<br>最新明确确认优先<br>剔除 superseded</small>
+                  <small>event + slot 去重<br>最新明确确认优先<br>剔除已被新版本替代的记录</small>
                 </div>
                 <div class="compress-step grid-col-6 has-arrow" data-phase="pre">
                   <span>预算装配</span><strong>限定窗口</strong>
@@ -629,7 +680,7 @@
 
                   <div class="input-exclusion-strip">
                     <span><i data-lucide="circle-slash-2"></i>不进入主模型 Input</span>
-                    <i>向量数值</i><i>superseded / retracted</i><i>其他用户或分支</i><i>Trace 与密钥</i>
+                    <i>向量数值</i><i>已替代 / 已撤回记录</i><i>其他用户或分支</i><i>Trace 与密钥</i>
                     <a href="#automationContent" data-config-link data-jump-page="automation" data-jump-tab="tools" data-jump-target="#automationContent">Function tools 在模型外由条件触发器执行<i data-lucide="external-link"></i></a>
                   </div>
                 </div>
@@ -655,14 +706,14 @@
                 </div>
                 <div class="state-node decision grid-col-6 has-arrow" data-phase="write">
                   <span>COMPARE</span><strong>比较 Active</strong>
-                  <div class="decision-list"><i>同值 → confirm / noop</i><i>变更 → supersede</i><i>撤回 → retract</i></div>
+                  <div class="decision-list"><i>同值 → 确认 / 不变</i><i>变更 → 旧版本标记为已替代</i><i>取消 → 标记为已撤回</i></div>
                 </div>
                 <div class="state-node active grid-col-7 has-arrow" data-phase="write">
                   <span>CURRENT VIEW</span><strong>active vN</strong><small>回答默认只读取当前有效版本</small>
                 </div>
                 <div class="state-node history grid-col-8 has-arrow" data-phase="write">
                   <span>HISTORY</span><strong>旧版本留存</strong>
-                  <div class="status-pills"><i>superseded</i><i>retracted</i></div>
+                  <div class="status-pills"><i>已被新版本替代</i><i>已撤回 / 已取消</i></div>
                 </div>
                 <div class="state-node commit grid-col-9" data-phase="write">
                   <span>PERSIST</span><strong>证据化提交</strong><small>写入 history / graph / embedding，并记录 Trace</small>
@@ -692,8 +743,8 @@
 
               <footer class="timeline-footer">
                 <div><i class="status-dot active"></i><strong>当前回答视图</strong><span>仅 active</span></div>
-                <div><i class="status-dot superseded"></i><strong>历史版本</strong><span>superseded</span></div>
-                <div><i class="status-dot retracted"></i><strong>已撤回</strong><span>retracted</span></div>
+                <div><i class="status-dot superseded"></i><strong>已被新版本替代</strong><span>仅历史留痕，不参与回答</span></div>
+                <div><i class="status-dot retracted"></i><strong>已撤回 / 已取消</strong><span>没有可继续使用的当前结论</span></div>
                 <div class="timeline-principle"><i data-lucide="badge-check"></i><span>向量负责找候选，事件槽位负责判新旧，原始证据负责可追溯。</span></div>
               </footer>
             </div>
@@ -703,7 +754,7 @@
     </section>
   </div>
 
-  <aside id="traceDrawer" class="trace-drawer" aria-label="Trace 详情">
+  <aside id="traceDrawer" class="trace-drawer" aria-label="Trace 详情" aria-hidden="true" inert>
     <div class="drawer-header">
       <div><strong>Agent Trace</strong><small id="traceDrawerMeta">调度记录</small></div>
       <button id="closeTraceButton" class="icon-button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>

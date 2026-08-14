@@ -32,6 +32,18 @@ const mimeTypes = {
   '.png': 'image/png',
   '.ico': 'image/x-icon'
 };
+const ADMIN_SESSION_COOKIE = 'memory_admin_session';
+const USER_SESSION_COOKIE = 'memory_user_session';
+const ADMIN_SESSION_SECONDS = 12 * 60 * 60;
+const USER_SESSION_SECONDS = 7 * 24 * 60 * 60;
+
+class HttpError extends Error {
+  constructor(status, message, code = 'REQUEST_FAILED') {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
 
 function sendJson(response, status, payload, headers = {}) {
   response.writeHead(status, {
@@ -52,17 +64,130 @@ function parseCookies(request) {
   return cookies;
 }
 
-function isAdmin(request) {
-  const token = parseCookies(request).memory_admin_session;
-  if (!token) return false;
-  const row = db.prepare('SELECT * FROM admin_sessions WHERE token_hash = ?').get(hash(token));
-  return Boolean(row && new Date(row.expires_at).getTime() > Date.now());
+function cookieHeader(name, value, maxAge) {
+  return `${name}=${encodeURIComponent(value)}; Path=${config.basePath || '/'}; HttpOnly; SameSite=Strict; Max-Age=${maxAge}`;
 }
 
-function requireAdmin(request, response) {
-  if (isAdmin(request)) return true;
-  sendJson(response, 401, { error: '需要管理员登录', code: 'ADMIN_REQUIRED' });
+function clearAuthCookies() {
+  return [
+    cookieHeader(ADMIN_SESSION_COOKIE, '', 0),
+    cookieHeader(USER_SESSION_COOKIE, '', 0)
+  ];
+}
+
+function passwordDigest(password, salt) {
+  return crypto.scryptSync(password, salt, 64).toString('hex');
+}
+
+function verifyPassword(password, account) {
+  const supplied = Buffer.from(passwordDigest(password, account.password_salt), 'hex');
+  const expected = Buffer.from(account.password_hash, 'hex');
+  return supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+}
+
+function normalizeUsername(value) {
+  const username = safeText(value, 32).trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(username)) {
+    throw new HttpError(400, '登录名需为 3-32 位小写字母、数字、点、下划线或短横线', 'INVALID_USERNAME');
+  }
+  return username;
+}
+
+function validatePassword(value) {
+  const password = String(value || '');
+  if (password.length < 8 || password.length > 128) {
+    throw new HttpError(400, '密码长度需为 8-128 个字符', 'INVALID_PASSWORD');
+  }
+  return password;
+}
+
+function sessionExpiry(seconds) {
+  return new Date(Date.now() + seconds * 1000).toISOString();
+}
+
+function createUserSession(userId) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const timestamp = nowIso();
+  const expiresAt = sessionExpiry(USER_SESSION_SECONDS);
+  db.prepare('DELETE FROM user_sessions WHERE expires_at <= ?').run(timestamp);
+  db.prepare('INSERT INTO user_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
+    .run(hash(token), userId, expiresAt, timestamp);
+  return { token, expiresAt };
+}
+
+function publicUser(row) {
+  return row ? {
+    id: row.id || row.user_id,
+    name: row.name,
+    display_name: row.display_name,
+    avatar_color: row.avatar_color,
+    status: row.status
+  } : null;
+}
+
+function getPrincipal(request) {
+  const cookies = parseCookies(request);
+  const adminToken = cookies[ADMIN_SESSION_COOKIE];
+  if (adminToken) {
+    const session = db.prepare('SELECT * FROM admin_sessions WHERE token_hash = ?').get(hash(adminToken));
+    if (session && new Date(session.expires_at).getTime() > Date.now()) {
+      return { role: 'admin', userId: null, displayName: '管理员' };
+    }
+  }
+  const userToken = cookies[USER_SESSION_COOKIE];
+  if (!userToken) return null;
+  const row = db.prepare(`SELECT us.expires_at, ua.username, u.*
+    FROM user_sessions us
+    JOIN user_accounts ua ON ua.user_id = us.user_id
+    JOIN users u ON u.id = us.user_id
+    WHERE us.token_hash = ? AND u.status = 'active'`).get(hash(userToken));
+  if (!row || new Date(row.expires_at).getTime() <= Date.now()) return null;
+  return {
+    role: 'user',
+    userId: row.id,
+    username: row.username,
+    displayName: row.display_name,
+    user: publicUser(row)
+  };
+}
+
+function requirePrincipal(request, response) {
+  const principal = getPrincipal(request);
+  if (principal) return principal;
+  sendJson(response, 401, { error: '请先登录', code: 'AUTH_REQUIRED' });
+  return null;
+}
+
+function requireAdminPrincipal(principal, response) {
+  if (principal.role === 'admin') return true;
+  sendJson(response, 403, { error: '该功能仅管理员可用', code: 'ADMIN_REQUIRED' });
   return false;
+}
+
+function assertUserAccess(principal, requestedUserId) {
+  const userId = safeText(requestedUserId, 100).trim();
+  if (!userId) throw new HttpError(400, '缺少用户作用域', 'USER_SCOPE_REQUIRED');
+  if (principal.role === 'user' && principal.userId !== userId) {
+    throw new HttpError(403, '无权访问其他用户的记忆或数据', 'USER_SCOPE_FORBIDDEN');
+  }
+  return userId;
+}
+
+function userMayAccessRoute(pathname, method) {
+  if (pathname === '/api/conversations' && ['GET', 'POST'].includes(method)) return true;
+  if (pathname === '/api/chat' && method === 'POST') return true;
+  if (pathname === '/api/feedback' && method === 'POST') return true;
+  if (['/api/memory/retrieval-test', '/api/architecture/ask', '/api/admin/health/ark'].includes(pathname)
+    && method === 'POST') return true;
+  if (method !== 'GET') return false;
+  if ([
+    '/api/bootstrap', '/api/agents', '/api/scenes', '/api/memory/schemas', '/api/memory/values',
+    '/api/memory/history', '/api/memory/graph', '/api/memory/events', '/api/plots', '/api/triggers',
+    '/api/tools', '/api/traces', '/api/architecture/overview'
+  ].includes(pathname)) return true;
+  return /^\/api\/conversations\/[^/]+$/.test(pathname)
+    || /^\/api\/scenes\/[^/]+\/(retrieval-profile|event-extraction-profile|extraction-contract)$/.test(pathname)
+    || /^\/api\/traces\/[^/]+$/.test(pathname);
 }
 
 async function readBody(request) {
@@ -416,9 +541,146 @@ function saveTrigger(body, id = null) {
   return db.prepare('SELECT * FROM triggers WHERE id = ?').get(row.id);
 }
 
+function createFeedback(principal, body) {
+  const messageId = safeText(body.message_id, 100).trim();
+  const suggestion = safeText(body.suggestion, 2000).trim();
+  if (!messageId) throw new HttpError(400, '缺少反馈所属消息', 'MESSAGE_REQUIRED');
+  if (!suggestion) throw new HttpError(400, '请填写不满或改进建议', 'SUGGESTION_REQUIRED');
+  const target = db.prepare(`SELECT m.*, c.agent_id, c.story_id, c.branch_id, c.title AS conversation_title
+    FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE m.id = ?`).get(messageId);
+  if (!target) throw new HttpError(404, '反馈所属消息不存在', 'MESSAGE_NOT_FOUND');
+  assertUserAccess(principal, target.user_id);
+  const messages = db.prepare(`SELECT rowid AS ordinal, id, role, content, metadata_json, created_at
+    FROM messages WHERE conversation_id = ? ORDER BY rowid`).all(target.conversation_id);
+  const targetIndex = messages.findIndex((item) => item.id === target.id);
+  let start = targetIndex;
+  while (start > 0 && messages[start].role !== 'user') start -= 1;
+  let end = Math.max(start, targetIndex);
+  while (end + 1 < messages.length && messages[end + 1].role !== 'user') end += 1;
+  const turnMessages = messages.slice(start, end + 1);
+  const assistantWithTrace = [...turnMessages].reverse().find((item) => {
+    const metadata = parseJson(item.metadata_json, {});
+    return item.role === 'assistant' && metadata.traceId;
+  });
+  let traceId = parseJson(assistantWithTrace?.metadata_json, {})?.traceId || '';
+  if (!traceId) {
+    traceId = db.prepare(`SELECT id FROM traces WHERE conversation_id = ? AND user_id = ?
+      AND started_at >= ? ORDER BY started_at LIMIT 1`)
+      .get(target.conversation_id, target.user_id, turnMessages[0]?.created_at || target.created_at)?.id || '';
+  }
+  const timestamp = nowIso();
+  const id = uid('feedback');
+  const snapshot = {
+    conversation: {
+      id: target.conversation_id,
+      title: target.conversation_title,
+      agentId: target.agent_id,
+      storyId: target.story_id,
+      branchId: target.branch_id
+    },
+    targetMessageId: target.id,
+    messages: turnMessages.map((item) => ({
+      id: item.id,
+      role: item.role,
+      content: item.content,
+      createdAt: item.created_at
+    }))
+  };
+  db.prepare(`INSERT INTO feedback
+    (id, user_id, agent_id, conversation_id, target_message_id, target_role, trace_id,
+     suggestion, turn_json, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`).run(
+    id, target.user_id, target.agent_id, target.conversation_id, target.id, target.role,
+    traceId, suggestion, json(snapshot), timestamp, timestamp
+  );
+  return { id, traceId, capturedMessages: turnMessages.length, status: 'open', createdAt: timestamp };
+}
+
+function listAdminUsers() {
+  return db.prepare(`SELECT u.id, u.name, u.display_name, u.avatar_color, u.status, u.created_at, u.updated_at,
+    ua.username, CASE WHEN ua.user_id IS NULL THEN 0 ELSE 1 END AS can_login,
+    (SELECT COUNT(*) FROM conversations c WHERE c.user_id = u.id) AS conversation_count,
+    (SELECT COUNT(*) FROM messages m WHERE m.user_id = u.id) AS message_count,
+    (SELECT COUNT(*) FROM memory_values mv WHERE mv.user_id = u.id) AS memory_count,
+    (SELECT COUNT(*) FROM feedback f WHERE f.user_id = u.id) AS feedback_count
+    FROM users u LEFT JOIN user_accounts ua ON ua.user_id = u.id
+    ORDER BY u.created_at DESC`).all();
+}
+
+function listAdminFeedback() {
+  return decodeRows(db.prepare(`SELECT f.*, u.display_name AS user_name, u.avatar_color,
+    a.name AS agent_name, c.title AS conversation_title,
+    substr(m.content, 1, 240) AS target_content
+    FROM feedback f
+    JOIN users u ON u.id = f.user_id
+    JOIN agents a ON a.id = f.agent_id
+    JOIN conversations c ON c.id = f.conversation_id
+    JOIN messages m ON m.id = f.target_message_id
+    ORDER BY f.created_at DESC LIMIT 500`).all(), ['turn_json']);
+}
+
 async function handleApi(request, response, url) {
   const method = request.method || 'GET';
   const pathname = url.pathname;
+
+  if (pathname === '/api/auth/register' && method === 'POST') {
+    const body = await readBody(request);
+    const username = normalizeUsername(body.username);
+    const password = validatePassword(body.password);
+    const displayName = safeText(body.display_name, 60).trim();
+    if (!displayName) throw new HttpError(400, '显示名称不能为空', 'INVALID_DISPLAY_NAME');
+    if (db.prepare('SELECT 1 FROM user_accounts WHERE username = ?').get(username)) {
+      throw new HttpError(409, '该登录名已被使用', 'USERNAME_EXISTS');
+    }
+    const userId = uid('user');
+    const timestamp = nowIso();
+    const salt = crypto.randomBytes(16).toString('hex');
+    const digest = passwordDigest(password, salt);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare(`INSERT INTO users (id, name, display_name, avatar_color, created_at, updated_at)
+        VALUES (?, ?, ?, '#2563eb', ?, ?)`).run(userId, displayName, displayName, timestamp, timestamp);
+      db.prepare(`INSERT INTO user_accounts
+        (user_id, username, password_hash, password_salt, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)`).run(userId, username, digest, salt, timestamp, timestamp);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      if (String(error.message).includes('UNIQUE constraint failed')) {
+        throw new HttpError(409, '该登录名已被使用', 'USERNAME_EXISTS');
+      }
+      throw error;
+    }
+    const session = createUserSession(userId);
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    sendJson(response, 201, { ok: true, role: 'user', user: publicUser(user), expiresAt: session.expiresAt }, {
+      'Set-Cookie': [
+        cookieHeader(USER_SESSION_COOKIE, session.token, USER_SESSION_SECONDS),
+        cookieHeader(ADMIN_SESSION_COOKIE, '', 0)
+      ]
+    });
+    return;
+  }
+
+  if (pathname === '/api/auth/login' && method === 'POST') {
+    const body = await readBody(request);
+    const username = normalizeUsername(body.username);
+    const account = db.prepare(`SELECT ua.*, u.id, u.name, u.display_name, u.avatar_color, u.status
+      FROM user_accounts ua JOIN users u ON u.id = ua.user_id
+      WHERE ua.username = ? AND u.status = 'active'`).get(username);
+    if (!account || !verifyPassword(String(body.password || ''), account)) {
+      sendJson(response, 401, { error: '登录名或密码错误', code: 'INVALID_CREDENTIALS' });
+      return;
+    }
+    const session = createUserSession(account.user_id);
+    sendJson(response, 200, { ok: true, role: 'user', user: publicUser(account), expiresAt: session.expiresAt }, {
+      'Set-Cookie': [
+        cookieHeader(USER_SESSION_COOKIE, session.token, USER_SESSION_SECONDS),
+        cookieHeader(ADMIN_SESSION_COOKIE, '', 0)
+      ]
+    });
+    return;
+  }
 
   if (pathname === '/api/admin/login' && method === 'POST') {
     const body = await readBody(request);
@@ -430,26 +692,46 @@ async function handleApi(request, response, url) {
     }
     const token = crypto.randomBytes(32).toString('base64url');
     const timestamp = nowIso();
-    const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
+    const expiresAt = sessionExpiry(ADMIN_SESSION_SECONDS);
+    db.prepare('DELETE FROM admin_sessions WHERE expires_at <= ?').run(timestamp);
     db.prepare('INSERT INTO admin_sessions (token_hash, expires_at, created_at) VALUES (?, ?, ?)')
       .run(hash(token), expiresAt, timestamp);
     sendJson(response, 200, { ok: true, expiresAt }, {
-      'Set-Cookie': `memory_admin_session=${encodeURIComponent(token)}; Path=${config.basePath || '/'}; HttpOnly; SameSite=Strict; Max-Age=43200`
+      'Set-Cookie': [
+        cookieHeader(ADMIN_SESSION_COOKIE, token, ADMIN_SESSION_SECONDS),
+        cookieHeader(USER_SESSION_COOKIE, '', 0)
+      ]
     });
     return;
   }
 
-  if (pathname === '/api/admin/logout' && method === 'POST') {
-    const token = parseCookies(request).memory_admin_session;
-    if (token) db.prepare('DELETE FROM admin_sessions WHERE token_hash = ?').run(hash(token));
+  if (['/api/auth/logout', '/api/admin/logout'].includes(pathname) && method === 'POST') {
+    const cookies = parseCookies(request);
+    if (cookies[ADMIN_SESSION_COOKIE]) {
+      db.prepare('DELETE FROM admin_sessions WHERE token_hash = ?').run(hash(cookies[ADMIN_SESSION_COOKIE]));
+    }
+    if (cookies[USER_SESSION_COOKIE]) {
+      db.prepare('DELETE FROM user_sessions WHERE token_hash = ?').run(hash(cookies[USER_SESSION_COOKIE]));
+    }
     sendJson(response, 200, { ok: true }, {
-      'Set-Cookie': `memory_admin_session=; Path=${config.basePath || '/'}; HttpOnly; SameSite=Strict; Max-Age=0`
+      'Set-Cookie': clearAuthCookies()
     });
+    return;
+  }
+
+  if (pathname === '/api/auth/session' && method === 'GET') {
+    const principal = getPrincipal(request);
+    sendJson(response, 200, principal ? {
+      authenticated: true,
+      role: principal.role,
+      username: principal.username || null,
+      user: principal.user || null
+    } : { authenticated: false, role: null, user: null });
     return;
   }
 
   if (pathname === '/api/admin/session' && method === 'GET') {
-    sendJson(response, 200, { authenticated: isAdmin(request) });
+    sendJson(response, 200, { authenticated: getPrincipal(request)?.role === 'admin' });
     return;
   }
 
@@ -458,7 +740,12 @@ async function handleApi(request, response, url) {
     return;
   }
 
-  if (!requireAdmin(request, response)) return;
+  const principal = requirePrincipal(request, response);
+  if (!principal) return;
+  if (principal.role === 'user' && !userMayAccessRoute(pathname, method)) {
+    requireAdminPrincipal(principal, response);
+    return;
+  }
 
   if (pathname === '/api/admin/health/ark' && method === 'POST') {
     sendJson(response, 200, await checkArkHealth());
@@ -466,7 +753,19 @@ async function handleApi(request, response, url) {
   }
 
   if (pathname === '/api/bootstrap' && method === 'GET') {
+    if (principal.role === 'user') {
+      sendJson(response, 200, {
+        role: 'user',
+        users: [principal.user],
+        agents: db.prepare('SELECT * FROM agents WHERE enabled = 1 ORDER BY created_at').all(),
+        scenes: listScenes(),
+        database: { engine: 'SQLite', productionTarget: 'PostgreSQL + pgvector' },
+        models: { text: config.ark.textModel, embedding: config.ark.embeddingModel }
+      });
+      return;
+    }
     sendJson(response, 200, {
+      role: 'admin',
       users: db.prepare("SELECT * FROM users WHERE status = 'active' ORDER BY created_at").all(),
       agents: db.prepare('SELECT * FROM agents WHERE enabled = 1 ORDER BY created_at').all(),
       scenes: listScenes(),
@@ -478,6 +777,14 @@ async function handleApi(request, response, url) {
 
   if (pathname === '/api/users' && method === 'GET') {
     sendJson(response, 200, db.prepare('SELECT * FROM users ORDER BY created_at').all());
+    return;
+  }
+  if (pathname === '/api/admin/users' && method === 'GET') {
+    sendJson(response, 200, listAdminUsers());
+    return;
+  }
+  if (pathname === '/api/admin/feedback' && method === 'GET') {
+    sendJson(response, 200, listAdminFeedback());
     return;
   }
   if (pathname === '/api/users' && method === 'POST') {
@@ -494,7 +801,9 @@ async function handleApi(request, response, url) {
   }
 
   if (pathname === '/api/agents' && method === 'GET') {
-    sendJson(response, 200, db.prepare('SELECT * FROM agents ORDER BY created_at').all());
+    sendJson(response, 200, principal.role === 'admin'
+      ? db.prepare('SELECT * FROM agents ORDER BY created_at').all()
+      : db.prepare('SELECT * FROM agents WHERE enabled = 1 ORDER BY created_at').all());
     return;
   }
 
@@ -552,13 +861,15 @@ async function handleApi(request, response, url) {
   }
 
   if (pathname === '/api/conversations' && method === 'GET') {
-    sendJson(response, 200, listConversations(url.searchParams.get('user_id'), url.searchParams.get('agent_id')));
+    const userId = assertUserAccess(principal, url.searchParams.get('user_id'));
+    sendJson(response, 200, listConversations(userId, url.searchParams.get('agent_id')));
     return;
   }
   if (pathname === '/api/conversations' && method === 'POST') {
     const body = await readBody(request);
+    const userId = assertUserAccess(principal, body.user_id);
     sendJson(response, 201, createConversation({
-      userId: body.user_id,
+      userId,
       agentId: body.agent_id,
       storyId: body.story_id,
       branchId: body.branch_id,
@@ -568,19 +879,26 @@ async function handleApi(request, response, url) {
   }
   const conversationMatch = pathname.match(/^\/api\/conversations\/([^/]+)$/);
   if (conversationMatch && method === 'GET') {
-    sendJson(response, 200, getConversationMessages(conversationMatch[1], url.searchParams.get('user_id')));
+    const userId = assertUserAccess(principal, url.searchParams.get('user_id'));
+    sendJson(response, 200, getConversationMessages(conversationMatch[1], userId));
     return;
   }
 
   if (pathname === '/api/chat' && method === 'POST') {
     const body = await readBody(request);
     if (!body.message?.trim()) throw new Error('消息不能为空');
+    const userId = assertUserAccess(principal, body.user_id);
     sendJson(response, 200, await chat({
-      userId: body.user_id,
+      userId,
       agentId: body.agent_id,
       conversationId: body.conversation_id || '',
       message: body.message
     }));
+    return;
+  }
+
+  if (pathname === '/api/feedback' && method === 'POST') {
+    sendJson(response, 201, createFeedback(principal, await readBody(request)));
     return;
   }
 
@@ -600,6 +918,7 @@ async function handleApi(request, response, url) {
 
   if (pathname === '/api/memory/values' && method === 'GET') {
     const scope = queryScope(url);
+    scope.userId = assertUserAccess(principal, scope.userId);
     const agent = db.prepare('SELECT * FROM agents WHERE id = ?').get(scope.agentId);
     if (!scope.userId || !agent) throw new Error('查询记忆需要有效的 user_id 和 agent_id');
     sendJson(response, 200, listMemoryForAdmin(scope, agent.scenario_type));
@@ -617,7 +936,7 @@ async function handleApi(request, response, url) {
     return;
   }
   if (pathname === '/api/memory/history' && method === 'GET') {
-    const userId = url.searchParams.get('user_id');
+    const userId = assertUserAccess(principal, url.searchParams.get('user_id'));
     const agentId = url.searchParams.get('agent_id') || '';
     const key = url.searchParams.get('key');
     const rows = db.prepare(`SELECT mh.*, ms.key, ms.label, mv.agent_id, mv.story_id, mv.branch_id
@@ -631,11 +950,15 @@ async function handleApi(request, response, url) {
     return;
   }
   if (pathname === '/api/memory/graph' && method === 'GET') {
-    sendJson(response, 200, listGraph(queryScope(url)));
+    const scope = queryScope(url);
+    scope.userId = assertUserAccess(principal, scope.userId);
+    sendJson(response, 200, listGraph(scope));
     return;
   }
   if (pathname === '/api/memory/events' && method === 'GET') {
-    sendJson(response, 200, listEvents(queryScope(url), {
+    const scope = queryScope(url);
+    scope.userId = assertUserAccess(principal, scope.userId);
+    sendJson(response, 200, listEvents(scope, {
       includeHistory: url.searchParams.get('include_history') === 'true',
       order: url.searchParams.get('order') === 'created' ? 'created' : 'story'
     }));
@@ -645,7 +968,7 @@ async function handleApi(request, response, url) {
     const body = await readBody(request);
     const query = safeText(body.query, 12000).trim();
     const scope = {
-      userId: body.user_id || '',
+      userId: assertUserAccess(principal, body.user_id),
       agentId: body.agent_id || '',
       storyId: body.story_id || 'main_story',
       branchId: body.branch_id || 'main'
@@ -702,7 +1025,11 @@ async function handleApi(request, response, url) {
   }
 
   if (pathname === '/api/traces' && method === 'GET') {
-    sendJson(response, 200, listTraces(url.searchParams.get('conversation_id'), url.searchParams.get('limit') || 50));
+    const conversationId = url.searchParams.get('conversation_id');
+    const conversation = db.prepare('SELECT user_id FROM conversations WHERE id = ?').get(conversationId);
+    if (!conversation) throw new HttpError(404, '会话不存在', 'CONVERSATION_NOT_FOUND');
+    assertUserAccess(principal, conversation.user_id);
+    sendJson(response, 200, listTraces(conversationId, url.searchParams.get('limit') || 50));
     return;
   }
   const traceMatch = pathname.match(/^\/api\/traces\/([^/]+)$/);
@@ -712,6 +1039,7 @@ async function handleApi(request, response, url) {
       sendJson(response, 404, { error: 'Trace 不存在' });
       return;
     }
+    assertUserAccess(principal, trace.user_id);
     sendJson(response, 200, trace);
     return;
   }
@@ -756,7 +1084,10 @@ export const server = http.createServer(async (request, response) => {
     if (routedUrl.pathname.startsWith('/api/')) await handleApi(request, response, routedUrl);
     else serveStatic(response, routedUrl.pathname);
   } catch (error) {
-    sendJson(response, 400, { error: error.message || '请求处理失败' });
+    sendJson(response, error.status || 400, {
+      error: error.message || '请求处理失败',
+      code: error.code || 'REQUEST_FAILED'
+    });
   }
 });
 

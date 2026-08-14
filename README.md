@@ -12,7 +12,7 @@
 - 记忆查询包含独立的“结构化记忆”和“事件列表”；事件列表可按故事时间或写入时间排序，并可选择查看已被更新/撤回的历史版本。
 - 事件、实体、事件-实体证据链接、关系边、带视角声明和剧情线图谱。
 - 图形化记忆网络：事件、实体、声明和关系边可缩放、筛选并查看节点详情；点击实体可查看并定位关联事件。
-- `active / superseded / retracted` 状态和完整版本历史。
+- `active / superseded / retracted` 状态和完整版本历史。`superseded` 表示旧结论已被新版本替代，`retracted` 表示结论被明确撤回或取消；两者均保留证据，但不进入默认回答。
 - 事件对齐器会在模型生成不同 event key 时，仍然将地点/时间更新到原事件槽位。
 - 图关系、有效声明和向量事件混合召回；有序集合使用类型、collection 和 sequence 硬过滤。
 - 场景级召回策略：可配置向量/关键词/图谱通道、阈值、TopK、排序权重和时效半衰期；`Active Only` 是不可关闭的硬保护。
@@ -63,27 +63,30 @@ ARK_API_KEY='' npm test
 
 当前运行模式是 `blocking_after_assistant`：轮后抽取与记忆写入仍在同一个 `/api/chat` 请求内，调用方会阻塞等待其中的模型、Embedding 和数据库操作完成。服务端按会话串行化聊天请求，因此同一会话的下一轮不会在本轮释放锁之前开始；该锁不提供通用的数据库读取隔离。
 
-主模型当前只装配最近 16 条消息（约 8 轮），未实现 token 阈值或滚动摘要。陪伴场景的抽取消歧窗口默认 2 轮、最多 4 条历史消息；当轮 user/assistant 内容单独传入，不会在历史窗口中重复。窗口可按场景配置为 1-10 轮。
+主模型当前只装配最近 16 条消息（约 8 轮），未实现 token 阈值或滚动摘要。陪伴场景的历史理解窗口（指代消歧）默认 2 轮、最多 4 条历史消息；它只用来理解“还是改到银座吧”中的“还是”指向哪件事，不会把历史内容再抽取一遍。当轮 user/assistant 内容单独传入，窗口可按场景配置为 1-10 轮。
 
 ## 数据库
 
 本地版使用 Node.js 内置 SQLite，数据位于 `data/memory-agent.db`（已被 Git 忽略）。表按以下边界分组：
 
 - 对话：`users` / `agents` / `conversations` / `messages`
+- 账号与权限：`user_accounts` / `user_sessions`
 - 固定记忆：`memory_schemas` / `memory_values` / `memory_history`
 - 场景配置：`scenes` / `memory_profiles` / `retrieval_profiles` / `event_extraction_profiles`
 - 图谱：`entities` / `entity_edges` / `events` / `event_entities` / `claims`
 - 向量：`embeddings`
 - 架构问答：`architecture_knowledge_chunks` / `architecture_qa_logs`
 - 剧情与调度：`plots` / `user_plot_states` / `triggers` / `trigger_runs` / `tools` / `tool_runs`
-- 可观测：`traces` / `trace_spans`
+- 可观测与反馈：`traces` / `trace_spans` / `feedback`
 
 生产环境建议 PostgreSQL 16 + pgvector。对话、状态、图边和触发器保留关系表；`embeddings.vector_json` 迁移为 `vector(2048)` 并建 HNSW 索引。当图规模需要高频长路径遍历时，再同步到 Neo4j，当前 1-2 跳场景不需要额外数据库。
 
 ## 权限与密钥
 
-- 用户列表、用户新增、记忆值、字段、人设、剧情、触发器和 Trace API 均要求管理员 HttpOnly Session。
-- 所有业务记录必须带 `user_id`，故事记忆额外带 `agent_id / story_id / branch_id`。
+- 普通用户可自助注册；可查看全部系统配置、自己的对话、记忆、图谱和 Trace，但无法编辑配置或访问其他用户数据。
+- 管理员可编辑字段、记忆、人设、剧情、召回策略和触发器，并可查看用户列表、全部反馈与关联 Trace。
+- 每条已持久化消息都可提交快捷反馈。客户端只上传消息 ID 和建议；服务端校验所有权后，自动封存完整轮次快照及 Trace ID。
+- 所有业务记录必须带 `user_id`，故事记忆额外带 `agent_id / story_id / branch_id`。服务端不信任客户端传入的用户范围。
 - `.env.local` 和 SQLite 数据库均不进入 Git。Trace 会自动脱敏 Ark Key 和 Bearer Token。
 - 线上应将当前本地管理员密码替换为企业 SSO/RBAC，并使用 KMS 或 Secret Manager 注入 API Key。
 

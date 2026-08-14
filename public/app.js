@@ -4,6 +4,8 @@ const appBasePath = $('meta[name="app-base-path"]')?.content || '';
 
 const state = {
   page: 'chat',
+  role: null,
+  session: null,
   bootstrap: null,
   currentUserId: localStorage.getItem('memory_studio_user') || '',
   currentAgentId: localStorage.getItem('memory_studio_agent') || '',
@@ -36,6 +38,8 @@ const state = {
   architectureOverview: null,
   architectureSources: new Map(),
   architectureAsking: false,
+  adminUsers: [],
+  feedback: [],
   sending: false
 };
 
@@ -45,7 +49,9 @@ const pageTitles = {
   schemas: '记忆设置',
   persona: '人设与剧情',
   automation: '触发与工具',
-  timeline: '系统架构图'
+  timeline: '系统架构图',
+  users: '用户列表',
+  feedback: '反馈列表'
 };
 
 const eventTypeOptions = [
@@ -97,7 +103,8 @@ async function api(path, options = {}) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 401 && path !== '/api/admin/login') showLogin();
+    const authRequest = ['/api/auth/login', '/api/auth/register', '/api/admin/login'].includes(path);
+    if (response.status === 401 && !authRequest) showLogin();
     throw new Error(payload.error || `请求失败 (${response.status})`);
   }
   return payload;
@@ -114,19 +121,54 @@ function toast(message, type = 'success') {
 function showLogin() {
   $('#loginOverlay').classList.remove('hidden');
   $('#app').classList.add('hidden');
-  $('#traceDrawer')?.classList.remove('open');
+  closeTraceDrawer();
   const architectureAssistant = $('#architectureAssistant');
   architectureAssistant?.classList.remove('open');
   if (architectureAssistant) {
     architectureAssistant.inert = true;
     architectureAssistant.setAttribute('aria-hidden', 'true');
   }
-  setTimeout(() => $('#adminPassword')?.focus(), 50);
+  setTimeout(() => $('[data-auth-panel]:not(.hidden) input:not(.hidden)')?.focus(), 50);
+}
+
+function showTraceDrawer() {
+  const drawer = $('#traceDrawer');
+  drawer.inert = false;
+  drawer.classList.add('open');
+  drawer.setAttribute('aria-hidden', 'false');
+}
+
+function closeTraceDrawer() {
+  const drawer = $('#traceDrawer');
+  if (!drawer) return;
+  drawer.classList.remove('open');
+  drawer.inert = true;
+  drawer.setAttribute('aria-hidden', 'true');
 }
 
 function showApp() {
   $('#loginOverlay').classList.add('hidden');
   $('#app').classList.remove('hidden');
+}
+
+function applyRoleUi() {
+  const admin = isAdmin();
+  document.body.dataset.role = state.role || '';
+  $$('[data-admin-only]').forEach((element) => element.classList.toggle('hidden', !admin));
+  $$('[data-write-only]').forEach((element) => element.classList.toggle('hidden', !admin));
+  ['#userSelect', '#memoryUserSelect'].forEach((selector) => {
+    const element = $(selector);
+    if (element) element.disabled = !admin;
+  });
+  $$('[data-config-form] input, [data-config-form] textarea, [data-config-form] select').forEach((element) => {
+    element.disabled = !admin;
+  });
+  $('#sessionRoleLabel').textContent = admin ? '管理员' : (state.session?.user?.display_name || '普通用户');
+  $('#sessionIdentityMeta').textContent = admin ? '全量管理权限' : '配置只读 · 数据隔离';
+  const memoryProfileLabel = $('#editMemoryProfileButton span');
+  if (memoryProfileLabel) memoryProfileLabel.textContent = admin ? '配置说明' : '查看说明';
+  const retrievalProfileLabel = $('#editRetrievalProfileButton span');
+  if (retrievalProfileLabel) retrievalProfileLabel.textContent = admin ? '召回策略' : '查看召回策略';
 }
 
 function currentUser() {
@@ -157,6 +199,22 @@ function sourceLabel(value) {
   }[value] || value || '未知来源';
 }
 
+function isAdmin() {
+  return state.role === 'admin';
+}
+
+function statusInfo(value) {
+  return ({
+    active: { label: '当前有效', detail: '默认参与召回和回答' },
+    superseded: { label: '已被新版本替代', detail: '保留历史证据，不再参与回答' },
+    retracted: { label: '已撤回 / 已取消', detail: '原结论被明确否定，没有可用的当前版本' }
+  })[value] || { label: value || '未知', detail: '' };
+}
+
+function statusLabel(value) {
+  return statusInfo(value).label;
+}
+
 function scopeQuery() {
   return new URLSearchParams({
     user_id: state.currentUserId,
@@ -170,16 +228,19 @@ function emptyState(icon, text) {
   return `<div class="empty-state"><i data-lucide="${icon}"></i><span>${escapeHtml(text)}</span></div>`;
 }
 
-function openModal({ title, body, submitLabel = '保存', submitClass = 'primary', onSubmit, width = 560, showCancel = true }) {
+function openModal({ title, body, submitLabel = '保存', submitClass = 'primary', onSubmit, width = 560, showCancel = true, readOnly = false }) {
   const root = $('#modalRoot');
   root.innerHTML = `
     <div class="modal-backdrop dynamic-modal">
       <form class="modal" style="width:min(${width}px,100%)">
         <div class="modal-header"><h3>${escapeHtml(title)}</h3><button type="button" class="icon-button modal-close" aria-label="关闭"><i data-lucide="x"></i></button></div>
         <div class="modal-body">${body}</div>
-        <div class="modal-footer">${showCancel ? '<button type="button" class="button secondary modal-close">取消</button>' : ''}<button type="submit" class="button ${submitClass}">${escapeHtml(submitLabel)}</button></div>
+        <div class="modal-footer">${readOnly ? '<button type="button" class="button secondary modal-close">关闭</button>' : `${showCancel ? '<button type="button" class="button secondary modal-close">取消</button>' : ''}<button type="submit" class="button ${submitClass}">${escapeHtml(submitLabel)}</button>`}</div>
       </form>
     </div>`;
+  if (readOnly) {
+    $$('input, textarea, select', root).forEach((element) => { element.disabled = true; });
+  }
   refreshIcons();
   $$('.modal-close', root).forEach((button) => button.addEventListener('click', () => { root.innerHTML = ''; }));
   $('.dynamic-modal', root).addEventListener('click', (event) => {
@@ -187,6 +248,7 @@ function openModal({ title, body, submitLabel = '保存', submitClass = 'primary
   });
   $('form', root).addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (readOnly || !onSubmit) return;
     const submit = $('button[type="submit"]', root);
     submit.disabled = true;
     try {
@@ -200,17 +262,20 @@ function openModal({ title, body, submitLabel = '保存', submitClass = 'primary
 }
 
 async function initialize() {
-  const session = await api('/api/admin/session').catch(() => ({ authenticated: false }));
+  const session = await api('/api/auth/session').catch(() => ({ authenticated: false }));
   if (!session.authenticated) {
     showLogin();
     return;
   }
+  state.session = session;
+  state.role = session.role;
   await loadBootstrap();
   showApp();
 }
 
 async function loadBootstrap() {
   state.bootstrap = await api('/api/bootstrap');
+  state.role = state.bootstrap.role || state.role || 'user';
   if (!state.bootstrap.users.some((item) => item.id === state.currentUserId)) {
     state.currentUserId = state.bootstrap.users[0]?.id || '';
   }
@@ -225,6 +290,7 @@ async function loadBootstrap() {
   localStorage.setItem('memory_studio_scene', state.currentSceneId);
   renderSelectors();
   renderAgentHeader();
+  applyRoleUi();
   await loadConversations();
   refreshIcons();
 }
@@ -326,10 +392,34 @@ function renderMessages(extraHtml = '') {
     <div class="message-row ${message.role}">
       <div>
         <div class="message-bubble">${escapeHtml(message.content)}</div>
-        <div class="message-time">${formatDate(message.created_at)}</div>
+        <div class="message-meta"><time>${formatDate(message.created_at)}</time>${String(message.id).startsWith('local_') ? '' : `<button class="message-feedback-button" data-feedback-message="${escapeHtml(message.id)}" title="对这条消息提反馈" aria-label="对这条消息提反馈"><i data-lucide="message-square-warning"></i></button>`}</div>
       </div>
     </div>`).join('') + extraHtml;
+  $$('[data-feedback-message]', root).forEach((button) => button.addEventListener('click', () => {
+    openMessageFeedback(button.dataset.feedbackMessage);
+  }));
+  refreshIcons();
   root.scrollTop = root.scrollHeight;
+}
+
+function openMessageFeedback(messageId) {
+  const message = state.messages.find((item) => item.id === messageId);
+  if (!message) return;
+  openModal({
+    title: '反馈这条消息',
+    submitLabel: '提交反馈',
+    body: `<div class="feedback-target-preview"><span>${message.role === 'assistant' ? '角色回复' : '用户消息'}</span><p>${escapeHtml(message.content)}</p></div>
+      <label><span>不满或改进建议</span><textarea name="suggestion" rows="5" maxlength="2000" placeholder="例如：这里使用了已过期的地点，应以我刚才更正的地点为准。" required autofocus></textarea></label>
+      <p class="feedback-capture-note"><i data-lucide="paperclip"></i><span>直接提交即可。系统会在服务端自动抓取该消息所在的完整轮次、作用域和 Trace ID。</span></p>`,
+    onSubmit: async (formData) => {
+      const result = await api('/api/feedback', {
+        method: 'POST',
+        body: { message_id: messageId, suggestion: formData.get('suggestion') }
+      });
+      const traceText = result.traceId ? ` · Trace ${result.traceId.slice(-8)}` : '';
+      toast(`反馈已提交 · 已抓取 ${result.capturedMessages} 条轮次消息${traceText}`);
+    }
+  });
 }
 
 async function sendMessage(text) {
@@ -372,6 +462,7 @@ async function sendMessage(text) {
 }
 
 function navigate(page) {
+  if (!isAdmin() && ['users', 'feedback'].includes(page)) page = 'chat';
   state.page = page;
   $$('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.page === page));
   $$('.page').forEach((item) => item.classList.toggle('active', item.id === `page-${page}`));
@@ -392,6 +483,9 @@ async function loadCurrentPage() {
   if (state.page === 'persona') await loadPersona();
   if (state.page === 'automation') await loadAutomation();
   if (state.page === 'timeline') await loadArchitectureOverview();
+  if (state.page === 'users') await loadAdminUsers();
+  if (state.page === 'feedback') await loadAdminFeedback();
+  applyRoleUi();
   refreshIcons();
 }
 
@@ -549,7 +643,7 @@ function renderMemoryValues() {
           <div class="memory-field"><div><strong>${escapeHtml(item.label)}</strong>${item.pinned ? '<span class="badge blue">每轮注入</span>' : ''}</div><code>${escapeHtml(item.key)}</code></div>
           <div class="memory-current-value">${renderMemoryValue(item)}</div>
           <div class="memory-provenance"><span>${escapeHtml(sourceLabel(item.sourceType))}</span><small>${item.version ? `v${item.version} · ${formatDate(item.updatedAt)}` : '尚未产生用户版本'}</small></div>
-          <div class="memory-record-meta"><span class="badge">${escapeHtml(item.valueType)}</span><button class="icon-button bordered edit-memory" data-key="${escapeHtml(item.key)}" title="编辑记忆" aria-label="编辑${escapeHtml(item.label)}"><i data-lucide="pencil"></i></button></div>
+          <div class="memory-record-meta"><span class="badge">${escapeHtml(item.valueType)}</span>${isAdmin() ? `<button class="icon-button bordered edit-memory" data-key="${escapeHtml(item.key)}" title="编辑记忆" aria-label="编辑${escapeHtml(item.label)}"><i data-lucide="pencil"></i></button>` : '<span class="badge">只读</span>'}</div>
         </article>`).join('')}</div>
     </section>`).join('')}</div>` : emptyState('database-zap', '没有匹配的记忆');
   $$('.edit-memory').forEach((button) => button.addEventListener('click', () => editMemory(button.dataset.key)));
@@ -557,6 +651,7 @@ function renderMemoryValues() {
 }
 
 function editMemory(key) {
+  if (!isAdmin()) return;
   const item = state.memoryValues.find((memory) => memory.key === key);
   const complex = ['string_list', 'object'].includes(item.valueType);
   const value = complex ? JSON.stringify(item.value, null, 2) : String(item.value ?? '');
@@ -615,8 +710,13 @@ function renderEventList() {
         <button class="${state.eventListOrder === 'story' ? 'active' : ''}" data-event-order="story">剧情时间</button>
         <button class="${state.eventListOrder === 'created' ? 'active' : ''}" data-event-order="created">写入时间</button>
       </div>
-      <label class="event-history-toggle"><span><strong>历史版本</strong><small>显示 superseded / retracted 事件</small></span><span class="toggle-control"><input type="checkbox" id="eventHistoryToggle" ${state.eventListIncludeHistory ? 'checked' : ''}><i></i></span></label>
+      <label class="event-history-toggle"><span><strong>历史版本</strong><small>显示已被新版本替代、已撤回的事件</small></span><span class="toggle-control"><input type="checkbox" id="eventHistoryToggle" ${state.eventListIncludeHistory ? 'checked' : ''}><i></i></span></label>
     </header>
+    <div class="memory-status-guide">
+      <span><i class="status-dot active"></i><strong>当前有效</strong><small>会参与召回和回答</small></span>
+      <span><i class="status-dot superseded"></i><strong>已被新版本替代</strong><small>只保留历史证据</small></span>
+      <span><i class="status-dot retracted"></i><strong>已撤回 / 已取消</strong><small>当前没有可用结论</small></span>
+    </div>
     <div class="event-time-axis">${events.length ? events.map((item, index) => {
       const claims = item.claims || [];
       const collection = item.metadata?.collection_name || '';
@@ -626,10 +726,10 @@ function renderEventList() {
       return `<article class="event-timeline-row ${item.status !== 'active' ? 'history' : ''}">
         <div class="event-time-marker"><time>${escapeHtml(primaryTime)}</time><span>${escapeHtml(formatDate(item.created_at))}</span><i>${String(index + 1).padStart(2, '0')}</i></div>
         <div class="event-list-record">
-          <header><div><span class="badge blue">${escapeHtml(eventTypeLabel(item.event_type))}</span><span class="badge ${item.status === 'active' ? '' : 'red'}">${escapeHtml(item.status)}</span>${collection ? `<span class="badge">${escapeHtml(collection)}${item.sequence_no !== null ? ` · #${item.sequence_no}` : ''}</span>` : ''}</div><span class="event-importance">importance ${Number(item.importance).toFixed(2)}</span></header>
+          <header><div><span class="badge blue">${escapeHtml(eventTypeLabel(item.event_type))}</span><span class="badge ${item.status === 'active' ? '' : 'red'}" title="${escapeHtml(statusInfo(item.status).detail)}">${escapeHtml(statusLabel(item.status))}</span>${collection ? `<span class="badge">${escapeHtml(collection)}${item.sequence_no !== null ? ` · #${item.sequence_no}` : ''}</span>` : ''}</div><span class="event-importance">importance ${Number(item.importance).toFixed(2)}</span></header>
           <h4>${escapeHtml(item.title)}</h4>
           <p>${escapeHtml(item.summary || '无事件摘要')}</p>
-          ${claims.length ? `<div class="event-claim-list">${claims.map((claim) => `<span><b>${escapeHtml(claim.subject)}</b><i>${escapeHtml(claim.predicate)}</i><strong>${escapeHtml(claim.object_name || claim.object_text)}</strong><em>${escapeHtml(claim.status)}</em></span>`).join('')}</div>` : '<div class="event-no-claims">未产生声明槽位</div>'}
+          ${claims.length ? `<div class="event-claim-list">${claims.map((claim) => `<span><b>${escapeHtml(claim.subject)}</b><i>${escapeHtml(claim.predicate)}</i><strong>${escapeHtml(claim.object_name || claim.object_text)}</strong><em title="${escapeHtml(statusInfo(claim.status).detail)}">${escapeHtml(statusLabel(claim.status))}</em></span>`).join('')}</div>` : '<div class="event-no-claims">未产生声明槽位</div>'}
           <footer><code>${escapeHtml(item.event_key)}</code><span>evidence ${escapeHtml(String(item.source_message_id || '').slice(-8) || '-')}</span></footer>
         </div>
       </article>`;
@@ -730,7 +830,7 @@ function renderGraphInspector(node) {
   if (!root || !node) return;
   root.innerHTML = `<div class="graph-inspector-head">
       <span class="graph-node-kind ${escapeHtml(node.kind)}">${escapeHtml(node.kindLabel)}</span>
-      <span class="badge ${node.status === 'active' ? 'blue' : 'red'}">${escapeHtml(node.status)}</span>
+      <span class="badge ${node.status === 'active' ? 'blue' : 'red'}" title="${escapeHtml(statusInfo(node.status).detail)}">${escapeHtml(statusLabel(node.status))}</span>
     </div>
     <h4>${escapeHtml(node.title)}</h4>
     ${node.description ? `<p>${escapeHtml(node.description)}</p>` : ''}
@@ -972,7 +1072,7 @@ function renderRetrievalResult(payload) {
       <div class="retrieval-candidate-table data-surface">${candidates.length ? `
         <table class="data-table"><thead><tr><th style="width:24%">事件候选</th><th style="width:11%">向量相似度</th><th style="width:11%">关键词</th><th style="width:10%">重要度</th><th style="width:10%">时效性</th><th style="width:11%">综合分</th><th style="width:13%">向量状态</th><th style="width:12%">决策</th></tr></thead>
         <tbody>${candidates.map((item) => `<tr class="${item.selected ? 'selected-row' : ''}">
-          <td><span class="cell-main">${escapeHtml(item.title)}</span><span class="cell-sub">${escapeHtml(item.eventType)} · ${escapeHtml(item.status)}</span></td>
+          <td><span class="cell-main">${escapeHtml(item.title)}</span><span class="cell-sub">${escapeHtml(item.eventType)} · ${escapeHtml(statusLabel(item.status))}</span></td>
           <td><code>${scoreText(item.similarity)}</code></td><td><code>${scoreText(item.keywordScore)}</code></td>
           <td>${scoreText(item.importance)}</td><td>${scoreText(item.recencyScore)}</td><td><strong>${scoreText(item.finalScore)}</strong></td>
           <td><span class="badge ${item.vectorSource === 'disabled' ? '' : (item.vectorCompatible ? 'blue' : 'red')}">${item.vectorSource === 'disabled' ? '通道关闭' : (item.vectorCompatible ? (item.vectorSource === 'stored' ? '已存向量' : '降级重算') : '维度不兼容')}</span></td>
@@ -1014,7 +1114,7 @@ function renderRetrievalLab() {
     </form>
     <div class="retrieval-strategy-bar">
       <div><span class="strategy-icon"><i data-lucide="sliders-horizontal"></i></span><div><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(retrievalChannelNames(profile))} · similarity ≥ ${profile.min_similarity} · TopK ${profile.event_top_k}</small></div></div>
-      <button class="button secondary compact" data-open-retrieval-settings><i data-lucide="external-link"></i><span>召回策略</span></button>
+      <button class="button secondary compact" data-open-retrieval-settings><i data-lucide="external-link"></i><span>${isAdmin() ? '召回策略' : '查看召回策略'}</span></button>
     </div>
     <div id="retrievalOutput">${result ? renderRetrievalResult(result) : '<div class="retrieval-empty"><i data-lucide="scan-search"></i><strong>尚未运行召回测试</strong></div>'}</div>
   </section>`;
@@ -1151,7 +1251,7 @@ function renderSchemas() {
   const fieldsMode = state.schemaTab === 'fields';
   $$('[data-schema-tab]').forEach((button) => button.classList.toggle('active', button.dataset.schemaTab === state.schemaTab));
   $('#schemaFieldToolbar').classList.toggle('hidden', !fieldsMode);
-  $('#addSchemaButton').classList.toggle('hidden', !fieldsMode);
+  $('#addSchemaButton').classList.toggle('hidden', !fieldsMode || !isAdmin());
   $('#schemaModeHint').textContent = fieldsMode
     ? '定义字段、独立抽取说明与回复注入模板'
     : '设置轮次窗口，并编排结构化字段、事件、实体和关系的实际提示词';
@@ -1172,7 +1272,7 @@ function renderSchemas() {
         <td>${escapeHtml(item.category)}</td><td><span class="badge ${item.scenario_type === 'all' ? '' : 'blue'}">${item.scenario_type === 'all' ? '共享基线' : '当前场景'}</span></td>
         <td><span class="cell-main">${escapeHtml(item.value_type)}</span><span class="cell-sub">${escapeHtml(item.scope)}</span></td>
         <td><code>${escapeHtml(item.extraction_mode)}</code></td><td>${item.pinned ? '<span class="badge blue">每轮</span>' : '<span class="badge">按需</span>'}</td>
-        <td><div class="row-actions"><button class="icon-button edit-schema" data-id="${item.id}" title="编辑"><i data-lucide="pencil"></i></button></div></td>
+        <td><div class="row-actions">${isAdmin() ? `<button class="icon-button edit-schema" data-id="${item.id}" title="编辑"><i data-lucide="pencil"></i></button>` : '<span class="badge">只读</span>'}</div></td>
       </tr>`).join('')}</tbody></table>` : emptyState('list-filter', '没有匹配的字段');
   $$('.edit-schema').forEach((button) => button.addEventListener('click', () => editSchema(button.dataset.id)));
   refreshIcons();
@@ -1190,7 +1290,7 @@ function renderEventExtractionSettings() {
   $('#schemaSummary').innerHTML = [
     ['状态', profile.enabled ? '已启用' : '已停用'],
     ['轮结束点', 'assistant 落库'],
-    ['历史消歧窗口', `${profile.context_turns} 轮 / 最多 ${contract?.runtime?.historyMessageLimit || profile.context_turns * 2} 条`],
+    ['历史理解窗口', `${profile.context_turns} 轮 / 最多 ${contract?.runtime?.historyMessageLimit || profile.context_turns * 2} 条`],
     ['单轮写入上限', `${profile.max_events_per_turn} 事件`]
   ].map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
   $('#schemaResultCount').textContent = '4 类抽取对象';
@@ -1209,16 +1309,16 @@ function renderEventExtractionSettings() {
       <i data-lucide="arrow-right"></i>
       <div><span>COMMIT BARRIER</span><i data-lucide="database"></i><strong>状态派生与图谱提交</strong><small>提交完成后 /api/chat 才返回</small></div>
     </div>
-    <form id="eventExtractionForm" class="extraction-form">
+    <form id="eventExtractionForm" class="extraction-form" data-config-form>
       <section class="extraction-form-section">
-        <header><span>01</span><div><strong>轮次、结束点与触发机制</strong><small>场景内所有角色共用，当轮内容与历史消歧窗口分开传入</small></div></header>
+        <header><span>01</span><div><strong>轮次、结束点与触发机制</strong><small>场景内所有角色共用，当轮内容与历史理解窗口分开传入</small></div></header>
         <div class="turn-definition-banner">
           <div><i data-lucide="repeat-2"></i><span><strong>一轮如何计算</strong><small>1 条 user 消息 + 1 条 assistant 回复</small></span></div>
           <div><i data-lucide="flag"></i><span><strong>一轮何时结束</strong><small>assistant 回复成功写入 messages 表</small></span></div>
           <div><i data-lucide="lock-keyhole"></i><span><strong>下一轮屏障</strong><small>同步抽取与提交完成后才解锁</small></span></div>
         </div>
         <div class="form-grid three extraction-runtime-fields">
-          <label><span>历史消歧窗口（轮）</span><input id="extractionContextTurns" name="context_turns" type="number" min="1" max="10" step="1" value="${profile.context_turns}" required><small id="turnWindowMessageLimit">最多注入 ${contract?.runtime?.historyMessageLimit || profile.context_turns * 2} 条历史消息，不含当轮</small></label>
+          <label><span>历史理解窗口（指代消歧，轮）</span><input id="extractionContextTurns" name="context_turns" type="number" min="1" max="10" step="1" value="${profile.context_turns}" required><small id="turnWindowMessageLimit">例如“还是改到银座吧”需要历史才知道改的是哪次会面；最多读取 ${contract?.runtime?.historyMessageLimit || profile.context_turns * 2} 条，不会重复抽取旧事件</small></label>
           <label><span>触发点（系统固定）</span><input value="assistant 回复落库后" disabled><small>after_assistant_message_persisted</small></label>
           <label><span>执行模式（系统固定）</span><input value="同一请求同步阻塞" disabled><small>blocking_after_assistant</small></label>
         </div>
@@ -1238,7 +1338,7 @@ function renderEventExtractionSettings() {
         <div class="object-instruction-stack">
           <label><span>事件抽取指令</span><textarea name="event_instruction" rows="3">${escapeHtml(profile.event_instruction || '')}</textarea><small>与系统硬规则、事件类型白名单共同生效。</small></label>
           <label><span>实体抽取指令</span><textarea name="entity_instruction" rows="3">${escapeHtml(profile.entity_instruction || '')}</textarea><small>实体不独立漂浮，只有被事件接受后才写库并关联。</small></label>
-          <label><span>关系与声明抽取指令</span><textarea name="relation_instruction" rows="3">${escapeHtml(profile.relation_instruction || '')}</textarea><small>relations 是实体边；claims 是可 supersede/retract 的有效事实槽位。</small></label>
+          <label><span>关系与声明抽取指令</span><textarea name="relation_instruction" rows="3">${escapeHtml(profile.relation_instruction || '')}</textarea><small>relations 是实体边；claims 是可“被新版本替代 / 撤回”的有效事实槽位。</small></label>
         </div>
       </section>
       <section class="extraction-form-section">
@@ -1256,8 +1356,8 @@ function renderEventExtractionSettings() {
         <header><span>04</span><div><strong>字段指令清单与系统硬保护</strong><small>这些字段指令会被逐条编译进模型 Input，manual / derived 还会被服务端拒绝写入</small></div></header>
         <div class="field-instruction-list">${fieldInstructions.map((item) => `<div><span><strong>${escapeHtml(item.label)}</strong><code>${escapeHtml(item.key)}</code></span><em>${escapeHtml(item.extraction_mode)}</em><p>${escapeHtml(item.extraction_instruction || '未配置抽取说明')}</p></div>`).join('')}</div>
         <div class="extraction-guards">
-          <span><i data-lucide="shield-check"></i><strong>只写当轮新增或更正</strong><small>历史上下文只消歧</small></span>
-          <span><i data-lucide="shield-check"></i><strong>旧值保留为 superseded</strong><small>active 是默认回答视图</small></span>
+          <span><i data-lucide="shield-check"></i><strong>只写当轮新增或更正</strong><small>历史上下文只用于理解指代</small></span>
+          <span><i data-lucide="shield-check"></i><strong>旧值标记为“已被新版本替代”</strong><small>当前有效版本才进入默认回答</small></span>
           <span><i data-lucide="shield-check"></i><strong>助手情节不等于用户事实</strong><small>必须有用户承接证据</small></span>
           <span><i data-lucide="shield-check"></i><strong>作用域硬隔离</strong><small>user / agent / story / branch</small></span>
         </div>
@@ -1270,7 +1370,7 @@ function renderEventExtractionSettings() {
           <div class="compiled-prompt-layer"><span>USER INPUT</span><pre>${escapeHtml(promptUser)}</pre></div>
         </details>
       </section>
-      <footer class="extraction-form-actions"><span><i data-lucide="info"></i>保存后立即重新编译预览，并从下一轮开始生效。</span><button class="button primary" type="submit"><i data-lucide="save"></i>保存抽取配置</button></footer>
+      <footer class="extraction-form-actions"><span><i data-lucide="info"></i>${isAdmin() ? '保存后立即重新编译预览，并从下一轮开始生效。' : '当前为普通用户只读视图，可查看完整配置但不能修改。'}</span>${isAdmin() ? '<button class="button primary" type="submit"><i data-lucide="save"></i>保存抽取配置</button>' : '<span class="badge blue">只读</span>'}</footer>
     </form>
   </section>`;
   $('#openStructuredFields')?.addEventListener('click', () => {
@@ -1289,6 +1389,7 @@ function renderEventExtractionSettings() {
   });
   $('#eventExtractionForm').addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (!isAdmin()) return;
     const formData = new FormData(event.currentTarget);
     const updateSignals = String(formData.get('update_signals') || '').split(/[\n,，]+/).map((item) => item.trim()).filter(Boolean);
     state.eventExtractionProfile = await api(`/api/scenes/${encodeURIComponent(state.currentSceneId)}/event-extraction-profile`, {
@@ -1312,6 +1413,7 @@ function renderEventExtractionSettings() {
     toast('抽取配置已生效，完整 Input 已重新编译');
     renderSchemas();
   });
+  applyRoleUi();
   refreshIcons();
 }
 
@@ -1320,6 +1422,7 @@ function editMemoryProfile() {
   if (!scene) return;
   openModal({
     title: `配置说明 · ${scene.name}`,
+    readOnly: !isAdmin(),
     body: `<label><span>记忆设置名称</span><input name="name" value="${escapeHtml(scene.memory_profile_name)}" required></label>
       <label><span>配置说明</span><textarea name="description" rows="4">${escapeHtml(scene.memory_profile_description)}</textarea></label>
       <span class="hint">该配置与「${escapeHtml(scene.name)}」一对一绑定，场景内所有角色使用同一套字段定义。</span>`,
@@ -1340,6 +1443,7 @@ async function editRetrievalProfile() {
   openModal({
     title: `召回策略 · ${scene.name}`,
     width: 760,
+    readOnly: !isAdmin(),
     body: `<div class="strategy-modal">
       <section class="strategy-modal-section">
         <div class="strategy-section-title"><span>01</span><div><strong>策略与通道</strong><small>${escapeHtml(scene.name)} 场景内所有角色共用</small></div></div>
@@ -1350,7 +1454,7 @@ async function editRetrievalProfile() {
           <label class="strategy-toggle"><span><strong>图谱扩展</strong><small>Claims + entity edges</small></span><span class="toggle-control"><input name="graph_enabled" type="checkbox" ${profile.graph_enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>意图硬过滤</strong><small>事件类型与 collection</small></span><span class="toggle-control"><input name="intent_filter_enabled" type="checkbox" ${profile.intent_filter_enabled ? 'checked' : ''}><i></i></span></label>
         </div>
-        <div class="strategy-locked-guard"><i data-lucide="lock-keyhole"></i><div><strong>Active Only</strong><span>superseded / retracted 永不进入回答候选</span></div><span class="badge blue">强制开启</span></div>
+        <div class="strategy-locked-guard"><i data-lucide="lock-keyhole"></i><div><strong>仅当前有效版本</strong><span>已被新版本替代、已撤回的记录永不进入回答候选</span></div><span class="badge blue">强制开启</span></div>
       </section>
       <section class="strategy-modal-section">
         <div class="strategy-section-title"><span>02</span><div><strong>阈值与 TopK</strong><small>候选进入与最终截断</small></div></div>
@@ -1394,6 +1498,7 @@ async function editRetrievalProfile() {
 }
 
 function editSchema(id = '') {
+  if (!isAdmin()) return;
   const scene = currentScene();
   const item = state.schemas.find((schema) => schema.id === id) || {
     key: '', label: '', category: '自定义', scenario_type: scene?.scenario_type || 'all', value_type: 'string', scope: 'user_agent',
@@ -1450,6 +1555,7 @@ async function loadPersona() {
   $('#pageMeta').textContent = `${scene?.name || scenarioLabel(agent.scenario_type)} · ${agent.name}专属配置`;
   state.plots = await api(`/api/plots?agent_id=${encodeURIComponent(state.currentAgentId)}`);
   renderPlots();
+  applyRoleUi();
 }
 
 function renderPersonaAgentList() {
@@ -1475,13 +1581,14 @@ function renderPersonaAgentList() {
 function renderPlots() {
   $('#plotCount').textContent = `${state.plots.length} 条`;
   $('#plotList').innerHTML = state.plots.length ? state.plots.map((plot) => `
-    <article class="plot-item"><div class="plot-item-head"><div><span class="plot-index">${String(state.plots.indexOf(plot) + 1).padStart(2, '0')}</span><strong>${escapeHtml(plot.name)}</strong></div><button class="icon-button bordered edit-plot" data-id="${plot.id}" title="编辑剧情" aria-label="编辑${escapeHtml(plot.name)}"><i data-lucide="pencil"></i></button></div>
+    <article class="plot-item"><div class="plot-item-head"><div><span class="plot-index">${String(state.plots.indexOf(plot) + 1).padStart(2, '0')}</span><strong>${escapeHtml(plot.name)}</strong></div>${isAdmin() ? `<button class="icon-button bordered edit-plot" data-id="${plot.id}" title="编辑剧情" aria-label="编辑${escapeHtml(plot.name)}"><i data-lucide="pencil"></i></button>` : '<span class="badge">只读</span>'}</div>
       <p>${escapeHtml(plot.premise)}</p><div class="plot-instruction">${escapeHtml(plot.instructions)}</div><div class="plot-item-meta"><span class="badge ${plot.enabled ? 'blue' : 'red'}">${plot.enabled ? '已启用' : '已停用'}</span><span class="badge">优先级 ${plot.priority}</span></div></article>`).join('') : emptyState('book-open', '尚无剧情');
   $$('.edit-plot').forEach((button) => button.addEventListener('click', () => editPlot(button.dataset.id)));
   refreshIcons();
 }
 
 function editPlot(id = '') {
+  if (!isAdmin()) return;
   const plot = state.plots.find((item) => item.id === id) || { name: '', premise: '', instructions: '', priority: 50, enabled: 1 };
   openModal({
     title: id ? '编辑剧情' : '新建剧情',
@@ -1503,7 +1610,7 @@ async function loadAutomation() {
 }
 
 function renderAutomation() {
-  $('#addTriggerButton').classList.toggle('hidden', state.automationTab !== 'triggers');
+  $('#addTriggerButton').classList.toggle('hidden', state.automationTab !== 'triggers' || !isAdmin());
   if (state.automationTab === 'tools') {
     $('#automationContent').innerHTML = `
       <table class="data-table"><thead><tr><th style="width:24%">工具</th><th style="width:38%">用途</th><th style="width:15%">执行器</th><th style="width:14%">状态</th><th style="width:9%">入参</th></tr></thead><tbody>${state.tools.map((tool) => `
@@ -1511,13 +1618,14 @@ function renderAutomation() {
   } else {
     $('#automationContent').innerHTML = state.triggers.length ? `
       <table class="data-table"><thead><tr><th style="width:23%">触发器</th><th style="width:27%">条件</th><th style="width:25%">动作</th><th style="width:10%">策略</th><th style="width:8%">状态</th><th style="width:7%;text-align:right">操作</th></tr></thead><tbody>${state.triggers.map((trigger) => `
-        <tr><td><span class="cell-main">${escapeHtml(trigger.name)}</span><span class="cell-sub">${escapeHtml(trigger.description)}</span></td><td><code class="trigger-condition">${escapeHtml(JSON.stringify(trigger.condition))}</code></td><td class="value-cell">${escapeHtml((trigger.actions || []).map((action) => action.type).join(' · '))}</td><td><span class="badge">${trigger.once_per_user ? '单次' : `${trigger.cooldown_seconds}s`}</span></td><td><span class="badge ${trigger.enabled ? 'blue' : 'red'}">${trigger.enabled ? '启用' : '停用'}</span></td><td><div class="row-actions"><button class="icon-button edit-trigger" data-id="${trigger.id}" title="编辑"><i data-lucide="pencil"></i></button></div></td></tr>`).join('')}</tbody></table>` : emptyState('workflow', '尚无触发器');
+        <tr><td><span class="cell-main">${escapeHtml(trigger.name)}</span><span class="cell-sub">${escapeHtml(trigger.description)}</span></td><td><code class="trigger-condition">${escapeHtml(JSON.stringify(trigger.condition))}</code></td><td class="value-cell">${escapeHtml((trigger.actions || []).map((action) => action.type).join(' · '))}</td><td><span class="badge">${trigger.once_per_user ? '单次' : `${trigger.cooldown_seconds}s`}</span></td><td><span class="badge ${trigger.enabled ? 'blue' : 'red'}">${trigger.enabled ? '启用' : '停用'}</span></td><td><div class="row-actions">${isAdmin() ? `<button class="icon-button edit-trigger" data-id="${trigger.id}" title="编辑"><i data-lucide="pencil"></i></button>` : '<span class="badge">只读</span>'}</div></td></tr>`).join('')}</tbody></table>` : emptyState('workflow', '尚无触发器');
     $$('.edit-trigger').forEach((button) => button.addEventListener('click', () => editTrigger(button.dataset.id)));
   }
   refreshIcons();
 }
 
 function editTrigger(id = '') {
+  if (!isAdmin()) return;
   const trigger = state.triggers.find((item) => item.id === id) || {
     name: '', description: '', condition: { all: [{ memory_key: 'relationship.intimacy', operator: '>=', value: 30 }] },
     actions: [{ type: 'unlock_plot', plot_id: state.plots[0]?.id || 'plot_rain_letter' }], once_per_user: 1,
@@ -1602,7 +1710,7 @@ function appendArchitectureAnswer(result) {
 }
 
 async function openArchitectureAssistant() {
-  $('#traceDrawer').classList.remove('open');
+  closeTraceDrawer();
   const drawer = $('#architectureAssistant');
   drawer.inert = false;
   drawer.classList.add('open');
@@ -1657,9 +1765,79 @@ async function askArchitectureQuestion(rawQuestion) {
   }
 }
 
+function metricStripMarkup(items) {
+  return items.map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
+}
+
+async function loadAdminUsers() {
+  if (!isAdmin()) return;
+  state.adminUsers = await api('/api/admin/users');
+  $('#pageMeta').textContent = '账号权限 · 数据所有权';
+  $('#usersSummary').innerHTML = metricStripMarkup([
+    ['全部用户', state.adminUsers.length],
+    ['可登录账号', state.adminUsers.filter((item) => item.can_login).length],
+    ['仅管理档案', state.adminUsers.filter((item) => !item.can_login).length],
+    ['累计反馈', state.adminUsers.reduce((sum, item) => sum + Number(item.feedback_count || 0), 0)]
+  ]);
+  $('#usersContent').innerHTML = state.adminUsers.length ? `<table class="data-table admin-user-table">
+    <thead><tr><th style="width:23%">用户</th><th style="width:17%">登录账号</th><th style="width:12%">账号类型</th><th style="width:10%">对话</th><th style="width:10%">消息</th><th style="width:10%">记忆值</th><th style="width:9%">反馈</th><th style="width:9%;text-align:right">操作</th></tr></thead>
+    <tbody>${state.adminUsers.map((user) => `<tr>
+      <td><span class="user-cell"><i style="background:${escapeHtml(user.avatar_color)}">${escapeHtml(user.display_name.slice(0, 1))}</i><span><strong>${escapeHtml(user.display_name)}</strong><code>${escapeHtml(user.id)}</code></span></span></td>
+      <td>${user.username ? `<code>${escapeHtml(user.username)}</code>` : '<span class="cell-sub">未开通</span>'}</td>
+      <td><span class="badge ${user.can_login ? 'blue' : ''}">${user.can_login ? '注册账号' : '仅数据档案'}</span></td>
+      <td>${user.conversation_count}</td><td>${user.message_count}</td><td>${user.memory_count}</td><td>${user.feedback_count}</td>
+      <td><div class="row-actions"><button class="icon-button bordered" data-inspect-user="${escapeHtml(user.id)}" title="查看该用户记忆" aria-label="查看${escapeHtml(user.display_name)}的记忆"><i data-lucide="database"></i></button></div></td>
+    </tr>`).join('')}</tbody></table>` : emptyState('users', '尚无用户');
+  $$('[data-inspect-user]').forEach((button) => button.addEventListener('click', async () => {
+    state.currentUserId = button.dataset.inspectUser;
+    await switchContext();
+    await navigate('memory');
+  }));
+  refreshIcons();
+}
+
+function renderFeedbackTurn(turn) {
+  const messages = turn?.messages || [];
+  return messages.map((message) => `<div class="feedback-turn-message ${escapeHtml(message.role)}"><span>${message.role === 'assistant' ? '角色' : '用户'}</span><p>${escapeHtml(message.content)}</p></div>`).join('');
+}
+
+async function loadAdminFeedback() {
+  if (!isAdmin()) return;
+  state.feedback = await api('/api/admin/feedback');
+  $('#pageMeta').textContent = '轮次快照 · Trace 证据';
+  $('#feedbackResultCount').textContent = `${state.feedback.length} 条反馈`;
+  $('#feedbackSummary').innerHTML = metricStripMarkup([
+    ['全部反馈', state.feedback.length],
+    ['待处理', state.feedback.filter((item) => item.status === 'open').length],
+    ['含 Trace', state.feedback.filter((item) => item.trace_id).length],
+    ['反馈用户', new Set(state.feedback.map((item) => item.user_id)).size]
+  ]);
+  $('#feedbackContent').innerHTML = state.feedback.length ? state.feedback.map((item) => `
+    <article class="feedback-record">
+      <header><span class="user-cell"><i style="background:${escapeHtml(item.avatar_color)}">${escapeHtml(item.user_name.slice(0, 1))}</i><span><strong>${escapeHtml(item.user_name)} · ${escapeHtml(item.agent_name)}</strong><small>${formatDate(item.created_at)} · ${escapeHtml(item.conversation_title)}</small></span></span><span class="badge blue">${item.status === 'open' ? '待处理' : escapeHtml(item.status)}</span></header>
+      <section class="feedback-suggestion"><span>用户建议</span><p>${escapeHtml(item.suggestion)}</p></section>
+      <div class="feedback-target-line"><span>目标消息 · ${item.target_role === 'assistant' ? '角色回复' : '用户消息'}</span><p>${escapeHtml(item.target_content)}</p></div>
+      <details class="feedback-turn"><summary><span><i data-lucide="messages-square"></i>查看自动抓取的完整轮次</span><b>${item.turn?.messages?.length || 0} 条消息</b></summary><div>${renderFeedbackTurn(item.turn)}</div></details>
+      <footer><code>${escapeHtml(item.trace_id || '未匹配 Trace')}</code><button class="button secondary compact" data-feedback-trace="${escapeHtml(item.trace_id)}" ${item.trace_id ? '' : 'disabled'}><i data-lucide="scan-search"></i><span>查看 Trace</span></button></footer>
+    </article>`).join('') : emptyState('message-square-warning', '尚无用户反馈');
+  $$('[data-feedback-trace]').forEach((button) => button.addEventListener('click', () => {
+    openTraceById(button.dataset.feedbackTrace).catch((error) => toast(error.message, 'error'));
+  }));
+  refreshIcons();
+}
+
+async function openTraceById(traceId) {
+  if (!traceId) return;
+  closeArchitectureAssistant();
+  showTraceDrawer();
+  $('#traceDrawerMeta').textContent = `反馈证据 · ${traceId.slice(-8)}`;
+  $('#traceList').innerHTML = `<button class="trace-item active" data-trace-id="${escapeHtml(traceId)}"><strong><span>${escapeHtml(traceId.slice(-8))}</span><span class="badge blue">反馈关联</span></strong><span>服务端自动抓取</span></button>`;
+  await loadTraceDetail(traceId);
+}
+
 async function openTraceDrawer() {
   closeArchitectureAssistant();
-  $('#traceDrawer').classList.add('open');
+  showTraceDrawer();
   await loadTraces();
   refreshIcons();
 }
@@ -1691,8 +1869,8 @@ async function loadTraceDetail(id) {
 
 function addUser() {
   openModal({
-    title: '新增用户',
-    body: `<label><span>用户名</span><input name="name" required autofocus></label><label><span>显示名称</span><input name="display_name" placeholder="与用户名相同可留空"></label><label><span>标识色</span><input name="avatar_color" type="color" value="#2563eb"></label>`,
+    title: '新增用户数据档案',
+    body: `<p class="feedback-capture-note"><i data-lucide="info"></i><span>这里只创建可用于记忆调试的数据档案，不会开通登录账号。真实用户请在登录页自助注册。</span></p><label><span>用户名</span><input name="name" required autofocus></label><label><span>显示名称</span><input name="display_name" placeholder="与用户名相同可留空"></label><label><span>标识色</span><input name="avatar_color" type="color" value="#2563eb"></label>`,
     submitLabel: '创建',
     onSubmit: async (formData) => {
       const user = await api('/api/users', { method: 'POST', body: Object.fromEntries(formData.entries()) });
@@ -1704,21 +1882,83 @@ function addUser() {
   });
 }
 
-$('#loginForm').addEventListener('submit', async (event) => {
+function setAuthMode(mode) {
+  $$('[data-auth-mode]').forEach((button) => button.classList.toggle('active', button.dataset.authMode === mode));
+  $$('[data-auth-panel]').forEach((panel) => panel.classList.toggle('hidden', panel.dataset.authPanel !== mode));
+  $('#loginError').textContent = '';
+  setTimeout(() => $(`[data-auth-panel="${mode}"] input:not(.hidden)`)?.focus(), 30);
+}
+
+async function finishAuthentication(result, fallbackRole) {
+  state.session = { authenticated: true, role: result.role || fallbackRole, user: result.user || null };
+  state.role = state.session.role;
+  state.currentConversationId = '';
+  await loadBootstrap();
+  await navigate('chat');
+  showApp();
+}
+
+$$('[data-auth-mode]').forEach((button) => button.addEventListener('click', () => setAuthMode(button.dataset.authMode)));
+
+$('#userLoginForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   $('#loginError').textContent = '';
   try {
-    await api('/api/admin/login', { method: 'POST', body: { password: $('#adminPassword').value } });
+    const result = await api('/api/auth/login', {
+      method: 'POST',
+      body: { username: $('#loginUsername').value, password: $('#loginPassword').value }
+    });
+    $('#loginPassword').value = '';
+    await finishAuthentication(result, 'user');
+  } catch (error) {
+    $('#loginError').textContent = error.message;
+  }
+});
+
+$('#registerForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  $('#loginError').textContent = '';
+  const password = $('#registerPassword').value;
+  if (password !== $('#registerPasswordConfirm').value) {
+    $('#loginError').textContent = '两次输入的密码不一致';
+    return;
+  }
+  try {
+    const result = await api('/api/auth/register', {
+      method: 'POST',
+      body: {
+        username: $('#registerUsername').value,
+        display_name: $('#registerDisplayName').value,
+        password
+      }
+    });
+    $('#registerPassword').value = '';
+    $('#registerPasswordConfirm').value = '';
+    await finishAuthentication(result, 'user');
+    toast('注册成功，已进入你的独立记忆空间');
+  } catch (error) {
+    $('#loginError').textContent = error.message;
+  }
+});
+
+$('#adminLoginForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  $('#loginError').textContent = '';
+  try {
+    const result = await api('/api/admin/login', { method: 'POST', body: { password: $('#adminPassword').value } });
     $('#adminPassword').value = '';
-    await loadBootstrap();
-    showApp();
+    await finishAuthentication(result, 'admin');
   } catch (error) {
     $('#loginError').textContent = error.message;
   }
 });
 
 $('#logoutButton').addEventListener('click', async () => {
-  await api('/api/admin/logout', { method: 'POST' }).catch(() => {});
+  await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
+  state.role = null;
+  state.session = null;
+  state.bootstrap = null;
+  setAuthMode('user');
   showLogin();
 });
 
@@ -1728,6 +1968,7 @@ $('#agentSelect').addEventListener('change', async (event) => { state.currentAge
 $('#memoryUserSelect').addEventListener('change', async (event) => { state.currentUserId = event.target.value; await switchContext(); });
 $('#memoryAgentSelect').addEventListener('change', async (event) => { state.currentAgentId = event.target.value; await switchContext(); });
 $('#addUserButton').addEventListener('click', addUser);
+$('#usersAddButton').addEventListener('click', addUser);
 $('#newConversationButton').addEventListener('click', () => { state.currentConversationId = ''; renderConversations(); renderWelcome(); $('#messageInput').focus(); });
 $('#composerForm').addEventListener('submit', (event) => { event.preventDefault(); sendMessage($('#messageInput').value); });
 $('#messageInput').addEventListener('keydown', (event) => {
@@ -1738,7 +1979,7 @@ $('#messageInput').addEventListener('input', (event) => {
   event.target.style.height = `${Math.min(event.target.scrollHeight, 140)}px`;
 });
 $('#openTraceButton').addEventListener('click', () => openTraceDrawer().catch((error) => toast(error.message, 'error')));
-$('#closeTraceButton').addEventListener('click', () => $('#traceDrawer').classList.remove('open'));
+$('#closeTraceButton').addEventListener('click', closeTraceDrawer);
 $$('[data-open-architecture-assistant]').forEach((button) => button.addEventListener('click', () => openArchitectureAssistant()));
 $('#closeArchitectureAssistant').addEventListener('click', closeArchitectureAssistant);
 $('#architectureAssistantForm').addEventListener('submit', (event) => {
@@ -1792,6 +2033,7 @@ $('#editMemoryProfileButton').addEventListener('click', editMemoryProfile);
 $('#editRetrievalProfileButton').addEventListener('click', () => editRetrievalProfile().catch((error) => toast(error.message, 'error')));
 $('#personaForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (!isAdmin()) return;
   await api(`/api/agents/${encodeURIComponent(state.currentAgentId)}`, {
     method: 'PUT',
     body: {
