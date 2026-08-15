@@ -2,9 +2,11 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const appBasePath = $('meta[name="app-base-path"]')?.content || '';
 const CHAT_MESSAGE_MAX_CHARACTERS = 1000;
+const CONTEXT_SWITCHABLE_PAGES = new Set(['chat', 'memory', 'persona', 'automation']);
 
 const state = {
   page: 'chat',
+  portalMode: localStorage.getItem('memory_studio_portal') || '',
   role: null,
   session: null,
   bootstrap: null,
@@ -34,6 +36,7 @@ const state = {
   extractionContract: null,
   extractionContractError: '',
   plots: [],
+  props: [],
   selectedPlotId: '__root__',
   triggers: [],
   tools: [],
@@ -44,18 +47,27 @@ const state = {
   architectureAsking: false,
   adminUsers: [],
   feedback: [],
-  sending: false
+  sending: false,
+  extractingMemory: false,
+  extractionStatus: null
 };
 
 const pageTitles = {
   chat: '角色对话',
   memory: '记忆查询',
   schemas: '记忆设置',
-  persona: '角色与人设',
-  automation: '剧情与故事',
+  persona: '角色设置',
+  automation: '剧情与道具',
   timeline: '系统架构图',
   users: '用户列表',
   feedback: '反馈列表'
+};
+
+const userPageTitles = {
+  chat: '见字如面',
+  memory: '我们的故事',
+  persona: '角色清单',
+  automation: '剧情与道具'
 };
 
 const eventTypeOptions = [
@@ -171,12 +183,65 @@ function applyRoleUi() {
   $$('[data-config-form] input, [data-config-form] textarea, [data-config-form] select').forEach((element) => {
     element.disabled = !admin;
   });
-  $('#sessionRoleLabel').textContent = admin ? '管理员' : (state.session?.user?.display_name || '普通用户');
-  $('#sessionIdentityMeta').textContent = admin ? '全量管理权限' : '配置只读 · 数据隔离';
+  updateTopbarContextUi();
   const memoryProfileLabel = $('#editMemoryProfileButton span');
   if (memoryProfileLabel) memoryProfileLabel.textContent = admin ? '配置说明' : '查看说明';
   const retrievalProfileLabel = $('#editRetrievalProfileButton span');
   if (retrievalProfileLabel) retrievalProfileLabel.textContent = admin ? '召回策略' : '查看召回策略';
+}
+
+function setModelConnectionStatus(label, error = false) {
+  const button = $('#modelHealth');
+  if (!button) return;
+  const description = `模型连接：${label}，点击重新检查`;
+  button.classList.toggle('error', error);
+  button.title = description;
+  button.setAttribute('aria-label', description);
+}
+
+function updateTopbarContextUi() {
+  const contextSwitchable = CONTEXT_SWITCHABLE_PAGES.has(state.page);
+  const admin = isAdmin();
+  const selectedUser = currentUser();
+  const sessionUser = state.session?.user;
+  const accountUser = admin && contextSwitchable ? selectedUser : sessionUser;
+  $('#topbarContext')?.classList.toggle('hidden', !contextSwitchable);
+  $('#userSelect')?.classList.toggle('hidden', !admin || !contextSwitchable);
+  $('#accountName')?.classList.toggle('hidden', admin && contextSwitchable);
+  if ($('#accountName')) $('#accountName').textContent = admin ? '管理员' : (sessionUser?.display_name || '普通用户');
+  const avatar = $('#userAvatar');
+  if (avatar) {
+    avatar.textContent = accountUser?.display_name?.slice(0, 1) || (admin ? '管' : '用');
+    avatar.style.background = accountUser?.avatar_color || '#2563eb';
+  }
+  const accountLabel = admin
+    ? (contextSwitchable ? `管理员正在查看 ${selectedUser?.display_name || '未选择用户'}` : '管理员账户')
+    : `${sessionUser?.display_name || '普通用户'}账户`;
+  $('#accountControl').title = accountLabel;
+  $('#logoutButton').title = `退出${admin ? '管理员' : ''}登录`;
+  $('#logoutButton').setAttribute('aria-label', `退出${admin ? '管理员' : ''}登录`);
+}
+
+function applyPortalUi() {
+  const userMode = state.portalMode === 'user';
+  document.body.dataset.portalMode = state.portalMode;
+  $('#managementNav').classList.toggle('hidden', userMode);
+  $('#userNav').classList.toggle('hidden', !userMode);
+  $$('[data-portal-mode]').forEach((button) => {
+    const active = button.dataset.portalMode === state.portalMode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  $('#pageTitle').textContent = (userMode ? userPageTitles : pageTitles)[state.page] || pageTitles[state.page] || '';
+}
+
+async function switchPortalMode(mode) {
+  if (!['management', 'user'].includes(mode) || mode === state.portalMode) return;
+  state.portalMode = mode;
+  localStorage.setItem('memory_studio_portal', mode);
+  if (mode === 'user' && !Object.hasOwn(userPageTitles, state.page)) state.page = 'chat';
+  applyPortalUi();
+  await navigate(state.page);
 }
 
 function currentUser() {
@@ -284,6 +349,10 @@ async function initialize() {
 async function loadBootstrap() {
   state.bootstrap = await api('/api/bootstrap');
   state.role = state.bootstrap.role || state.role || 'user';
+  if (!['management', 'user'].includes(state.portalMode)) {
+    state.portalMode = state.role === 'admin' ? 'management' : 'user';
+    localStorage.setItem('memory_studio_portal', state.portalMode);
+  }
   if (!state.bootstrap.users.some((item) => item.id === state.currentUserId)) {
     state.currentUserId = state.bootstrap.users[0]?.id || '';
   }
@@ -296,9 +365,12 @@ async function loadBootstrap() {
   localStorage.setItem('memory_studio_user', state.currentUserId);
   localStorage.setItem('memory_studio_agent', state.currentAgentId);
   localStorage.setItem('memory_studio_scene', state.currentSceneId);
+  const providerName = state.bootstrap.models?.textProvider || 'model';
+  setModelConnectionStatus(providerName === 'mock' ? 'Mock 模式' : `${providerName.toUpperCase()} 已配置`);
   renderSelectors();
   renderAgentHeader();
   applyRoleUi();
+  applyPortalUi();
   await loadConversations();
   refreshIcons();
 }
@@ -307,16 +379,16 @@ function renderSelectors() {
   const userOptions = state.bootstrap.users.map((user) =>
     `<option value="${escapeHtml(user.id)}" ${user.id === state.currentUserId ? 'selected' : ''}>${escapeHtml(user.display_name)}</option>`
   ).join('');
-  const agentOptions = state.bootstrap.agents.map((agent) =>
-    `<option value="${escapeHtml(agent.id)}" ${agent.id === state.currentAgentId ? 'selected' : ''}>${escapeHtml(agent.name)}</option>`
-  ).join('');
+  const agentOptions = state.bootstrap.agents.map((agent) => {
+    const scene = sceneForAgent(agent);
+    const label = `${scene?.name || scenarioLabel(agent.scenario_type)} · ${agent.name}`;
+    return `<option value="${escapeHtml(agent.id)}" ${agent.id === state.currentAgentId ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+  }).join('');
   $('#userSelect').innerHTML = userOptions;
   $('#agentSelect').innerHTML = agentOptions;
   $('#memoryUserSelect').innerHTML = userOptions;
   $('#memoryAgentSelect').innerHTML = agentOptions;
-  const user = currentUser();
-  $('#userAvatar').textContent = user?.display_name?.slice(0, 1) || 'U';
-  $('#userAvatar').style.background = user?.avatar_color || '#2563eb';
+  updateTopbarContextUi();
 }
 
 function renderAgentHeader() {
@@ -327,7 +399,6 @@ function renderAgentHeader() {
   $('#agentAvatar').textContent = agent.name.slice(0, 1);
   $('#agentAvatar').style.background = agent.avatar_color;
   const scene = sceneForAgent(agent);
-  $('#topbarSceneName').textContent = scene?.name || scenarioLabel(agent.scenario_type);
   $('#pageMeta').textContent = `${scene?.name || scenarioLabel(agent.scenario_type)} · main_story / main`;
 }
 
@@ -382,9 +453,13 @@ function renderConversations() {
 function renderWelcome() {
   state.currentConversationId = '';
   state.messages = [];
+  state.extractionStatus = null;
   const agent = currentAgent();
+  const user = currentUser();
   $('#messageList').innerHTML = `
-    <div class="message-row assistant"><div><div class="message-bubble">${escapeHtml(agent?.greeting || '今天想聊什么？')}</div></div></div>`;
+    <div class="message-row assistant"><span class="message-avatar" style="background:${escapeHtml(agent?.avatar_color || '#2563eb')}">${escapeHtml(agent?.name?.slice(0, 1) || '角')}</span><div class="message-body"><div class="message-bubble">${escapeHtml(agent?.greeting || '今天想聊什么？')}</div></div></div>`;
+  renderExtractionStatus();
+  loadUnlockedCatalog().catch(() => {});
 }
 
 async function openConversation(id) {
@@ -396,13 +471,17 @@ async function openConversation(id) {
   state.messages = payload.messages;
   renderConversations();
   renderMessages();
+  await loadChatUtilities();
 }
 
 function renderMessages(extraHtml = '') {
   const root = $('#messageList');
+  const agent = currentAgent();
+  const user = currentUser();
   root.innerHTML = state.messages.map((message) => `
     <div class="message-row ${message.role}">
-      <div>
+      <span class="message-avatar" style="background:${escapeHtml(message.role === 'assistant' ? (agent?.avatar_color || '#2563eb') : (user?.avatar_color || '#2563eb'))}">${escapeHtml(message.role === 'assistant' ? (agent?.name?.slice(0, 1) || '角') : (user?.display_name?.slice(0, 1) || '你'))}</span>
+      <div class="message-body">
         <div class="message-bubble">${escapeHtml(message.content)}</div>
         <div class="message-meta"><time>${formatDate(message.created_at)}</time>${String(message.id).startsWith('local_') ? '' : `<button class="message-feedback-button" data-feedback-message="${escapeHtml(message.id)}" title="对这条消息提反馈" aria-label="对这条消息提反馈"><i data-lucide="message-square-warning"></i></button>`}</div>
       </div>
@@ -441,9 +520,123 @@ function updateMessageLength() {
   label.classList.toggle('over-limit', count > CHAT_MESSAGE_MAX_CHARACTERS);
 }
 
+function updateComposerAvailability() {
+  const frozen = state.sending || state.extractingMemory;
+  $('#sendButton').disabled = frozen;
+  $('#messageInput').disabled = state.extractingMemory;
+  $('#memoryExtractionButton').disabled = frozen || !state.extractionStatus?.canExtract;
+  $('#composerForm').classList.toggle('frozen', state.extractingMemory);
+}
+
+function renderExtractionStatus() {
+  const status = state.extractionStatus || {
+    pendingTurns: 0,
+    intervalTurns: Number(state.eventExtractionProfile?.extraction_interval_turns || 8),
+    progress: 0,
+    canExtract: false
+  };
+  const progress = Math.max(0, Math.min(1, Number(status.progress || 0)));
+  $('#memoryExtractionProgress').style.setProperty('--progress', `${Math.round(progress * 360)}deg`);
+  const button = $('#memoryExtractionButton');
+  const title = state.extractingMemory
+    ? '正在更新长期记忆'
+    : `长期记忆进度 ${Number(status.pendingTurns || 0)} / ${Number(status.intervalTurns || 0)} 轮，点击立即更新`;
+  button.title = title;
+  button.setAttribute('aria-label', title);
+  button.classList.toggle('extracting', state.extractingMemory);
+  updateComposerAvailability();
+}
+
+function scopedCatalogQuery() {
+  return new URLSearchParams({
+    user_id: state.currentUserId,
+    agent_id: state.currentAgentId,
+    story_id: 'main_story',
+    branch_id: 'main'
+  });
+}
+
+async function loadUnlockedCatalog() {
+  if (!state.currentUserId || !state.currentAgentId) return;
+  const query = scopedCatalogQuery();
+  const [plots, props] = await Promise.all([
+    api(`/api/plots?${query}`),
+    api(`/api/props?${query}`)
+  ]);
+  state.plots = plots;
+  state.props = props;
+  const unlockedPlotCount = plots.filter((item) => ['unlocked', 'active', 'completed'].includes(item.user_status)).length;
+  const unlockedPropCount = props.filter((item) => ['unlocked', 'active'].includes(item.user_status)).length;
+  $('#unlockedPlotsCount').textContent = unlockedPlotCount;
+  $('#unlockedPropsCount').textContent = unlockedPropCount;
+}
+
+async function loadChatUtilities() {
+  const tasks = [loadUnlockedCatalog()];
+  if (state.currentConversationId) {
+    tasks.push(api(`/api/conversations/${encodeURIComponent(state.currentConversationId)}/memory-extraction`)
+      .then((status) => { state.extractionStatus = status; }));
+  } else {
+    state.extractionStatus = null;
+  }
+  await Promise.all(tasks);
+  renderExtractionStatus();
+}
+
+async function extractMemoryNow() {
+  if (!state.currentConversationId) {
+    toast('先完成一轮对话，才有可更新的长期记忆', 'error');
+    return;
+  }
+  if (!state.extractionStatus?.canExtract || state.sending || state.extractingMemory) return;
+  state.extractingMemory = true;
+  renderExtractionStatus();
+  try {
+    const result = await api(`/api/conversations/${encodeURIComponent(state.currentConversationId)}/memory-extraction`, {
+      method: 'POST'
+    });
+    state.extractionStatus = result.status;
+    await loadUnlockedCatalog();
+    const committed = result.result?.status === 'success';
+    toast(committed ? `长期记忆已更新 · ${Number(result.result.pendingTurns || 0)} 轮` : '当前没有可更新的完整轮次');
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    state.extractingMemory = false;
+    renderExtractionStatus();
+    $('#messageInput').focus();
+  }
+}
+
+function openUnlockedProps() {
+  const items = state.props.filter((item) => ['unlocked', 'active'].includes(item.user_status));
+  openModal({
+    title: '已解锁道具',
+    readOnly: true,
+    width: 680,
+    body: items.length ? `<div class="unlocked-quick-list">${items.map((item) => {
+      const presentation = userPropPresentation(item);
+      return `<article><span class="quick-item-icon"><i data-lucide="${presentation.icon}"></i></span><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(presentation.description)}</p><small>${escapeHtml(presentation.label)} · 已可在剧情中使用</small></div><span class="badge blue">已解锁</span></article>`;
+    }).join('')}</div>`
+      : emptyState('package-open', '还没有解锁道具')
+  });
+}
+
+function openUnlockedPlots() {
+  const items = state.plots.filter((item) => ['unlocked', 'active', 'completed'].includes(item.user_status));
+  openModal({
+    title: '已解锁剧情',
+    readOnly: true,
+    width: 680,
+    body: items.length ? `<div class="unlocked-quick-list">${items.map((item) => `
+      <article><span class="quick-item-icon"><i data-lucide="scroll-text"></i></span><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.premise || '剧情已经向你打开。')}</p><small>${escapeHtml(item.branch_label || '主线')} · ${formatDate(item.unlocked_at)}</small></div><span class="badge blue">${escapeHtml(item.user_status === 'completed' ? '已完成' : '已解锁')}</span></article>`).join('')}</div>`
+      : emptyState('scroll-text', '还没有解锁剧情')
+  });
+}
+
 async function sendMessage(text) {
   const message = text.trim();
-  if (state.sending || !message) return;
+  if (state.sending || state.extractingMemory || !message) return;
   const messageCharacters = Array.from(message).length;
   if (messageCharacters > CHAT_MESSAGE_MAX_CHARACTERS) {
     toast(`单条消息最多 ${CHAT_MESSAGE_MAX_CHARACTERS} 字，当前为 ${messageCharacters} 字`, 'error');
@@ -451,7 +644,7 @@ async function sendMessage(text) {
     return;
   }
   state.sending = true;
-  $('#sendButton').disabled = true;
+  updateComposerAvailability();
   $('#messageInput').value = '';
   $('#messageInput').style.height = 'auto';
   updateMessageLength();
@@ -462,7 +655,8 @@ async function sendMessage(text) {
     created_at: new Date().toISOString()
   };
   state.messages.push(optimistic);
-  renderMessages(`<div class="message-row assistant" id="thinkingRow"><div class="message-bubble thinking"><i></i><i></i><i></i></div></div>`);
+  const agent = currentAgent();
+  renderMessages(`<div class="message-row assistant" id="thinkingRow"><span class="message-avatar" style="background:${escapeHtml(agent?.avatar_color || '#2563eb')}">${escapeHtml(agent?.name?.slice(0, 1) || '角')}</span><div class="message-body"><div class="message-bubble thinking"><i></i><i></i><i></i></div></div></div>`);
   try {
     const result = await api('/api/chat', {
       method: 'POST',
@@ -485,17 +679,19 @@ async function sendMessage(text) {
     toast(error.message, 'error');
   } finally {
     state.sending = false;
-    $('#sendButton').disabled = false;
+    updateComposerAvailability();
     $('#messageInput').focus();
   }
 }
 
 function navigate(page) {
   if (!isAdmin() && ['users', 'feedback'].includes(page)) page = 'chat';
+  if (state.portalMode === 'user' && !Object.hasOwn(userPageTitles, page)) page = 'chat';
   state.page = page;
   $$('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.page === page));
   $$('.page').forEach((item) => item.classList.toggle('active', item.id === `page-${page}`));
-  $('#pageTitle').textContent = pageTitles[page];
+  $('#pageTitle').textContent = (state.portalMode === 'user' ? userPageTitles : pageTitles)[page] || pageTitles[page];
+  updateTopbarContextUi();
   if (page === 'timeline') {
     $('#pageMeta').textContent = `${currentScene()?.name || '当前场景'} · runtime / memory / retrieval`;
     const frame = $('#page-timeline .timeline-frame');
@@ -507,6 +703,7 @@ function navigate(page) {
 }
 
 async function loadCurrentPage() {
+  if (state.page === 'chat') await loadChatUtilities();
   if (state.page === 'memory') await loadMemory();
   if (state.page === 'schemas') await loadSchemas();
   if (state.page === 'persona') await loadPersona();
@@ -515,6 +712,7 @@ async function loadCurrentPage() {
   if (state.page === 'users') await loadAdminUsers();
   if (state.page === 'feedback') await loadAdminFeedback();
   applyRoleUi();
+  applyPortalUi();
   refreshIcons();
 }
 
@@ -537,7 +735,9 @@ function renderArchitectureIndex(index = {}) {
 async function loadArchitectureOverview() {
   const sceneId = currentScene()?.id || '';
   state.architectureOverview = await api(`/api/architecture/overview?scene_id=${encodeURIComponent(sceneId)}`);
-  const { thresholds, compression, timing, index, scene } = state.architectureOverview;
+  const {
+    thresholds, compression, timing, index, scene, runtime = {}, graphStore = {}, temporal = {}
+  } = state.architectureOverview;
   const main = thresholds.mainModel;
   const extraction = thresholds.extraction;
   const extractionInterval = Math.max(1, Number(extraction.intervalTurns || 1));
@@ -546,6 +746,21 @@ async function loadArchitectureOverview() {
   $('#architectureExtractionWindow').textContent = `批次前 ${extraction.contextTurns} 轮 · 最多 ${extraction.messageLimit} 条`;
   $('#architectureEventThreshold').textContent = `每 ${extractionInterval} 轮 · 跨对话补齐尾批次 · 最多 ${extraction.maxEventsPerBatch} 个事件`;
   $('#architectureRuntimeExtractionMode').textContent = `阻塞式 · 每 ${extractionInterval} 轮 / 跨对话更新`;
+  $('#architectureRuntimeName').textContent = runtime.name === 'pi-agent-core'
+    ? `Pi Agent Core ${runtime.version ? `v${runtime.version}` : ''}` : 'Legacy Runtime';
+  $('#architecturePiNodeMeta').textContent = runtime.name === 'pi-agent-core'
+    ? `状态与生命周期事件已启用 · Provider bridge · 工具循环待接入`
+    : 'Legacy 模式 · 可通过 AGENT_RUNTIME=pi 启用';
+  $('#architectureTemporalNodeMeta').textContent = temporal.model === 'bitemporal'
+    ? '抽取 → 双时态版本 → Neo4j 投影 → 触发'
+    : '抽取 → 结构化派生 → 事件图谱 → 触发';
+  $('#architectureSqliteNodeMeta').textContent = '双时态账本、向量、Trace、outbox；大规模混合检索可增 OpenSearch';
+  const graphReady = graphStore.mode === 'neo4j' && graphStore.connected;
+  $('#architectureNeo4jNodeMeta').textContent = graphStore.mode === 'neo4j'
+    ? `${graphReady ? '已连接' : '降级回退'} · 待投影 ${Number(graphStore.pendingProjections || 0)} 个 scope`
+    : (graphStore.mode === 'sqlite'
+      ? 'SQLite 降级模式 · 设置 GRAPH_STORE=neo4j 后启用投影'
+      : '运行态未连接 · Compose/生产环境默认启用 Neo4j');
   $('#architectureExtractionNodeTitle').textContent = `长期记忆更新（每 ${extractionInterval} 轮）`;
   $('#architectureExtractionStepTitle').textContent = '长期记忆更新';
   $('#architectureCompressionStatus').textContent = compression.rollingSummaryEnabled ? '滚动摘要已启用' : '滚动摘要未启用';
@@ -595,6 +810,20 @@ function renderMemoryCategories() {
 
 async function loadMemory() {
   renderMemoryContext();
+  const userMode = state.portalMode === 'user';
+  $('#memoryUserView').classList.toggle('hidden', !userMode);
+  $('#memoryAdminView').classList.toggle('hidden', userMode);
+  if (userMode) {
+    const params = new URLSearchParams(scopeQuery());
+    params.set('order', 'story');
+    [state.memoryValues, state.events] = await Promise.all([
+      api(`/api/memory/values?${scopeQuery()}`),
+      api(`/api/memory/events?${params}`)
+    ]);
+    await loadUnlockedCatalog();
+    renderUserStoryView();
+    return;
+  }
   const valuesMode = state.memoryTab === 'values';
   if (state.memoryTab !== 'graph') {
     state.graphNetwork?.destroy();
@@ -630,6 +859,50 @@ async function loadMemory() {
     const history = await api(`/api/memory/history?${params}`);
     renderMemoryHistory(history);
   }
+}
+
+function memoryValueByKey(key) {
+  return state.memoryValues.find((item) => item.key === key)?.value;
+}
+
+function renderUserStoryView() {
+  const user = currentUser();
+  const agent = currentAgent();
+  const stage = memoryValueByKey('relationship.stage') || '初识';
+  const intimacy = Number(memoryValueByKey('relationship.intimacy') || 0);
+  const trust = Number(memoryValueByKey('relationship.trust') || 0);
+  const address = memoryValueByKey('identity.preferred_address') || user?.display_name || '你';
+  const sharedEvents = state.events.filter((item) => item.memory_space === 'shared_story');
+  const storyEvents = (sharedEvents.length ? sharedEvents : state.events).slice(0, 12);
+  const activePlots = state.plots.filter((item) => ['unlocked', 'active', 'completed'].includes(item.user_status));
+  const activeProps = state.props.filter((item) => ['unlocked', 'active'].includes(item.user_status));
+  const mustRules = memoryValueByKey('response.must_rules') || [];
+  const boundaries = memoryValueByKey('relationship.boundaries') || [];
+  $('#pageMeta').textContent = `${user?.display_name || ''} × ${agent?.name || ''} · main_story`;
+  $('#memoryUserView').innerHTML = `
+    <header class="user-story-hero">
+      <div class="story-portrait-pair"><span style="background:${escapeHtml(user?.avatar_color || '#2563eb')}">${escapeHtml(user?.display_name?.slice(0, 1) || '你')}</span><i data-lucide="sparkles"></i><span style="background:${escapeHtml(agent?.avatar_color || '#2563eb')}">${escapeHtml(agent?.name?.slice(0, 1) || '角')}</span></div>
+      <div><span class="eyebrow">OUR STORY</span><h3>${escapeHtml(address)}与${escapeHtml(agent?.name || '角色')}的故事</h3><p>那些被你确认、被时间留下的片段，会在这里继续生长。</p></div>
+      <span class="relationship-stage">${escapeHtml(stage)}</span>
+    </header>
+    <section class="relationship-ribbon" aria-label="关系状态">
+      <div><span>亲密度</span><strong>${intimacy}</strong><i><b style="width:${Math.min(100, intimacy)}%"></b></i></div>
+      <div><span>信任度</span><strong>${trust}</strong><i><b style="width:${Math.min(100, trust)}%"></b></i></div>
+      <div><span>已解锁剧情</span><strong>${activePlots.length}</strong><small>个故事节点</small></div>
+      <div><span>已拥有道具</span><strong>${activeProps.length}</strong><small>件能力道具</small></div>
+    </section>
+    <div class="user-story-layout">
+      <section class="story-memory-stream">
+        <header><div><span class="eyebrow">MOMENTS</span><h4>故事片段</h4></div><span>${storyEvents.length} 个片段</span></header>
+        <div class="story-moment-list">${storyEvents.length ? storyEvents.map((event, index) => `
+          <article><span class="moment-index">${String(index + 1).padStart(2, '0')}</span><div><time>${escapeHtml(event.story_time || formatDate(event.created_at, false))}</time><h5>${escapeHtml(event.title)}</h5><p>${escapeHtml(event.summary)}</p><span>${event.memory_space === 'shared_story' ? '共同故事' : '长期记忆'} · ${escapeHtml(event.event_type)}</span></div></article>`).join('') : emptyState('book-dashed', '还没有被确认的共同故事')}</div>
+      </section>
+      <aside class="story-keepsakes">
+        <section><header><i data-lucide="hand-heart"></i><h4>彼此的约定</h4></header>${[...mustRules, ...boundaries].length ? `<ul>${[...mustRules, ...boundaries].slice(0, 8).map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '<p>还没有写下长期约定。</p>'}</section>
+        <section><header><i data-lucide="scroll-text"></i><h4>正在展开</h4></header>${activePlots.length ? activePlots.slice(0, 4).map((plot) => `<div class="keepsake-line"><span>${escapeHtml(plot.branch_label || '主线')}</span><strong>${escapeHtml(plot.name)}</strong></div>`).join('') : '<p>新的剧情尚未解锁。</p>'}</section>
+      </aside>
+    </div>`;
+  refreshIcons();
 }
 
 function renderMemoryValue(item) {
@@ -1086,7 +1359,7 @@ function renderRetrievalResult(payload) {
   const preview = embedding.vectorPreview.map((value) => Number(value).toFixed(6)).join(', ');
   return `<div class="retrieval-result">
     <section class="retrieval-section embedding-section">
-      <header><div><i data-lucide="binary"></i><strong>Query Embedding</strong></div><span class="badge ${embedding.fallback ? 'red' : 'blue'}">${embedding.fallback ? '本地降级' : 'Ark 实时请求'}</span></header>
+      <header><div><i data-lucide="binary"></i><strong>Query Embedding</strong></div><span class="badge ${embedding.fallback ? 'red' : 'blue'}">${embedding.fallback ? '本地降级' : `${escapeHtml((embedding.provider || 'provider').toUpperCase())} 实时请求`}</span></header>
       <div class="embedding-facts">
         <div><span>模型</span><strong>${escapeHtml(embedding.model)}</strong></div>
         <div><span>维度</span><strong>${embedding.dimensions}</strong></div>
@@ -1270,6 +1543,27 @@ function renderSceneList() {
     await loadExtractionConfiguration(state.currentSceneId);
     renderSchemas();
   }));
+}
+
+function addScene() {
+  if (!isAdmin()) return;
+  openModal({
+    title: '新建场景',
+    width: 620,
+    submitLabel: '创建场景与记忆设置',
+    body: `<label><span>场景名称</span><input name="name" maxlength="80" placeholder="例如：远行书信" required autofocus></label>
+      <label><span>场景说明</span><textarea name="description" rows="3" maxlength="1000" placeholder="说明该场景的关系、任务或故事边界"></textarea></label>
+      <div class="form-grid two"><label><span>场景图标</span><select name="icon"><option value="sparkles">星光</option><option value="book-heart">故事</option><option value="graduation-cap">学习</option><option value="map">旅途</option><option value="briefcase-business">工作</option></select></label><label><span>强调色</span><input name="accent_color" type="color" value="#2563eb"></label></div>
+      <div class="creation-bundle-note"><i data-lucide="layers-3"></i><span><strong>系统会同步创建</strong><small>1 份结构化记忆设置、1 份长期记忆抽取配置、1 份混合召回策略。</small></span></div>`,
+    onSubmit: async (formData) => {
+      const scene = await api('/api/scenes', { method: 'POST', body: Object.fromEntries(formData.entries()) });
+      state.currentSceneId = scene.id;
+      localStorage.setItem('memory_studio_scene', state.currentSceneId);
+      await loadBootstrap();
+      await navigate('schemas');
+      toast('场景与配套记忆设置已创建');
+    }
+  });
 }
 
 function renderSchemas() {
@@ -1604,6 +1898,13 @@ function editSchema(id = '') {
 async function loadPersona() {
   state.bootstrap.agents = await api('/api/agents');
   renderSelectors();
+  const userMode = state.portalMode === 'user';
+  $('#personaUserView').classList.toggle('hidden', !userMode);
+  $('#personaAdminView').classList.toggle('hidden', userMode);
+  if (userMode) {
+    renderUserRoleCatalog();
+    return;
+  }
   renderPersonaAgentList();
   const agent = currentAgent();
   if (!agent) return;
@@ -1623,6 +1924,61 @@ async function loadPersona() {
   $('#personaAvatar').style.background = agent.avatar_color;
   $('#pageMeta').textContent = `${scene?.name || scenarioLabel(agent.scenario_type)} · ${agent.name}专属配置`;
   applyRoleUi();
+}
+
+function renderUserRoleCatalog() {
+  const selectedAgent = currentAgent();
+  $('#pageMeta').textContent = `${state.bootstrap.agents.length} 位角色 · 选择一段相遇`;
+  $('#personaUserView').innerHTML = `
+    <header class="user-role-hero"><span class="eyebrow">CHARACTER BOOK</span><h3>想和谁继续写信？</h3><p>每个角色有自己的性格、场景与故事记忆。切换角色不会串联彼此的私密经历。</p></header>
+    <div class="user-role-grid">${state.bootstrap.agents.filter((agent) => agent.enabled).map((agent) => {
+      const scene = sceneForAgent(agent);
+      const selected = agent.id === selectedAgent?.id;
+      const attributes = Object.entries(parseJson(agent.fixed_attributes_json, {})).slice(0, 3);
+      return `<article class="user-role-card ${selected ? 'selected' : ''}" style="--role-color:${escapeHtml(agent.avatar_color || '#2563eb')}">
+        <header><span class="role-card-avatar" style="background:${escapeHtml(agent.avatar_color || '#2563eb')}">${escapeHtml(agent.name.slice(0, 1))}</span><span class="role-scene">${escapeHtml(scene?.name || scenarioLabel(agent.scenario_type))}</span>${selected ? '<span class="badge blue">当前角色</span>' : ''}</header>
+        <div><h4>${escapeHtml(agent.name)}</h4><p>${escapeHtml(agent.description)}</p></div>
+        <div class="role-attribute-chips">${attributes.map(([key, value]) => `<span><b>${escapeHtml(key)}</b>${escapeHtml(value)}</span>`).join('')}</div>
+        <blockquote>${escapeHtml(agent.greeting || '今天想聊什么？')}</blockquote>
+        <button class="button ${selected ? 'secondary' : 'primary'} wide choose-user-role" data-role-id="${escapeHtml(agent.id)}"><i data-lucide="mail-open"></i><span>${selected ? '继续见字' : '与 TA 见字'}</span></button>
+      </article>`;
+    }).join('')}</div>`;
+  $$('.choose-user-role', $('#personaUserView')).forEach((button) => button.addEventListener('click', async () => {
+    if (button.dataset.roleId !== state.currentAgentId) {
+      state.currentAgentId = button.dataset.roleId;
+      await switchContext();
+    }
+    await navigate('chat');
+  }));
+  refreshIcons();
+}
+
+function addAgent() {
+  if (!isAdmin()) return;
+  openModal({
+    title: '新建角色',
+    width: 720,
+    submitLabel: '创建角色',
+    body: `<div class="form-grid two"><label><span>角色名称</span><input name="name" maxlength="80" required autofocus></label><label><span>所属场景</span><select name="scene_id" required>${state.bootstrap.scenes.map((scene) => `<option value="${escapeHtml(scene.id)}">${escapeHtml(scene.name)}</option>`).join('')}</select></label></div>
+      <label><span>角色摘要</span><input name="description" maxlength="500" placeholder="一句话说明角色气质和陪伴方式"></label>
+      <label><span>开场语</span><textarea name="greeting" rows="2" placeholder="你来了。今天想从哪里聊起？"></textarea></label>
+      <label><span>核心人设提示词</span><textarea name="system_prompt" rows="10" required placeholder="定义角色身份、表达方式、关系边界和事实约束"></textarea></label>
+      <div class="form-grid two"><label><span>头像颜色</span><input name="avatar_color" type="color" value="#2563eb"></label><label><span>初始固定属性</span><input name="identity" placeholder="例如：独立书店主理人"></label></div>`,
+    onSubmit: async (formData) => {
+      const identity = String(formData.get('identity') || '').trim();
+      const agent = await api('/api/agents', {
+        method: 'POST',
+        body: {
+          ...Object.fromEntries(formData.entries()),
+          fixed_attributes: identity ? { 身份: identity } : {}
+        }
+      });
+      state.currentAgentId = agent.id;
+      await loadBootstrap();
+      await navigate('persona');
+      toast('角色已创建');
+    }
+  });
 }
 
 function renderPersonaFixedAttributes(attributes = {}) {
@@ -1754,11 +2110,16 @@ function describeCondition(condition) {
     const plot = plotById(condition.plot_id);
     return `剧情「${plot?.name || condition.plot_id}」状态 ${condition.operator || '=='} ${formatConditionValue(condition.value || 'unlocked')}`;
   }
+  if (condition.prop_id) {
+    const prop = state.props.find((item) => item.id === condition.prop_id);
+    return `道具「${prop?.name || condition.prop_id}」状态 ${condition.operator || '=='} ${formatConditionValue(condition.value || 'unlocked')}`;
+  }
   return '自定义条件';
 }
 
 function describeAction(action) {
   if (action.type === 'unlock_plot') return `解锁剧情：${plotById(action.plot_id)?.name || action.plot_id}`;
+  if (action.type === 'unlock_prop') return `解锁道具：${state.props.find((item) => item.id === action.prop_id)?.name || action.prop_id}`;
   if (action.type === 'memory_update') return `更新记忆：${memoryKeyLabels[action.key] || action.key}`;
   if (action.type === 'tool_call') return `调用工具：${action.tool_key}`;
   return action.type || '未知动作';
@@ -1793,7 +2154,7 @@ function renderStoryOverview() {
     <div><span>剧情节点</span><strong>${state.plots.length}</strong><small>${active} 个已启用</small></div>
     <div><span>故事分支</span><strong>${branches}</strong><small>按前置节点连接</small></div>
     <div><span>已配触发</span><strong>${covered}/${state.plots.length || 0}</strong><small>节点有解锁条件</small></div>
-    <div><span>可用工具</span><strong>${state.tools.filter((tool) => tool.enabled).length}</strong><small>Function call 执行器</small></div>`;
+    <div><span>道具能力</span><strong>${state.props.filter((prop) => prop.status === 'enabled').length}</strong><small>${state.props.filter((prop) => prop.status === 'draft').length} 个待审核</small></div>`;
 }
 
 function renderStoryNode(plot) {
@@ -1870,7 +2231,7 @@ function renderStoryInspector() {
     <span class="story-branch-name">${escapeHtml(plot.branch_label || '主线')}</span><h3>${escapeHtml(plot.name)}</h3><p>${escapeHtml(plot.premise || '未填写剧情前提')}</p>
     <section class="story-inspector-section"><header><span>注入主模型的剧情指令</span><code>plot.instructions</code></header><div class="story-prompt-preview">${escapeHtml(plot.instructions)}</div></section>
     <section class="story-inspector-section"><header><span>解锁条件与动作</span><b>${triggers.length} 组</b></header>${triggers.length ? triggers.map((trigger) => `<article class="story-trigger-brief"><div><i data-lucide="zap"></i><span><strong>${escapeHtml(trigger.name)}</strong><small>${escapeHtml(describeCondition(trigger.condition))}</small></span></div><p>${escapeHtml((trigger.actions || []).map(describeAction).join(' · '))}</p>${isAdmin() ? `<button class="text-action edit-trigger" data-id="${escapeHtml(trigger.id)}">编辑触发配置<i data-lucide="arrow-up-right"></i></button>` : ''}</article>`).join('') : `<div class="story-inline-empty"><i data-lucide="circle-dashed"></i><span>还没有解锁条件，该节点不会自动进入用户剧情。</span>${isAdmin() ? '<button id="addPlotTrigger" class="button secondary compact">配置触发</button>' : ''}</div>`}</section>
-    <dl class="story-facts"><div><dt>前置节点</dt><dd>${escapeHtml(parent?.name || '故事起点')}</dd></div><div><dt>后继分支</dt><dd>${children.length}</dd></div><div><dt>优先级</dt><dd>${Number(plot.priority)}</dd></div></dl>
+    <dl class="story-facts"><div><dt>前置节点</dt><dd>${escapeHtml(parent?.name || '故事起点')}</dd></div><div><dt>适用性别</dt><dd>${escapeHtml((plot.audience_genders || []).join('、') || '不限')}</dd></div><div><dt>后继分支</dt><dd>${children.length}</dd></div><div><dt>优先级</dt><dd>${Number(plot.priority)}</dd></div></dl>
     ${isAdmin() ? `<div class="story-inspector-actions"><button class="button secondary" id="addChildPlot"><i data-lucide="git-branch-plus"></i><span>添加后继分支</span></button><button class="button secondary" id="addAnotherTrigger"><i data-lucide="zap"></i><span>新增触发</span></button></div>` : '<span class="readonly-note"><i data-lucide="eye"></i>当前为只读视图</span>'}`;
   $('#editSelectedPlot')?.addEventListener('click', () => editPlot(plot.id));
   $('#addChildPlot')?.addEventListener('click', () => editPlot('', plot.id));
@@ -1905,7 +2266,8 @@ function editPlot(id = '', defaultParentId = '') {
   if (!isAdmin()) return;
   const plot = plotById(id) || {
     name: '', premise: '', instructions: '', parent_plot_id: defaultParentId,
-    branch_label: defaultParentId ? '新分支' : '主线', node_type: defaultParentId ? 'branch' : 'chapter', priority: 50, enabled: 1
+    branch_label: defaultParentId ? '新分支' : '主线', node_type: defaultParentId ? 'branch' : 'chapter',
+    audience_genders: [], priority: 50, enabled: 1
   };
   const excluded = id ? plotDescendantIds(id) : new Set();
   const parentOptions = state.plots.filter((item) => item.id !== id && !excluded.has(item.id));
@@ -1915,9 +2277,10 @@ function editPlot(id = '', defaultParentId = '') {
       <div class="form-grid two"><label><span>前置剧情节点</span><select name="parent_plot_id"><option value="">故事起点</option>${parentOptions.map((item) => `<option value="${escapeHtml(item.id)}" ${plot.parent_plot_id === item.id ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select><small>仅表示剧情结构；实际解锁仍由触发条件决定。</small></label><label><span>分支名称</span><input name="branch_label" value="${escapeHtml(plot.branch_label || '主线')}" placeholder="例如：情感线" required></label></div>
       <label><span>剧情前提</span><textarea name="premise" rows="3" placeholder="说明这个节点的故事意图与进入时机">${escapeHtml(plot.premise)}</textarea></label>
       <label><span>进入主模型 Input 的剧情指令</span><textarea name="instructions" rows="7" required placeholder="角色在该剧情中可以做什么、不能做什么，如何给用户选择空间">${escapeHtml(plot.instructions)}</textarea><small>节点解锁后，这段内容会编译进当前角色的 System Prompt。</small></label>
+      <fieldset><legend>适用性别</legend><div class="checkbox-grid"><label class="checkbox-row"><input name="audience_genders" type="checkbox" value="男" ${(plot.audience_genders || []).includes('男') ? 'checked' : ''}><span>男</span></label><label class="checkbox-row"><input name="audience_genders" type="checkbox" value="女" ${(plot.audience_genders || []).includes('女') ? 'checked' : ''}><span>女</span></label><label class="checkbox-row"><input name="audience_genders" type="checkbox" value="非二元" ${(plot.audience_genders || []).includes('非二元') ? 'checked' : ''}><span>非二元</span></label><label class="checkbox-row"><input name="audience_genders" type="checkbox" value="不透露" ${(plot.audience_genders || []).includes('不透露') ? 'checked' : ''}><span>不透露</span></label></div><small>不选择表示不限。运行时按当前有效结构化记忆过滤，旧支线状态仅保留审计。</small></fieldset>
       <div class="form-grid two"><label><span>注入优先级</span><input name="priority" type="number" value="${Number(plot.priority)}" min="0" max="100"></label><label class="checkbox-row"><input name="enabled" type="checkbox" ${plot.enabled ? 'checked' : ''}><span>启用该剧情节点</span></label></div>`,
     onSubmit: async (formData) => {
-      const body = { ...Object.fromEntries(formData.entries()), agent_id: state.currentAgentId, enabled: formData.has('enabled'), priority: Number(formData.get('priority')) };
+      const body = { ...Object.fromEntries(formData.entries()), agent_id: state.currentAgentId, audience_genders: formData.getAll('audience_genders'), enabled: formData.has('enabled'), priority: Number(formData.get('priority')) };
       const saved = await api(id ? `/api/plots/${id}` : '/api/plots', { method: id ? 'PUT' : 'POST', body });
       state.selectedPlotId = saved.id;
       await loadAutomation();
@@ -1941,16 +2304,196 @@ function renderTriggerConfiguration() {
   }));
 }
 
-function renderToolCapabilities() {
-  $('#automationContent').innerHTML = `<section class="story-config-surface"><header class="story-subview-header"><div><span class="eyebrow">FUNCTION CAPABILITIES</span><h3>工具能力</h3><p>剧情触发可以在模型之外调用这些可审计的函数能力。</p></div></header><div class="tool-capability-list">${state.tools.map((tool) => `
-    <article class="tool-capability-row"><span class="tool-capability-icon"><i data-lucide="wrench"></i></span><div><strong>${escapeHtml(tool.name)}</strong><code>${escapeHtml(tool.key)}</code><p>${escapeHtml(tool.description)}</p></div><span class="badge">${escapeHtml(tool.handler_type)}</span><div class="tool-parameters"><span>入参</span><strong>${Object.keys(tool.input_schema?.properties || {}).length}</strong></div><span class="badge ${tool.enabled ? 'blue' : 'red'}">${tool.enabled ? '启用' : '停用'}</span></article>`).join('')}</div></section>`;
+function propTypeLabel(value) {
+  return value === 'mcp_json' ? 'MCP Server' : 'Skill ZIP';
+}
+
+function partiallyRevealName(value) {
+  const characters = Array.from(String(value || '').trim());
+  if (!characters.length) return '未知线索';
+  const visibleCount = characters.length <= 3 ? 1 : 2;
+  return `${characters.slice(0, visibleCount).join('')}${'·'.repeat(Math.min(3, Math.max(2, characters.length - visibleCount)))}`;
+}
+
+function propCapabilityKeys(prop) {
+  const capabilities = Array.isArray(prop?.manifest?.capabilities) ? prop.manifest.capabilities : [];
+  return capabilities.map((item) => String(typeof item === 'string' ? item : item?.key || '').toLowerCase()).filter(Boolean);
+}
+
+function userPropPresentation(prop) {
+  const capabilities = propCapabilityKeys(prop);
+  if (capabilities.some((key) => /audio|voice|speech/.test(key))) {
+    return { label: '声音信物', icon: 'audio-lines', description: '把想说的话寄成一封可以听见的信。' };
+  }
+  if (capabilities.some((key) => /image|photo|picture|album/.test(key))) {
+    return { label: '影像信物', icon: 'images', description: '把共同经历收进一页可以重温的画面。' };
+  }
+  if (capabilities.some((key) => /search|browse|place|travel|map/.test(key))) {
+    return { label: '远行线索', icon: 'compass', description: '为你们尚未抵达的地方寻找公开线索。' };
+  }
+  if (capabilities.some((key) => /generate|write|create/.test(key))) {
+    return { label: '创作信物', icon: 'wand-sparkles', description: '把故事里的灵感变成一份新的作品。' };
+  }
+  return { label: '特别道具', icon: 'sparkles', description: '它会在合适的剧情中回应你的选择。' };
+}
+
+function propStatusLabel(value) {
+  return ({ draft: '待审核', enabled: '已启用', disabled: '已停用' })[value] || value;
+}
+
+function renderPropLibrary() {
+  $('#automationContent').innerHTML = `<section class="story-config-surface"><header class="story-subview-header prop-library-header"><div><span class="eyebrow">CAPABILITY INVENTORY</span><h3>道具库</h3><p>剧情解锁的是使用资格。Skill 与 MCP 经管理员审核后，才可交给服务端能力网关执行。</p></div><div class="template-downloads"><a class="button secondary compact" href="${appBasePath}/api/props/templates/skill.zip" download><i data-lucide="download"></i><span>Skill 模版</span></a><a class="button secondary compact" href="${appBasePath}/api/props/templates/mcp.json" download><i data-lucide="download"></i><span>MCP 模版</span></a></div></header>
+    <div class="capability-boundary"><i data-lucide="shield-check"></i><div><strong>上传不等于执行</strong><span>新包默认待审核；密钥必须使用 secret_ref，触发器只能授予资格，不能绕过授权、确认与审计。</span></div></div>
+    <div class="prop-library-grid">${state.props.length ? state.props.map((prop) => `
+      <article class="prop-library-card ${escapeHtml(prop.status)}">
+        <header><span class="prop-package-icon"><i data-lucide="${prop.package_type === 'mcp_json' ? 'server-cog' : 'package-open'}"></i></span><div><span>${escapeHtml(propTypeLabel(prop.package_type))}</span><strong>${escapeHtml(prop.name)}</strong></div><span class="badge ${prop.status === 'enabled' ? 'blue' : prop.status === 'draft' ? '' : 'red'}">${escapeHtml(propStatusLabel(prop.status))}</span></header>
+        <p>${escapeHtml(prop.description)}</p>
+        <dl><div><dt>Key</dt><dd><code>${escapeHtml(prop.key)}</code></dd></div><div><dt>版本</dt><dd>${escapeHtml(prop.version)}</dd></div><div><dt>风险</dt><dd>${prop.risk_level === 'high' ? '高 · 逐次确认' : '中 · 网关审核'}</dd></div><div><dt>用户状态</dt><dd>${prop.user_status === 'locked' ? '未解锁' : '已解锁'}</dd></div></dl>
+        <footer><span>${prop.content_hash ? `SHA256 ${escapeHtml(prop.content_hash.slice(0, 10))}…` : '内置能力描述'}</span>${isAdmin() ? `<button class="button secondary compact edit-prop" data-prop-id="${escapeHtml(prop.id)}"><i data-lucide="settings-2"></i><span>审核与设置</span></button>` : '<span class="badge">只读</span>'}</footer>
+      </article>`).join('') : emptyState('package-open', '还没有道具能力包')}</div></section>`;
+  $$('.edit-prop', $('#automationContent')).forEach((button) => button.addEventListener('click', () => editProp(button.dataset.propId)));
+}
+
+function renderUserAdventureView() {
+  const agent = currentAgent();
+  const unlockedPlots = state.plots.filter((item) => ['unlocked', 'active', 'completed'].includes(item.user_status));
+  const lockedPlots = state.plots.filter((item) => item.enabled && item.user_status === 'locked');
+  const enabledProps = state.props.filter((item) => item.status === 'enabled');
+  const unlockedProps = enabledProps.filter((item) => ['unlocked', 'active'].includes(item.user_status));
+  $('#pageMeta').textContent = `${agent?.name || '当前角色'} · ${unlockedPlots.length} 段剧情 · ${unlockedProps.length} 件道具`;
+  $('#automationUserView').innerHTML = `
+    <header class="user-adventure-hero" style="--adventure-color:${escapeHtml(agent?.avatar_color || '#2563eb')}">
+      <span class="adventure-avatar" style="background:${escapeHtml(agent?.avatar_color || '#2563eb')}">${escapeHtml(agent?.name?.slice(0, 1) || '角')}</span>
+      <div><span class="eyebrow">STORY & KEEPSAKES</span><h3>${escapeHtml(agent?.name || '角色')}与你的剧情与道具</h3><p>故事会根据你们真实建立的关系和选择逐步打开。</p></div>
+      <div class="adventure-tally"><span><strong>${unlockedPlots.length}</strong>剧情</span><span><strong>${unlockedProps.length}</strong>道具</span></div>
+    </header>
+    <section class="user-plot-section"><header><div><span class="eyebrow">CHAPTERS</span><h4>已经打开的篇章</h4></div></header>
+      <div class="user-plot-path">${unlockedPlots.length ? unlockedPlots.map((plot, index) => `
+        <article><span class="plot-path-index">${String(index + 1).padStart(2, '0')}</span><div><span>${escapeHtml(plot.branch_label || '主线')} · ${escapeHtml(storyNodeMeta[plot.node_type]?.label || '章节')}</span><h5>${escapeHtml(plot.name)}</h5><p>${escapeHtml(plot.premise || '这一段故事已经向你打开。')}</p></div><i data-lucide="${plot.user_status === 'completed' ? 'circle-check-big' : 'book-open'}"></i></article>`).join('') : emptyState('book-dashed', '故事的第一章还在等待')}</div>
+      ${lockedPlots.length ? `<div class="locked-chapter-preview"><div class="locked-chapter-hint"><i data-lucide="lock-keyhole"></i><span>还有 ${lockedPlots.length} 个篇章会随关系与选择逐步打开</span></div><div class="locked-chapter-teasers">${lockedPlots.slice(0, 3).map((plot) => `<span><i data-lucide="sparkles"></i><small>未开启篇章</small><strong>${escapeHtml(partiallyRevealName(plot.name))}</strong></span>`).join('')}</div>${lockedPlots.length > 3 ? `<small class="locked-chapter-more">另有 ${lockedPlots.length - 3} 条线索仍未显露</small>` : ''}</div>` : ''}
+    </section>
+    <section class="user-prop-section"><header><div><span class="eyebrow">KEEPSAKES</span><h4>道具匣</h4></div><span>${unlockedProps.length} / ${enabledProps.length}</span></header>
+      <div class="user-prop-grid">${enabledProps.length ? enabledProps.map((prop) => {
+        const unlocked = ['unlocked', 'active'].includes(prop.user_status);
+        const presentation = userPropPresentation(prop);
+        return `<article class="user-prop-item ${unlocked ? 'unlocked' : 'locked'}"><span class="user-prop-icon"><i data-lucide="${unlocked ? presentation.icon : 'lock-keyhole'}"></i></span><div><span>${escapeHtml(presentation.label)}</span><h5>${escapeHtml(unlocked ? prop.name : partiallyRevealName(prop.name))}</h5><p>${escapeHtml(unlocked ? presentation.description : '名字只显露了一角，真正用途会在解锁时出现。')}</p></div>${unlocked ? '<span class="badge blue">已拥有</span>' : ''}</article>`;
+      }).join('') : emptyState('package-open', '角色还没有可解锁道具')}</div>
+    </section>`;
+  refreshIcons();
+}
+
+function openPropTypeChooser() {
+  if (!isAdmin()) return;
+  openModal({
+    title: '新建道具',
+    readOnly: true,
+    width: 680,
+    body: `<div class="prop-type-chooser"><button type="button" data-prop-upload="skill_zip"><i data-lucide="package-open"></i><span><strong>上传 Skill ZIP</strong><small>适合语音、图片、内容生成等受控能力包</small></span><i data-lucide="arrow-right"></i></button><button type="button" data-prop-upload="mcp_json"><i data-lucide="server-cog"></i><span><strong>上传 MCP JSON</strong><small>适合联网搜索、业务系统和外部工具服务</small></span><i data-lucide="arrow-right"></i></button></div>`
+  });
+  $$('[data-prop-upload]', $('#modalRoot')).forEach((button) => button.addEventListener('click', () => {
+    const type = button.dataset.propUpload;
+    $('#modalRoot').innerHTML = '';
+    openPropUpload(type);
+  }));
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function openPropUpload(type) {
+  const skill = type === 'skill_zip';
+  openModal({
+    title: skill ? '上传 Skill ZIP' : '上传 MCP JSON',
+    width: 720,
+    submitLabel: '上传为待审核道具',
+    body: `<div class="form-grid two"><label><span>道具名称</span><input name="name" required autofocus placeholder="例如：语音信笺"></label><label><span>道具 Key</span><input name="key" required pattern="[a-z][a-z0-9_-]{2,59}" placeholder="voice_letter"></label></div>
+      <label><span>道具说明</span><textarea name="description" rows="3" required placeholder="说明用户获得什么能力，以及使用时的边界"></textarea></label>
+      <div class="form-grid two"><label><span>版本</span><input name="version" value="1.0.0" required></label><label><span>${skill ? 'Skill ZIP' : 'MCP JSON'}</span><input name="package_file" type="file" accept="${skill ? '.zip,application/zip' : '.json,application/json'}" required></label></div>
+      ${skill ? `<fieldset><legend>能力声明</legend><div class="checkbox-grid"><label class="checkbox-row"><input name="capabilities" type="checkbox" value="send_audio"><span>发送语音</span></label><label class="checkbox-row"><input name="capabilities" type="checkbox" value="send_image"><span>发送图片</span></label><label class="checkbox-row"><input name="capabilities" type="checkbox" value="generate_content"><span>生成内容</span></label></div></fieldset>` : ''}
+      <div class="upload-security-note"><i data-lucide="shield-check"></i><span>${skill ? 'ZIP 仅存储并计算哈希，不会在上传时解压或执行。' : '明文 token、API Key 和 Authorization 会被拒绝，请使用 secret_ref。'}</span></div>`,
+    onSubmit: async (formData) => {
+      const file = formData.get('package_file');
+      if (!(file instanceof File) || !file.size) throw new Error('请选择上传文件');
+      if (file.size > 5 * 1024 * 1024) throw new Error('文件不能超过 5MB');
+      let manifest;
+      let fileBase64 = '';
+      if (skill) {
+        fileBase64 = arrayBufferToBase64(await file.arrayBuffer());
+        manifest = {
+          schema_version: 'memory-agent.skill/v1',
+          key: formData.get('key'),
+          name: formData.get('name'),
+          version: formData.get('version'),
+          capabilities: formData.getAll('capabilities'),
+          execution: 'gated_runtime',
+          confirmation: 'each_call'
+        };
+      } else {
+        try { manifest = JSON.parse(await file.text()); } catch { throw new Error('MCP 文件不是合法 JSON'); }
+      }
+      await api('/api/props', {
+        method: 'POST',
+        body: {
+          agent_id: state.currentAgentId,
+          package_type: type,
+          name: formData.get('name'),
+          key: formData.get('key'),
+          description: formData.get('description'),
+          version: formData.get('version'),
+          file_name: file.name,
+          file_base64: fileBase64,
+          manifest
+        }
+      });
+      await loadAutomation();
+      toast('道具已上传，当前为待审核状态');
+    }
+  });
+}
+
+function editProp(id) {
+  if (!isAdmin()) return;
+  const prop = state.props.find((item) => item.id === id);
+  if (!prop) return;
+  openModal({
+    title: `审核道具 · ${prop.name}`,
+    width: 680,
+    submitLabel: '保存审核结果',
+    body: `<div class="prop-review-summary"><span class="prop-package-icon"><i data-lucide="${prop.package_type === 'mcp_json' ? 'server-cog' : 'package-open'}"></i></span><div><strong>${escapeHtml(propTypeLabel(prop.package_type))}</strong><code>${escapeHtml(prop.content_hash || '内置能力')}</code></div><span class="badge ${prop.risk_level === 'high' ? 'red' : ''}">${prop.risk_level === 'high' ? '高风险' : '中风险'}</span></div>
+      <div class="form-grid two"><label><span>道具名称</span><input name="name" value="${escapeHtml(prop.name)}" required></label><label><span>版本</span><input name="version" value="${escapeHtml(prop.version)}" required></label></div>
+      <label><span>道具说明</span><textarea name="description" rows="4" required>${escapeHtml(prop.description)}</textarea></label>
+      <label><span>审核状态</span><select name="status"><option value="draft" ${prop.status === 'draft' ? 'selected' : ''}>待审核</option><option value="enabled" ${prop.status === 'enabled' ? 'selected' : ''}>审核通过并启用</option><option value="disabled" ${prop.status === 'disabled' ? 'selected' : ''}>停用</option></select></label>
+      <details class="advanced-config"><summary>能力清单预览</summary><pre class="code-block">${escapeHtml(JSON.stringify(prop.manifest || {}, null, 2))}</pre></details>`,
+    onSubmit: async (formData) => {
+      await api(`/api/props/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body: {
+          name: formData.get('name'),
+          description: formData.get('description'),
+          version: formData.get('version'),
+          status: formData.get('status')
+        }
+      });
+      await loadAutomation();
+      toast('道具审核状态已更新');
+    }
+  });
 }
 
 async function loadAutomation() {
-  [state.plots, state.triggers, state.tools] = await Promise.all([
-    api(`/api/plots?agent_id=${encodeURIComponent(state.currentAgentId)}`),
+  const catalogQuery = scopedCatalogQuery();
+  [state.plots, state.triggers, state.tools, state.props, state.schemas] = await Promise.all([
+    api(`/api/plots?${catalogQuery}`),
     api(`/api/triggers?agent_id=${encodeURIComponent(state.currentAgentId)}`),
-    api('/api/tools')
+    api('/api/tools'),
+    api(`/api/props?${catalogQuery}`),
+    api('/api/memory/schemas')
   ]);
   if (state.selectedPlotId !== '__root__' && !plotById(state.selectedPlotId)) state.selectedPlotId = '__root__';
   const agent = currentAgent();
@@ -1960,6 +2503,13 @@ async function loadAutomation() {
   $('#storyHeaderMeta').textContent = `${scene?.name || scenarioLabel(agent?.scenario_type)} · ${agent?.name || '当前角色'}专属剧情 · user / agent / story / branch 隔离`;
   $('#storyTreeTitle').textContent = `${agent?.name || '当前角色'}的主故事线`;
   $('#pageMeta').textContent = `${scene?.name || '当前场景'} · ${agent?.name || '当前角色'} · main_story / main`;
+  const userMode = state.portalMode === 'user';
+  $('#automationUserView').classList.toggle('hidden', !userMode);
+  $('#automationAdminView').classList.toggle('hidden', userMode);
+  if (userMode) {
+    renderUserAdventureView();
+    return;
+  }
   renderStoryOverview();
   renderAutomation();
 }
@@ -1970,41 +2520,241 @@ function renderAutomation() {
   $('#automationContent').classList.toggle('hidden', storyMode);
   $('#addPlotButton').classList.toggle('hidden', !storyMode || !isAdmin());
   $('#addTriggerButton').classList.toggle('hidden', state.automationTab !== 'triggers' || !isAdmin());
+  $('#addPropButton').classList.toggle('hidden', state.automationTab !== 'props' || !isAdmin());
   if (storyMode) renderStoryTree();
   else if (state.automationTab === 'triggers') renderTriggerConfiguration();
-  else renderToolCapabilities();
+  else renderPropLibrary();
   applyRoleUi();
   refreshIcons();
+}
+
+function effectiveTriggerSchemas() {
+  const scenarioType = sceneForAgent()?.scenario_type;
+  return state.schemas.filter((schema) => schema.enabled
+    && (schema.scenario_type === 'all' || schema.scenario_type === scenarioType));
+}
+
+function conditionSource(condition = {}) {
+  if (condition.plot_id) return 'plot';
+  if (condition.prop_id) return 'prop';
+  return 'memory';
+}
+
+function conditionTargetOptions(source, selected = '') {
+  if (source === 'plot') {
+    return state.plots.map((plot) => `<option value="${escapeHtml(plot.id)}" ${plot.id === selected ? 'selected' : ''}>${escapeHtml(plot.branch_label || '主线')} / ${escapeHtml(plot.name)}</option>`).join('');
+  }
+  if (source === 'prop') {
+    return state.props.map((prop) => `<option value="${escapeHtml(prop.id)}" ${prop.id === selected ? 'selected' : ''}>${escapeHtml(prop.name)} · ${escapeHtml(propStatusLabel(prop.status))}</option>`).join('');
+  }
+  return effectiveTriggerSchemas().map((schema) => `<option value="${escapeHtml(schema.key)}" ${schema.key === selected ? 'selected' : ''}>${escapeHtml(schema.category)} / ${escapeHtml(schema.label)}</option>`).join('');
+}
+
+function conditionRowHtml(condition = {}) {
+  const source = conditionSource(condition);
+  const target = condition.memory_key || condition.plot_id || condition.prop_id || '';
+  const value = Array.isArray(condition.value) ? condition.value.join(', ') : (condition.value ?? '');
+  const operator = condition.operator || '==';
+  return `<div class="lowcode-rule-row" data-condition-row>
+    <span class="rule-row-grip"><i data-lucide="grip-vertical"></i></span>
+    <label><span>来源</span><select data-condition-source><option value="memory" ${source === 'memory' ? 'selected' : ''}>结构化记忆</option><option value="plot" ${source === 'plot' ? 'selected' : ''}>剧情状态</option><option value="prop" ${source === 'prop' ? 'selected' : ''}>道具状态</option></select></label>
+    <label class="rule-target"><span>字段 / 对象</span><select data-condition-target>${conditionTargetOptions(source, target)}</select></label>
+    <label><span>判断</span><select data-condition-operator>${[['==','等于'],['!=','不等于'],['>=','大于等于'],['>','大于'],['<=','小于等于'],['<','小于'],['contains','包含'],['in','属于其中之一'],['exists','已有值']].map(([key, label]) => `<option value="${key}" ${operator === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+    <label class="rule-value"><span>值</span><input data-condition-value value="${escapeHtml(value)}" placeholder="输入判断值" ${operator === 'exists' ? 'disabled' : ''}></label>
+    <button type="button" class="icon-button remove-condition" title="删除条件" aria-label="删除条件"><i data-lucide="trash-2"></i></button>
+  </div>`;
+}
+
+function actionTargetOptions(type, selected = '') {
+  if (type === 'unlock_plot') return state.plots.map((plot) => `<option value="${escapeHtml(plot.id)}" ${plot.id === selected ? 'selected' : ''}>${escapeHtml(plot.branch_label || '主线')} / ${escapeHtml(plot.name)}</option>`).join('');
+  if (type === 'unlock_prop') return state.props.map((prop) => `<option value="${escapeHtml(prop.id)}" ${prop.id === selected ? 'selected' : ''}>${escapeHtml(prop.name)} · ${escapeHtml(propStatusLabel(prop.status))}</option>`).join('');
+  if (type === 'memory_update') return effectiveTriggerSchemas().map((schema) => `<option value="${escapeHtml(schema.key)}" ${schema.key === selected ? 'selected' : ''}>${escapeHtml(schema.category)} / ${escapeHtml(schema.label)}</option>`).join('');
+  return state.tools.filter((tool) => tool.enabled).map((tool) => `<option value="${escapeHtml(tool.key)}" ${tool.key === selected ? 'selected' : ''}>${escapeHtml(tool.name)}</option>`).join('');
+}
+
+function toolArgumentFields(toolKey, args = {}) {
+  const tool = state.tools.find((item) => item.key === toolKey);
+  return Object.entries(tool?.input_schema?.properties || {}).map(([key, definition]) => {
+    const value = args[key] ?? '';
+    if (key === 'plot_id') {
+      return `<label><span>${escapeHtml(key)}</span><select data-tool-argument="${escapeHtml(key)}" data-value-type="string">${actionTargetOptions('unlock_plot', value)}</select></label>`;
+    }
+    return `<label><span>${escapeHtml(key)}</span><input data-tool-argument="${escapeHtml(key)}" data-value-type="${escapeHtml(definition.type || 'string')}" type="${definition.type === 'number' ? 'number' : 'text'}" value="${escapeHtml(value)}" ${tool.input_schema?.required?.includes(key) ? 'required' : ''}></label>`;
+  }).join('') || '<span class="rule-no-arguments">此工具没有入参</span>';
+}
+
+function actionFieldsHtml(action = {}) {
+  const type = action.type || 'unlock_plot';
+  const target = action.plot_id || action.prop_id || action.key || action.tool_key || '';
+  if (type === 'tool_call') {
+    const toolKey = target || state.tools.find((tool) => tool.enabled)?.key || '';
+    return `<label><span>工具</span><select data-action-target>${actionTargetOptions(type, toolKey)}</select></label><div class="tool-argument-grid" data-tool-arguments>${toolArgumentFields(toolKey, action.arguments || {})}</div>`;
+  }
+  if (type === 'memory_update') {
+    const memoryKey = target || effectiveTriggerSchemas()[0]?.key || '';
+    return `<label><span>字段</span><select data-action-target>${actionTargetOptions(type, memoryKey)}</select></label><label><span>写入值</span><input data-action-value value="${escapeHtml(Array.isArray(action.value) ? action.value.join(', ') : (action.value ?? ''))}" required></label>`;
+  }
+  return `<label><span>${type === 'unlock_prop' ? '道具' : '剧情节点'}</span><select data-action-target>${actionTargetOptions(type, target)}</select></label>`;
+}
+
+function actionRowHtml(action = {}) {
+  const type = action.type || 'unlock_plot';
+  return `<div class="lowcode-action-row" data-action-row>
+    <span class="action-arrow"><i data-lucide="arrow-right"></i></span>
+    <label><span>动作</span><select data-action-type><option value="unlock_plot" ${type === 'unlock_plot' ? 'selected' : ''}>解锁剧情</option><option value="unlock_prop" ${type === 'unlock_prop' ? 'selected' : ''}>解锁道具</option><option value="memory_update" ${type === 'memory_update' ? 'selected' : ''}>更新结构化记忆</option><option value="tool_call" ${type === 'tool_call' ? 'selected' : ''}>调用登记工具</option></select></label>
+    <div class="lowcode-action-fields">${actionFieldsHtml(action)}</div>
+    <button type="button" class="icon-button remove-action" title="删除动作" aria-label="删除动作"><i data-lucide="trash-2"></i></button>
+  </div>`;
+}
+
+function parseRuleValue(rawValue, memoryKey, operator) {
+  if (operator === 'exists') return undefined;
+  const raw = String(rawValue ?? '').trim();
+  if (operator === 'in') return raw.split(/[,，、\n]/).map((item) => item.trim()).filter(Boolean);
+  const schema = effectiveTriggerSchemas().find((item) => item.key === memoryKey);
+  if (schema?.value_type === 'number' || ['>=', '>', '<=', '<'].includes(operator)) {
+    const value = Number(raw);
+    if (!Number.isFinite(value)) throw new Error('数值条件必须填写有效数字');
+    return value;
+  }
+  if (schema?.value_type === 'boolean') return raw === 'true' || raw === '是';
+  return raw;
+}
+
+function collectLowCodeCondition(root) {
+  const mode = $('[name="condition_mode"]', root).value;
+  const rows = $$('[data-condition-row]', root);
+  if (!rows.length) throw new Error('至少配置一个触发条件');
+  const conditions = rows.map((row) => {
+    const source = $('[data-condition-source]', row).value;
+    const target = $('[data-condition-target]', row).value;
+    const operator = $('[data-condition-operator]', row).value;
+    if (!target) throw new Error('请选择条件字段或对象');
+    const condition = { operator };
+    if (source === 'memory') condition.memory_key = target;
+    if (source === 'plot') condition.plot_id = target;
+    if (source === 'prop') condition.prop_id = target;
+    const value = parseRuleValue($('[data-condition-value]', row)?.value, source === 'memory' ? target : '', operator);
+    if (value !== undefined) condition.value = value;
+    return condition;
+  });
+  return { [mode]: conditions };
+}
+
+function collectLowCodeActions(root) {
+  const rows = $$('[data-action-row]', root);
+  if (!rows.length) throw new Error('至少配置一个触发动作');
+  return rows.map((row) => {
+    const type = $('[data-action-type]', row).value;
+    const target = $('[data-action-target]', row)?.value || '';
+    if (!target) throw new Error('请选择动作目标');
+    if (type === 'unlock_plot') return { type, plot_id: target };
+    if (type === 'unlock_prop') return { type, prop_id: target };
+    if (type === 'memory_update') {
+      return { type, key: target, value: parseRuleValue($('[data-action-value]', row).value, target, '==') };
+    }
+    const args = {};
+    $$('[data-tool-argument]', row).forEach((input) => {
+      const raw = input.value;
+      if (raw === '') return;
+      args[input.dataset.toolArgument] = input.dataset.valueType === 'number' ? Number(raw) : raw;
+    });
+    return { type: 'tool_call', tool_key: target, arguments: args };
+  });
+}
+
+function bindTriggerEditor() {
+  const root = $('#modalRoot');
+  const conditionList = $('#triggerConditionList', root);
+  const actionList = $('#triggerActionList', root);
+  const bindCondition = (row) => {
+    $('[data-condition-source]', row).addEventListener('change', (event) => {
+      $('[data-condition-target]', row).innerHTML = conditionTargetOptions(event.target.value);
+      updateTriggerRulePreview();
+    });
+    $('[data-condition-operator]', row).addEventListener('change', (event) => {
+      $('[data-condition-value]', row).disabled = event.target.value === 'exists';
+      updateTriggerRulePreview();
+    });
+    $('.remove-condition', row).addEventListener('click', () => { row.remove(); updateTriggerRulePreview(); });
+    $$('select, input', row).forEach((input) => input.addEventListener('input', updateTriggerRulePreview));
+  };
+  const bindAction = (row) => {
+    $('[data-action-type]', row).addEventListener('change', (event) => {
+      $('.lowcode-action-fields', row).innerHTML = actionFieldsHtml({ type: event.target.value });
+      bindActionFields(row);
+      updateTriggerRulePreview();
+    });
+    $('.remove-action', row).addEventListener('click', () => { row.remove(); updateTriggerRulePreview(); });
+    bindActionFields(row);
+  };
+  const bindActionFields = (row) => {
+    const target = $('[data-action-target]', row);
+    target?.addEventListener('change', () => {
+      if ($('[data-action-type]', row).value === 'tool_call') {
+        $('[data-tool-arguments]', row).innerHTML = toolArgumentFields(target.value);
+      }
+      updateTriggerRulePreview();
+    });
+    $$('input, select', $('.lowcode-action-fields', row)).forEach((input) => input.addEventListener('input', updateTriggerRulePreview));
+  };
+  $$('[data-condition-row]', conditionList).forEach(bindCondition);
+  $$('[data-action-row]', actionList).forEach(bindAction);
+  $('#addConditionRow', root).addEventListener('click', () => {
+    conditionList.insertAdjacentHTML('beforeend', conditionRowHtml({ memory_key: effectiveTriggerSchemas()[0]?.key || '', operator: '==', value: '' }));
+    bindCondition(conditionList.lastElementChild);
+    refreshIcons();
+    updateTriggerRulePreview();
+  });
+  $('#addActionRow', root).addEventListener('click', () => {
+    actionList.insertAdjacentHTML('beforeend', actionRowHtml({ type: 'unlock_plot' }));
+    bindAction(actionList.lastElementChild);
+    refreshIcons();
+    updateTriggerRulePreview();
+  });
+  $('[name="condition_mode"]', root).addEventListener('change', updateTriggerRulePreview);
+  updateTriggerRulePreview();
+}
+
+function updateTriggerRulePreview() {
+  const root = $('#modalRoot');
+  const preview = $('#triggerRulePreview', root);
+  if (!preview) return;
+  try {
+    const condition = collectLowCodeCondition(root);
+    const actions = collectLowCodeActions(root);
+    preview.innerHTML = `<span>当</span><strong>${escapeHtml(describeCondition(condition))}</strong><i data-lucide="arrow-right"></i><span>执行</span><strong>${escapeHtml(actions.map(describeAction).join('、'))}</strong>`;
+    refreshIcons();
+  } catch {
+    preview.innerHTML = '<span>补全条件与动作后，这里会显示自然语言规则。</span>';
+  }
 }
 
 function editTrigger(id = '', defaultPlotId = '') {
   if (!isAdmin()) return;
   const trigger = state.triggers.find((item) => item.id === id) || {
     name: '', description: '', condition: { all: [{ memory_key: 'relationship.intimacy', operator: '>=', value: 30 }] },
-    actions: defaultPlotId ? [{ type: 'unlock_plot', plot_id: defaultPlotId }] : [], once_per_user: 1,
-    cooldown_seconds: 0, priority: 50, enabled: 1
+    actions: defaultPlotId ? [{ type: 'unlock_plot', plot_id: defaultPlotId }] : [{ type: 'unlock_plot' }],
+    once_per_user: 1, cooldown_seconds: 0, priority: 50, enabled: 1
   };
-  const targetPlotId = defaultPlotId || (trigger.actions || []).find((action) => action.type === 'unlock_plot')?.plot_id || '';
+  const conditionMode = Array.isArray(trigger.condition?.any) ? 'any' : 'all';
+  const conditions = trigger.condition?.[conditionMode] || [trigger.condition];
+  const actions = (trigger.actions || []).length ? trigger.actions : [{ type: 'unlock_plot', plot_id: defaultPlotId }];
   openModal({
-    title: id ? '编辑触发配置' : '新建触发配置', width: 740,
-    body: `<div class="form-grid two"><label><span>配置名称</span><input name="name" value="${escapeHtml(trigger.name)}" required></label><label><span>目标剧情节点</span><select name="target_plot_id"><option value="">不直接解锁剧情</option>${state.plots.map((plot) => `<option value="${escapeHtml(plot.id)}" ${targetPlotId === plot.id ? 'selected' : ''}>${escapeHtml(plot.branch_label || '主线')} / ${escapeHtml(plot.name)}</option>`).join('')}</select></label></div>
-      <label><span>配置说明</span><input name="description" value="${escapeHtml(trigger.description)}" placeholder="说明什么时候进入这个剧情节点"></label>
-      <label><span>触发条件</span><textarea name="condition" rows="7" required>${escapeHtml(JSON.stringify(trigger.condition, null, 2))}</textarea><small>条件只读取已配置的结构化记忆。支持 all / any / not 组合。</small></label>
-      <details class="advanced-config"><summary>高级动作配置</summary><label><span>动作 JSON</span><textarea name="actions" rows="8" required>${escapeHtml(JSON.stringify(trigger.actions || [], null, 2))}</textarea><small>选择“目标剧情节点”后，系统会自动补齐 unlock_plot 动作；这里可另外配置记忆更新和 Function call。</small></label></details>
+    title: id ? '编辑触发配置' : '新建触发配置',
+    width: 980,
+    body: `<div class="form-grid two"><label><span>配置名称</span><input name="name" value="${escapeHtml(trigger.name)}" required></label><label><span>配置说明</span><input name="description" value="${escapeHtml(trigger.description)}" placeholder="例如：关系进入熟悉阶段后打开雨夜来信"></label></div>
+      <section class="lowcode-builder-section"><header><div><span>01</span><strong>当这些条件满足</strong></div><select name="condition_mode" aria-label="条件组合方式"><option value="all" ${conditionMode === 'all' ? 'selected' : ''}>同时满足全部条件</option><option value="any" ${conditionMode === 'any' ? 'selected' : ''}>满足任意一个条件</option></select></header><div id="triggerConditionList" class="lowcode-rule-list">${conditions.map(conditionRowHtml).join('')}</div><button id="addConditionRow" type="button" class="button secondary compact"><i data-lucide="plus"></i><span>增加条件</span></button></section>
+      <section class="lowcode-builder-section action-builder"><header><div><span>02</span><strong>就执行这些动作</strong></div><small>道具必须先审核启用</small></header><div id="triggerActionList" class="lowcode-action-list">${actions.map(actionRowHtml).join('')}</div><button id="addActionRow" type="button" class="button secondary compact"><i data-lucide="plus"></i><span>增加动作</span></button></section>
+      <div id="triggerRulePreview" class="trigger-rule-preview"></div>
       <div class="form-grid two"><label><span>冷却时间（秒）</span><input name="cooldown_seconds" type="number" min="0" value="${Number(trigger.cooldown_seconds || 0)}"></label><label><span>执行优先级</span><input name="priority" type="number" min="0" max="100" value="${Number(trigger.priority)}"></label></div>
       <div class="form-grid two"><label class="checkbox-row"><input name="once_per_user" type="checkbox" ${trigger.once_per_user ? 'checked' : ''}><span>每个用户仅触发一次</span></label><label class="checkbox-row"><input name="enabled" type="checkbox" ${trigger.enabled ? 'checked' : ''}><span>启用该触发配置</span></label></div>`,
-    onSubmit: async (formData) => {
-      let condition;
-      let actions;
-      try { condition = JSON.parse(formData.get('condition')); actions = JSON.parse(formData.get('actions')); } catch { throw new Error('条件和动作必须是合法 JSON'); }
-      if (!Array.isArray(actions)) throw new Error('动作 JSON 必须是数组');
-      const selectedPlotId = formData.get('target_plot_id');
-      const unlockIndex = actions.findIndex((action) => action.type === 'unlock_plot');
-      if (selectedPlotId && unlockIndex >= 0) actions[unlockIndex] = { ...actions[unlockIndex], plot_id: selectedPlotId };
-      else if (selectedPlotId) actions.push({ type: 'unlock_plot', plot_id: selectedPlotId });
-      else if (unlockIndex >= 0) actions.splice(unlockIndex, 1);
+    onSubmit: async (formData, form) => {
+      const condition = collectLowCodeCondition(form);
+      const triggerActions = collectLowCodeActions(form);
       const body = {
-        ...Object.fromEntries(formData.entries()), agent_id: state.currentAgentId, condition, actions,
+        name: formData.get('name'), description: formData.get('description'), agent_id: state.currentAgentId,
+        condition, actions: triggerActions,
         once_per_user: formData.has('once_per_user'), enabled: formData.has('enabled'),
         cooldown_seconds: Number(formData.get('cooldown_seconds')), priority: Number(formData.get('priority'))
       };
@@ -2013,6 +2763,7 @@ function editTrigger(id = '', defaultPlotId = '') {
       toast('触发配置已保存');
     }
   });
+  bindTriggerEditor();
 }
 
 function scrollArchitectureAssistant() {
@@ -2227,8 +2978,16 @@ async function loadTraces() {
 async function loadTraceDetail(id) {
   $$('[data-trace-id]').forEach((button) => button.classList.toggle('active', button.dataset.traceId === id));
   const trace = await api(`/api/traces/${encodeURIComponent(id)}`);
+  const modelSpan = trace.spans.find((span) => span.name === 'model_response');
+  const modelOutput = parseJson(modelSpan?.output_json, {});
+  const usage = modelOutput.usage || {};
+  const cache = modelOutput.cache || {};
+  const inputTokens = Number(usage.inputTokens || cache.inputTokens || 0);
+  const cachedTokens = Number(usage.cachedTokens || cache.cachedTokens || 0);
+  const hitRate = Number(usage.cacheHitRate ?? cache.hitRate ?? (inputTokens ? cachedTokens / inputTokens : 0));
+  const cacheStatus = cache.status || '未启用';
   $('#traceDetail').innerHTML = `
-    <div class="trace-overview"><div><span>状态</span><strong>${escapeHtml(trace.status)}</strong></div><div><span>总耗时</span><strong>${trace.total_ms} ms</strong></div><div><span>Spans</span><strong>${trace.spans.length}</strong></div></div>
+    <div class="trace-overview"><div><span>状态</span><strong>${escapeHtml(trace.status)}</strong></div><div><span>总耗时</span><strong>${trace.total_ms} ms</strong></div><div><span>Provider</span><strong>${escapeHtml(modelOutput.provider || '—')}</strong></div><div><span>输入 Token</span><strong>${inputTokens || '—'}</strong></div><div><span>缓存 Token</span><strong>${cachedTokens || '—'}</strong></div><div><span>缓存状态 / 命中率</span><strong>${escapeHtml(cacheStatus)} · ${(hitRate * 100).toFixed(1)}%</strong></div></div>
     ${trace.spans.map((span, index) => {
       const input = parseJson(span.input_json, {});
       const output = parseJson(span.output_json, {});
@@ -2332,20 +3091,24 @@ $('#logoutButton').addEventListener('click', async () => {
 });
 
 $$('.nav-item').forEach((button) => button.addEventListener('click', () => navigate(button.dataset.page)));
+$$('[data-portal-mode]').forEach((button) => button.addEventListener('click', () => switchPortalMode(button.dataset.portalMode)));
 $('#userSelect').addEventListener('change', async (event) => { state.currentUserId = event.target.value; await switchContext(); });
 $('#agentSelect').addEventListener('change', async (event) => { state.currentAgentId = event.target.value; await switchContext(); });
 $('#memoryUserSelect').addEventListener('change', async (event) => { state.currentUserId = event.target.value; await switchContext(); });
 $('#memoryAgentSelect').addEventListener('change', async (event) => { state.currentAgentId = event.target.value; await switchContext(); });
-$('#addUserButton').addEventListener('click', addUser);
 $('#usersAddButton').addEventListener('click', addUser);
 $('#newConversationButton').addEventListener('click', () => {
   if (state.currentConversationId) state.previousConversationId = state.currentConversationId;
   state.currentConversationId = '';
+  state.extractionStatus = null;
   renderConversations();
   renderWelcome();
   $('#messageInput').focus();
 });
 $('#composerForm').addEventListener('submit', (event) => { event.preventDefault(); sendMessage($('#messageInput').value); });
+$('#memoryExtractionButton').addEventListener('click', extractMemoryNow);
+$('#unlockedPropsButton').addEventListener('click', openUnlockedProps);
+$('#unlockedPlotsButton').addEventListener('click', openUnlockedPlots);
 $('#messageInput').addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('#composerForm').requestSubmit(); }
 });
@@ -2382,11 +3145,10 @@ $('#modelHealth').addEventListener('click', async () => {
   const button = $('#modelHealth');
   button.disabled = true;
   try {
-    const result = await api('/api/admin/health/ark', { method: 'POST' });
-    button.classList.toggle('error', result.embeddingFallback);
-    $('span:last-child', button).textContent = result.embeddingFallback ? '本地向量降级' : `${result.embeddingDimensions} 维向量`;
-    toast(result.embeddingFallback ? result.fallbackReason : 'Ark Embedding 连接正常', result.embeddingFallback ? 'error' : 'success');
-  } catch (error) { button.classList.add('error'); toast(error.message, 'error'); }
+    const result = await api('/api/admin/health/models', { method: 'POST' });
+    setModelConnectionStatus(result.embeddingFallback ? '本地向量降级' : `${result.embeddingDimensions} 维向量`, result.embeddingFallback);
+    toast(result.embeddingFallback ? result.fallbackReason : `${result.embeddingProvider} Embedding 连接正常`, result.embeddingFallback ? 'error' : 'success');
+  } catch (error) { setModelConnectionStatus('连接异常', true); toast(error.message, 'error'); }
   finally { button.disabled = false; }
 });
 
@@ -2405,6 +3167,7 @@ $$('[data-schema-tab]').forEach((button) => button.addEventListener('click', () 
   renderSchemas();
 }));
 $('#addSchemaButton').addEventListener('click', () => editSchema());
+$('#addSceneButton').addEventListener('click', addScene);
 $('#editMemoryProfileButton').addEventListener('click', editMemoryProfile);
 $('#editRetrievalProfileButton').addEventListener('click', () => editRetrievalProfile().catch((error) => toast(error.message, 'error')));
 $('#personaForm').addEventListener('submit', async (event) => {
@@ -2417,6 +3180,7 @@ $('#personaForm').addEventListener('submit', async (event) => {
     else toast(error.message, 'error');
   }
 });
+$('#addAgentButton').addEventListener('click', addAgent);
 $('#addPersonaAttribute').addEventListener('click', () => {
   const row = document.createElement('div');
   row.className = 'persona-attribute-row';
@@ -2434,6 +3198,7 @@ $('#personaScene').addEventListener('change', (event) => {
   $('#personaHeaderMeta').textContent = `${scene?.name || '-'} · 保存后更新角色归属`;
 });
 $('#addPlotButton').addEventListener('click', () => editPlot());
+$('#addPropButton').addEventListener('click', openPropTypeChooser);
 $$('[data-automation-tab]').forEach((button) => button.addEventListener('click', () => {
   state.automationTab = button.dataset.automationTab;
   $$('[data-automation-tab]').forEach((item) => item.classList.toggle('active', item === button));

@@ -154,6 +154,7 @@ test('registered users get read-only configuration, isolated data, own traces, a
       '/api/plots',
       '/api/triggers',
       '/api/tools',
+      '/api/props?agent_id=agent_linwan',
       '/api/architecture/overview?scene_id=scene_companion'
     ];
     for (const configPath of readableConfigPaths) {
@@ -178,6 +179,19 @@ test('registered users get read-only configuration, isolated data, own traces, a
     assert.equal(chat.status, 200);
     assert.ok(chat.payload.traceId);
     assert.ok(chat.payload.message.id);
+
+    const extractionStatus = await request(baseUrl,
+      `/api/conversations/${chat.payload.conversation.id}/memory-extraction`, { cookie: aliceCookie });
+    assert.equal(extractionStatus.status, 200);
+    assert.equal(extractionStatus.payload.pendingTurns, 1);
+    assert.equal(extractionStatus.payload.canExtract, true);
+    const manualExtraction = await request(baseUrl,
+      `/api/conversations/${chat.payload.conversation.id}/memory-extraction`, {
+        method: 'POST', cookie: aliceCookie
+      });
+    assert.equal(manualExtraction.status, 200);
+    assert.equal(manualExtraction.payload.result.reason, 'manual_flush');
+    assert.equal(manualExtraction.payload.status.pendingTurns, 0);
 
     const ownTrace = await request(baseUrl, `/api/traces/${chat.payload.traceId}`, { cookie: aliceCookie });
     assert.equal(ownTrace.status, 200);
@@ -228,6 +242,55 @@ test('registered users get read-only configuration, isolated data, own traces, a
       method: 'POST', body: { password: 'test-admin' }
     });
     assert.equal(adminLogin.status, 200);
+    const customScene = await request(baseUrl, '/api/scenes', {
+      method: 'POST', cookie: adminLogin.cookie,
+      body: { name: '雨后书店', description: '用于验证场景与记忆设置一对一创建。' }
+    });
+    assert.equal(customScene.status, 201);
+    assert.ok(customScene.payload.memory_profile_id);
+    assert.ok(customScene.payload.retrieval_profile_id);
+    assert.ok(customScene.payload.event_extraction_profile_id);
+
+    const customAgent = await request(baseUrl, '/api/agents', {
+      method: 'POST', cookie: adminLogin.cookie,
+      body: {
+        scene_id: customScene.payload.id,
+        name: '沈砂',
+        description: '书店中的陪伴角色。',
+        system_prompt: '你是沈砂，以克制、自然的中文交流。',
+        greeting: '雨停了，进来坐坐吧。'
+      }
+    });
+    assert.equal(customAgent.status, 201);
+    assert.equal(customAgent.payload.scene_id, customScene.payload.id);
+
+    const mcpProp = await request(baseUrl, '/api/props', {
+      method: 'POST', cookie: adminLogin.cookie,
+      body: {
+        agent_id: customAgent.payload.id,
+        package_type: 'mcp_json',
+        key: 'book_search',
+        name: '书目查找',
+        description: '用于查找公开书目信息。',
+        manifest: {
+          server: {
+            transport: 'streamable_http',
+            url: 'https://mcp.example.com/mcp',
+            authorization: { type: 'oauth2', secret_ref: '${secret:TEST_BOOK_MCP}' }
+          },
+          allowed_tools: ['search_books']
+        }
+      }
+    });
+    assert.equal(mcpProp.status, 201);
+    assert.equal(mcpProp.payload.status, 'draft');
+    assert.equal(mcpProp.payload.risk_level, 'high');
+    const enabledProp = await request(baseUrl, `/api/props/${mcpProp.payload.id}`, {
+      method: 'PUT', cookie: adminLogin.cookie, body: { status: 'enabled' }
+    });
+    assert.equal(enabledProp.status, 200);
+    assert.equal(enabledProp.payload.status, 'enabled');
+
     const storyNode = await request(baseUrl, '/api/plots', {
       method: 'POST', cookie: adminLogin.cookie,
       body: {
@@ -282,8 +345,11 @@ test('registered users get read-only configuration, isolated data, own traces, a
     const userAdminList = await request(baseUrl, '/api/admin/users', { cookie: aliceCookie });
     assert.equal(userAdminList.status, 403);
   } finally {
-    child.kill('SIGTERM');
-    await new Promise((resolve) => child.once('exit', resolve));
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise((resolve) => child.once('exit', resolve));
+      child.kill('SIGTERM');
+      await exited;
+    }
     await close(mockArk);
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

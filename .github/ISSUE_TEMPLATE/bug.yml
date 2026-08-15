@@ -1,0 +1,38 @@
+name: Bug report
+description: Report a reproducible product or memory-runtime defect.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observed behavior
+      description: Include the user-visible symptom. Redact private dialogue and credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: Version, provider, memory scope, steps, expected result.
+    validations:
+      required: true
+  - type: textarea
+    id: trace
+    attributes:
+      label: Trace evidence
+      description: Share span names and redacted values only. Never include API keys or passwords.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Retrieval
+        - Extraction and updates
+        - Structured memory
+        - Story and triggers
+        - Authentication and isolation
+        - UI and Trace
+        - Provider integration
+    validations:
+      required: true

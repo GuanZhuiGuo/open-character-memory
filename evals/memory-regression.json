@@ -1,0 +1,27 @@
+[
+  {
+    "id": "stale-correction",
+    "name": "旧结论被更正",
+    "expectation": "默认召回只返回 active 新版本，不把 superseded 旧版本注入主模型。"
+  },
+  {
+    "id": "noise-rejection",
+    "name": "无关事件不召回",
+    "expectation": "没有实体、关系、关键词或足够向量证据时，事件不进入详情注入。"
+  },
+  {
+    "id": "cross-user-isolation",
+    "name": "跨用户硬隔离",
+    "expectation": "另一个用户无法召回不属于自己的事件、声明与图边。"
+  },
+  {
+    "id": "role-shared-story",
+    "name": "角色承诺进入共同故事",
+    "expectation": "角色说过或做过且被确认的内容保存为 shared_story，并可按证据召回。"
+  },
+  {
+    "id": "plot-branch-conflict",
+    "name": "剧情分支冲突过滤",
+    "expectation": "用户更正性别后旧支线保留审计状态，但不会继续注入主模型。"
+  }
+]

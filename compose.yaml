@@ -1,0 +1,51 @@
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: ${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD before starting Docker Compose}
+      NEO4J_USERNAME: ${NEO4J_USERNAME:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?Set NEO4J_PASSWORD before starting Docker Compose}
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u \"$$NEO4J_USERNAME\" -p \"$$NEO4J_PASSWORD\" 'RETURN 1' >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
+    restart: unless-stopped
+
+  memory-agent:
+    build: .
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    ports:
+      - "4173:4173"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 4173
+      TEXT_PROVIDER: mock
+      EMBEDDING_PROVIDER: mock
+      AGENT_RUNTIME: pi
+      GRAPH_STORE: neo4j
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USERNAME: ${NEO4J_USERNAME:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?Set NEO4J_PASSWORD before starting Docker Compose}
+      NEO4J_DATABASE: neo4j
+      NEO4J_REQUIRED: "false"
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD before starting Docker Compose}
+      DATABASE_PATH: /app/data/memory-agent.db
+    volumes:
+      - memory_agent_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  memory_agent_data:
+  neo4j_data:
+  neo4j_logs:

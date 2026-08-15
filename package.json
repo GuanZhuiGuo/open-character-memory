@@ -1,14 +1,22 @@
 {
   "name": "memory-agent-studio",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "node --watch server.js",
     "start": "node server.js",
-    "test": "node --test"
+    "start:mock": "node scripts/start-mock.js",
+    "test": "node --test",
+    "eval": "node scripts/run-memory-evals.js",
+    "check:open-source": "node scripts/open-source-check.js"
   },
   "engines": {
     "node": ">=24"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.84.2",
+    "@earendil-works/pi-ai": "0.84.2",
+    "neo4j-driver": "6.2.0"
   }
 }

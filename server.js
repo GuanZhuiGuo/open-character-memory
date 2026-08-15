@@ -5,12 +5,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   chat, createConversation, DEFAULT_LONG_TERM_MEMORY_UPDATE_INTERVAL_TURNS,
+  extractConversationMemoryNow, getConversationMemoryExtractionStatus,
   getConversationMessages, listConversations, MAIN_MODEL_MESSAGE_LIMIT
 } from './lib/agent.js';
 import { answerArchitectureQuestion, getArchitectureIndexStatus } from './lib/architecture.js';
-import { checkArkHealth } from './lib/ark.js';
 import { config } from './lib/config.js';
 import { db, initializeDatabase } from './lib/db.js';
+import {
+  flushGraphProjectionOutbox, getGraphStoreStatus, initializeGraphStore
+} from './lib/graph-store.js';
+import { getAgentRuntimeStatus } from './lib/pi-runtime.js';
+import { checkModelHealth, configuredModels } from './lib/providers/index.js';
 import {
   EXTRACTION_CONTEXT_MAX_MESSAGES, EXTRACTION_CONTEXT_MAX_TURNS, EXTRACTION_INTERVAL_MAX_TURNS,
   formatRetrievedMemory,
@@ -19,10 +24,12 @@ import {
   retrieveMemory, setMemoryValue
 } from './lib/memory.js';
 import { getTrace, listTraces } from './lib/trace.js';
-import { listPlots, listTools, listTriggers } from './lib/triggers.js';
+import { listPlots, listProps, listTools, listTriggers } from './lib/triggers.js';
 import { hash, json, nowIso, parseJson, safeText, uid } from './lib/utils.js';
+import { createZip } from './lib/zip.js';
 
 initializeDatabase();
+await initializeGraphStore();
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const mimeTypes = {
@@ -30,6 +37,7 @@ const mimeTypes = {
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.zip': 'application/zip',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon'
@@ -40,6 +48,7 @@ const ADMIN_SESSION_SECONDS = 12 * 60 * 60;
 const USER_SESSION_SECONDS = 7 * 24 * 60 * 60;
 const CHAT_MESSAGE_MAX_CHARACTERS = 1000;
 const REGISTRATION_USER_LIMIT = 15;
+const PROP_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
 
 class HttpError extends Error {
   constructor(status, message, code = 'REQUEST_FAILED', details = null) {
@@ -57,6 +66,16 @@ function sendJson(response, status, payload, headers = {}) {
     ...headers
   });
   response.end(JSON.stringify(payload));
+}
+
+function sendBuffer(response, status, buffer, contentType, filename) {
+  response.writeHead(status, {
+    'Content-Type': contentType,
+    'Content-Length': buffer.length,
+    'Content-Disposition': `attachment; filename="${filename}"`,
+    'Cache-Control': 'private, max-age=300'
+  });
+  response.end(buffer);
 }
 
 function parseCookies(request) {
@@ -181,26 +200,29 @@ function assertUserAccess(principal, requestedUserId) {
 function userMayAccessRoute(pathname, method) {
   if (pathname === '/api/conversations' && ['GET', 'POST'].includes(method)) return true;
   if (pathname === '/api/chat' && method === 'POST') return true;
+  if (/^\/api\/conversations\/[^/]+\/memory-extraction$/.test(pathname)
+    && ['GET', 'POST'].includes(method)) return true;
   if (pathname === '/api/feedback' && method === 'POST') return true;
-  if (['/api/memory/retrieval-test', '/api/architecture/ask', '/api/admin/health/ark'].includes(pathname)
+  if (['/api/memory/retrieval-test', '/api/architecture/ask', '/api/admin/health/models', '/api/admin/health/ark'].includes(pathname)
     && method === 'POST') return true;
   if (method !== 'GET') return false;
   if ([
     '/api/bootstrap', '/api/agents', '/api/scenes', '/api/memory/schemas', '/api/memory/values',
     '/api/memory/history', '/api/memory/graph', '/api/memory/events', '/api/plots', '/api/triggers',
-    '/api/tools', '/api/traces', '/api/architecture/overview'
+    '/api/tools', '/api/props', '/api/traces', '/api/architecture/overview'
   ].includes(pathname)) return true;
   return /^\/api\/conversations\/[^/]+$/.test(pathname)
+    || /^\/api\/props\/templates\/(skill\.zip|mcp\.json)$/.test(pathname)
     || /^\/api\/scenes\/[^/]+\/(retrieval-profile|event-extraction-profile|extraction-contract)$/.test(pathname)
     || /^\/api\/traces\/[^/]+$/.test(pathname);
 }
 
-async function readBody(request) {
+async function readBody(request, maxBytes = 2_000_000) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 2_000_000) throw new Error('请求体超过 2MB 限制');
+    if (size > maxBytes) throw new Error(`请求体超过 ${Math.ceil(maxBytes / 1_000_000)}MB 限制`);
     chunks.push(chunk);
   }
   if (!chunks.length) return {};
@@ -310,6 +332,229 @@ function updateAgent(id, body) {
   return db.prepare('SELECT * FROM agents WHERE id = ?').get(id);
 }
 
+function createAgent(body) {
+  const scene = db.prepare('SELECT * FROM scenes WHERE id = ? AND enabled = 1').get(body.scene_id);
+  if (!scene) throw new Error('请选择一个有效场景');
+  const name = safeText(body.name, 80).trim();
+  const systemPrompt = safeText(body.system_prompt, 30000).trim();
+  if (!name || !systemPrompt) throw new Error('角色名称和核心人设提示词不能为空');
+  const id = uid('agent');
+  const timestamp = nowIso();
+  const attributes = body.fixed_attributes && typeof body.fixed_attributes === 'object'
+    ? body.fixed_attributes : {};
+  db.prepare(`INSERT INTO agents
+    (id, name, scene_id, scenario_type, description, system_prompt, greeting, avatar_color,
+     enabled, fixed_attributes_json, profile_version, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?)`)
+    .run(
+      id, name, scene.id, scene.scenario_type, safeText(body.description, 500), systemPrompt,
+      safeText(body.greeting || '你来了。今天想从哪里聊起？', 1000),
+      /^#[0-9a-f]{6}$/i.test(body.avatar_color || '') ? body.avatar_color : '#2563eb',
+      json(attributes), timestamp, timestamp
+    );
+  return db.prepare('SELECT * FROM agents WHERE id = ?').get(id);
+}
+
+function createScene(body) {
+  const name = safeText(body.name, 80).trim();
+  if (!name) throw new Error('场景名称不能为空');
+  const id = uid('scene');
+  const scenarioType = `custom_${id.replace(/[^a-z0-9]/gi, '').slice(-18).toLowerCase()}`;
+  const timestamp = nowIso();
+  const icon = /^[a-z0-9-]{2,40}$/i.test(body.icon || '') ? body.icon : 'sparkles';
+  const accentColor = /^#[0-9a-f]{6}$/i.test(body.accent_color || '') ? body.accent_color : '#2563eb';
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare(`INSERT INTO scenes
+      (id, name, scenario_type, description, icon, accent_color, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`)
+      .run(id, name, scenarioType, safeText(body.description, 1000), icon, accentColor, timestamp, timestamp);
+    db.prepare(`INSERT INTO memory_profiles
+      (id, scene_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(uid('profile'), id, `${name}记忆设置`, `维护${name}中的固定规则、当前状态与长期事件。`, timestamp, timestamp);
+    db.prepare(`INSERT INTO event_extraction_profiles
+      (id, scene_id, name, enabled, execution_mode, trigger_point, extraction_interval_turns,
+       context_turns, include_assistant, max_events_per_turn, min_importance,
+       allowed_event_types_json, update_signals_json, event_instruction, entity_instruction,
+       relation_instruction, custom_rules, created_at, updated_at)
+      VALUES (?, ?, ?, 1, 'blocking_after_assistant', 'after_every_x_assistant_messages_persisted',
+        ?, 2, 1, 3, 0.35, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(
+        uid('extraction'), id, `${name}长期记忆抽取`, DEFAULT_LONG_TERM_MEMORY_UPDATE_INTERVAL_TURNS,
+        json(['episode', 'promise', 'relationship', 'plot']),
+        json(['改为', '取消', '作废', '确认', '现在', '以后']),
+        '抽取对后续对话有复用价值的经历、约定、关系节点与剧情进展；忽略寒暄和一次性噪声。',
+        '实体必须来自被接受的事件，统一人名、地点、物品与剧情对象的别名。',
+        '关系边必须有事件证据；可变化事实写为带版本的声明，不覆盖原始证据。',
+        '区分用户事实、角色言行与共同故事；角色单方生成的内容不得自动升级为已确认事实。',
+        timestamp, timestamp
+      );
+    db.prepare(`INSERT INTO retrieval_profiles
+      (id, scene_id, name, vector_enabled, keyword_enabled, graph_enabled, intent_filter_enabled,
+       min_similarity, min_keyword_score, event_top_k, claim_top_k, edge_top_k,
+       vector_weight, keyword_weight, importance_weight, recency_weight, recency_half_life_days,
+       catalog_min_similarity, vector_only_min_similarity, planner_enabled, planner_max_candidates,
+       graph_hops, created_at, updated_at)
+      VALUES (?, ?, ?, 1, 1, 1, 1, 0.42, 0.08, 4, 20, 20, 0.70, 0.16, 0.10, 0.04,
+        30, 0.28, 0.42, 1, 12, 1, ?, ?)`)
+      .run(uid('retrieval'), id, `${name}混合召回`, timestamp, timestamp);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  return listScenes().find((scene) => scene.id === id);
+}
+
+function normalizePropKey(value) {
+  const key = safeText(value, 60).trim().toLowerCase();
+  if (!/^[a-z][a-z0-9_-]{2,59}$/.test(key)) {
+    throw new Error('道具 Key 需为 3-60 位小写字母、数字、下划线或短横线，并以字母开头');
+  }
+  return key;
+}
+
+function containsInlineSecret(value, parentKey = '') {
+  if (Array.isArray(value)) return value.some((item) => containsInlineSecret(item, parentKey));
+  if (value && typeof value === 'object') {
+    return Object.entries(value).some(([key, item]) => containsInlineSecret(item, key));
+  }
+  if (typeof value !== 'string') return false;
+  const secretKey = /^(api[_-]?key|access[_-]?token|token|password|secret|authorization)$/i.test(parentKey);
+  if (!secretKey) return /bearer\s+[a-z0-9._-]{12,}/i.test(value);
+  const normalized = value.trim();
+  if (!normalized || /^(oauth2?|none)$/i.test(normalized)) return false;
+  return !/^\$\{secret:[a-z0-9._/-]+\}$/i.test(normalized);
+}
+
+function validateMcpManifest(manifest) {
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw new Error('MCP JSON 顶层必须是对象');
+  }
+  if (containsInlineSecret(manifest)) {
+    throw new Error('MCP JSON 不允许包含明文密钥，请使用 ${secret:NAME} 或 secret_ref');
+  }
+  const transport = manifest.server?.transport || manifest.transport || 'streamable_http';
+  if (!['streamable_http', 'stdio'].includes(transport)) {
+    throw new Error('MCP transport 仅支持 streamable_http 或 stdio 描述');
+  }
+  return manifest;
+}
+
+function publicProp(row) {
+  return {
+    id: row.id,
+    agent_id: row.agent_id,
+    key: row.key,
+    name: row.name,
+    description: row.description,
+    package_type: row.package_type,
+    manifest: parseJson(row.manifest_json, {}),
+    file_name: row.file_name,
+    content_hash: row.content_hash,
+    version: row.version,
+    status: row.status,
+    risk_level: row.risk_level,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+}
+
+function saveProp(body, id = null) {
+  const current = id ? db.prepare('SELECT * FROM capability_props WHERE id = ?').get(id) : null;
+  if (id && !current) throw new Error('道具不存在');
+  const agentId = body.agent_id || current?.agent_id;
+  if (!db.prepare('SELECT 1 FROM agents WHERE id = ?').get(agentId)) throw new Error('请选择有效角色');
+  const packageType = body.package_type || current?.package_type;
+  if (!['skill_zip', 'mcp_json'].includes(packageType)) throw new Error('道具类型仅支持 Skill ZIP 或 MCP JSON');
+  const key = normalizePropKey(body.key || current?.key || '');
+  const name = safeText(body.name ?? current?.name, 100).trim();
+  if (!name) throw new Error('道具名称不能为空');
+  const version = safeText(body.version ?? current?.version ?? '1.0.0', 30) || '1.0.0';
+  const manifest = packageType === 'mcp_json'
+    ? validateMcpManifest(body.manifest ?? parseJson(current?.manifest_json, {}))
+    : (body.manifest ?? parseJson(current?.manifest_json, {}));
+  const timestamp = nowIso();
+  let fileName = current?.file_name || '';
+  let storagePath = current?.storage_path || '';
+  let contentHash = current?.content_hash || '';
+
+  if (!current && packageType === 'skill_zip') {
+    const encoded = String(body.file_base64 || '');
+    const file = Buffer.from(encoded, 'base64');
+    if (!encoded || !file.length || file.length > PROP_UPLOAD_MAX_BYTES) {
+      throw new Error('请选择不超过 5MB 的 Skill ZIP');
+    }
+    if (file[0] !== 0x50 || file[1] !== 0x4b) throw new Error('Skill 文件不是有效 ZIP');
+    const uploadDir = path.join(config.rootDir, 'data', 'uploads', 'props');
+    fs.mkdirSync(uploadDir, { recursive: true });
+    fileName = safeText(body.file_name || `${key}.zip`, 120).replace(/[^a-z0-9._-]/gi, '_');
+    storagePath = path.join(uploadDir, `${uid('skill')}.zip`);
+    fs.writeFileSync(storagePath, file, { mode: 0o600 });
+    contentHash = crypto.createHash('sha256').update(file).digest('hex');
+  } else if (!current && packageType === 'mcp_json') {
+    fileName = safeText(body.file_name || `${key}.mcp.json`, 120).replace(/[^a-z0-9._-]/gi, '_');
+    contentHash = crypto.createHash('sha256').update(json(manifest)).digest('hex');
+  }
+
+  const requestedStatus = body.status ?? current?.status ?? 'draft';
+  const status = ['draft', 'enabled', 'disabled'].includes(requestedStatus) ? requestedStatus : 'draft';
+  const riskLevel = packageType === 'mcp_json' || manifest?.capabilities?.some?.((item) =>
+    ['web_search', 'send_message', 'write_data'].includes(typeof item === 'string' ? item : item.key)) ? 'high' : 'medium';
+  const row = {
+    id: id || uid('prop'), agentId, key, name,
+    description: safeText(body.description ?? current?.description ?? '', 1000),
+    packageType, manifestJson: json(manifest || {}), fileName, storagePath, contentHash,
+    version, status: current ? status : 'draft', riskLevel
+  };
+  if (current) {
+    db.prepare(`UPDATE capability_props SET agent_id = ?, key = ?, name = ?, description = ?,
+      manifest_json = ?, version = ?, status = ?, risk_level = ?, updated_at = ? WHERE id = ?`)
+      .run(row.agentId, row.key, row.name, row.description, row.manifestJson, row.version,
+        row.status, row.riskLevel, timestamp, row.id);
+  } else {
+    db.prepare(`INSERT INTO capability_props
+      (id, agent_id, key, name, description, package_type, manifest_json, file_name,
+       storage_path, content_hash, version, status, risk_level, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(row.id, row.agentId, row.key, row.name, row.description, row.packageType,
+        row.manifestJson, row.fileName, row.storagePath, row.contentHash, row.version,
+        row.status, row.riskLevel, timestamp, timestamp);
+  }
+  return publicProp(db.prepare('SELECT * FROM capability_props WHERE id = ?').get(row.id));
+}
+
+function skillTemplateZip() {
+  const manifest = {
+    schema_version: 'memory-agent.skill/v1',
+    key: 'send_voice_letter',
+    name: '语音信笺',
+    version: '1.0.0',
+    capabilities: [{ key: 'send_audio', risk: 'external_side_effect', confirmation: 'each_call' }],
+    entry: 'SKILL.md'
+  };
+  return createZip([
+    { name: 'skill.json', content: `${JSON.stringify(manifest, null, 2)}\n` },
+    { name: 'SKILL.md', content: '# 语音信笺\n\n描述该能力的输入、输出、边界和失败回退。上传后必须由管理员审核启用；包内内容不会在上传时执行。\n' }
+  ]);
+}
+
+function mcpTemplateBuffer() {
+  return Buffer.from(`${JSON.stringify({
+    schema_version: 'memory-agent.mcp/v1',
+    key: 'travel_search',
+    name: '旅途查找',
+    version: '1.0.0',
+    server: {
+      transport: 'streamable_http',
+      url: 'https://mcp.example.com/mcp',
+      authorization: { type: 'oauth2', secret_ref: '${secret:MCP_TRAVEL_TOKEN}' }
+    },
+    allowed_tools: ['search_places'],
+    approval: 'each_call'
+  }, null, 2)}\n`, 'utf8');
+}
+
 function listScenes() {
   return db.prepare(`SELECT s.*, mp.id AS memory_profile_id, mp.name AS memory_profile_name,
     mp.description AS memory_profile_description, rp.id AS retrieval_profile_id,
@@ -390,6 +635,19 @@ function architectureOverview(sceneId) {
       { key: 'user_memory', label: '用户记忆', scope: 'user_agent_story_branch', injection: 'pinned_or_retrieved' },
       { key: 'shared_story', label: '我们的故事', scope: 'user_agent_story_branch', injection: 'retrieved_only' }
     ],
+    temporal: {
+      model: 'bitemporal',
+      validTime: 'valid_from / valid_to：事实在故事世界中何时成立',
+      transactionTime: 'transaction_from / transaction_to：系统在何时知道并采用该版本',
+      operations: {
+        update: '现实或剧情状态从某时刻发生变化，同时闭合旧有效期与旧认知期',
+        supersede: '纠正系统旧认知，只闭合旧认知期并保留原有效期用于回放',
+        retract: '撤回当前采用版本，保留历史证据与当时认知'
+      },
+      queryParameters: ['valid_at', 'known_at']
+    },
+    runtime: getAgentRuntimeStatus(),
+    graphStore: getGraphStoreStatus(),
     compression: {
       rollingSummaryEnabled: false,
       tokenThreshold: null,
@@ -406,8 +664,9 @@ function architectureOverview(sceneId) {
         { order: 1, key: 'extract', label: `累计 ${extractionIntervalTurns} 个完整轮次，或跨对话发送前，记忆抽取模型返回结构化操作` },
         { order: 2, key: 'structured', label: '写入 structured_updates 和 relationship_deltas' },
         { order: 3, key: 'derived', label: '亲密度写入时同步重算 relationship.stage' },
-        { order: 4, key: 'events', label: '对齐并写入事件、声明、图边和向量' },
-        { order: 5, key: 'triggers', label: '达到阈值的轮次完成记忆写入后执行条件触发器' }
+        { order: 4, key: 'events', label: '以双时态版本写入事件、声明、图边和向量' },
+        { order: 5, key: 'projection', label: 'SQLite 提交后通过 outbox 投影 Neo4j；失败可重放并回退 SQLite' },
+        { order: 6, key: 'triggers', label: '达到阈值的轮次完成记忆写入后执行条件触发器' }
       ]
     },
     index: getArchitectureIndexStatus()
@@ -600,6 +859,7 @@ function saveSchema(body, id = null) {
 
 function savePlot(body, id = null) {
   const current = id ? db.prepare('SELECT * FROM plots WHERE id = ?').get(id) : null;
+  const rawAudienceGenders = body.audience_genders ?? parseJson(current?.audience_genders_json, []);
   const row = {
     id: id || uid('plot'),
     agentId: body.agent_id ?? current?.agent_id,
@@ -609,6 +869,8 @@ function savePlot(body, id = null) {
     name: safeText(body.name ?? current?.name, 100),
     premise: safeText(body.premise ?? current?.premise ?? '', 1000),
     instructions: safeText(body.instructions ?? current?.instructions, 10000),
+    audienceGenders: [...new Set((Array.isArray(rawAudienceGenders) ? rawAudienceGenders : [])
+      .map((value) => safeText(value, 20)))].filter((value) => ['男', '女', '非二元', '不透露'].includes(value)),
     priority: Number(body.priority ?? current?.priority ?? 50),
     enabled: Number(Boolean(body.enabled ?? current?.enabled ?? true))
   };
@@ -629,29 +891,97 @@ function savePlot(body, id = null) {
   const timestamp = nowIso();
   if (current) {
     db.prepare(`UPDATE plots SET agent_id = ?, parent_plot_id = ?, branch_label = ?, node_type = ?,
-      name = ?, premise = ?, instructions = ?, priority = ?, enabled = ?, updated_at = ? WHERE id = ?`)
+      name = ?, premise = ?, instructions = ?, audience_genders_json = ?, priority = ?, enabled = ?, updated_at = ? WHERE id = ?`)
       .run(row.agentId, row.parentPlotId, row.branchLabel, row.nodeType, row.name, row.premise,
-        row.instructions, row.priority, row.enabled, timestamp, id);
+        row.instructions, json(row.audienceGenders), row.priority, row.enabled, timestamp, id);
   } else {
     db.prepare(`INSERT INTO plots
-      (id, agent_id, parent_plot_id, branch_label, node_type, name, premise, instructions, priority,
+      (id, agent_id, parent_plot_id, branch_label, node_type, name, premise, instructions, audience_genders_json, priority,
        enabled, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(row.id, row.agentId, row.parentPlotId, row.branchLabel, row.nodeType, row.name,
-        row.premise, row.instructions, row.priority, row.enabled, timestamp, timestamp);
+        row.premise, row.instructions, json(row.audienceGenders), row.priority, row.enabled, timestamp, timestamp);
   }
-  return db.prepare('SELECT * FROM plots WHERE id = ?').get(row.id);
+  const saved = db.prepare('SELECT * FROM plots WHERE id = ?').get(row.id);
+  return { ...saved, audience_genders: parseJson(saved.audience_genders_json, []) };
+}
+
+function validateTriggerCondition(node, agentId, depth = 0) {
+  if (!node || typeof node !== 'object' || Array.isArray(node) || depth > 3) {
+    throw new Error('触发条件结构无效或嵌套过深');
+  }
+  for (const group of ['all', 'any']) {
+    if (node[group] !== undefined) {
+      if (!Array.isArray(node[group]) || !node[group].length || node[group].length > 12) {
+        throw new Error('每组条件需包含 1-12 条规则');
+      }
+      return { [group]: node[group].map((child) => validateTriggerCondition(child, agentId, depth + 1)) };
+    }
+  }
+  const operator = ['==', '=', '!=', '>=', '>', '<=', '<', 'contains', 'in', 'exists'].includes(node.operator)
+    ? node.operator : '==';
+  if (node.memory_key) {
+    const schema = db.prepare('SELECT key FROM memory_schemas WHERE key = ? AND enabled = 1').get(node.memory_key);
+    if (!schema) throw new Error(`触发条件引用了不存在的记忆字段：${node.memory_key}`);
+    return { memory_key: schema.key, operator, ...(operator === 'exists' ? {} : { value: node.value }) };
+  }
+  if (node.plot_id) {
+    const plot = db.prepare('SELECT id FROM plots WHERE id = ? AND agent_id = ?').get(node.plot_id, agentId);
+    if (!plot) throw new Error(`触发条件引用了不属于当前角色的剧情：${node.plot_id}`);
+    return { plot_id: plot.id, operator, ...(operator === 'exists' ? {} : { value: node.value }) };
+  }
+  if (node.prop_id) {
+    const prop = db.prepare('SELECT id FROM capability_props WHERE id = ? AND agent_id = ?').get(node.prop_id, agentId);
+    if (!prop) throw new Error(`触发条件引用了不属于当前角色的道具：${node.prop_id}`);
+    return { prop_id: prop.id, operator, ...(operator === 'exists' ? {} : { value: node.value }) };
+  }
+  throw new Error('条件必须选择结构化记忆、剧情状态或道具状态');
+}
+
+function validateTriggerActions(actions, agentId) {
+  if (!Array.isArray(actions) || !actions.length || actions.length > 10) {
+    throw new Error('触发器需包含 1-10 个动作');
+  }
+  return actions.map((action) => {
+    if (action.type === 'unlock_plot') {
+      const plot = db.prepare('SELECT id FROM plots WHERE id = ? AND agent_id = ?').get(action.plot_id, agentId);
+      if (!plot) throw new Error(`解锁动作引用了不属于当前角色的剧情：${action.plot_id}`);
+      return { type: 'unlock_plot', plot_id: plot.id };
+    }
+    if (action.type === 'unlock_prop') {
+      const prop = db.prepare('SELECT id FROM capability_props WHERE id = ? AND agent_id = ?').get(action.prop_id, agentId);
+      if (!prop) throw new Error(`解锁动作引用了不属于当前角色的道具：${action.prop_id}`);
+      return { type: 'unlock_prop', prop_id: prop.id };
+    }
+    if (action.type === 'memory_update') {
+      const schema = db.prepare('SELECT key FROM memory_schemas WHERE key = ? AND enabled = 1').get(action.key);
+      if (!schema) throw new Error(`记忆更新动作引用了不存在的字段：${action.key}`);
+      return { type: 'memory_update', key: schema.key, value: action.value };
+    }
+    if (action.type === 'tool_call') {
+      const tool = db.prepare('SELECT key FROM tools WHERE key = ? AND enabled = 1').get(action.tool_key);
+      if (!tool) throw new Error(`工具调用动作引用了不可用工具：${action.tool_key}`);
+      const args = action.arguments && typeof action.arguments === 'object' && !Array.isArray(action.arguments)
+        ? action.arguments : {};
+      return { type: 'tool_call', tool_key: tool.key, arguments: args };
+    }
+    throw new Error(`不支持的触发动作：${action.type || 'unknown'}`);
+  });
 }
 
 function saveTrigger(body, id = null) {
   const current = id ? db.prepare('SELECT * FROM triggers WHERE id = ?').get(id) : null;
+  const agentId = body.agent_id ?? current?.agent_id;
+  if (!db.prepare('SELECT 1 FROM agents WHERE id = ?').get(agentId)) throw new Error('触发器必须绑定有效角色');
+  const condition = validateTriggerCondition(body.condition ?? parseJson(current?.condition_json, {}), agentId);
+  const actions = validateTriggerActions(body.actions ?? parseJson(current?.actions_json, []), agentId);
   const row = {
     id: id || uid('trigger'),
-    agentId: body.agent_id ?? current?.agent_id,
+    agentId,
     name: safeText(body.name ?? current?.name, 100),
     description: safeText(body.description ?? current?.description ?? '', 1000),
-    conditionJson: json(body.condition ?? parseJson(current?.condition_json, {})),
-    actionsJson: json(body.actions ?? parseJson(current?.actions_json, [])),
+    conditionJson: json(condition),
+    actionsJson: json(actions),
     oncePerUser: Number(Boolean(body.once_per_user ?? current?.once_per_user ?? true)),
     cooldownSeconds: Number(body.cooldown_seconds ?? current?.cooldown_seconds ?? 0),
     priority: Number(body.priority ?? current?.priority ?? 50),
@@ -880,7 +1210,13 @@ async function handleApi(request, response, url) {
   }
 
   if (pathname === '/api/health' && method === 'GET') {
-    sendJson(response, 200, { ok: true, database: 'sqlite', textModel: config.ark.textModel });
+    sendJson(response, 200, {
+      ok: true,
+      database: { sourceOfTruth: 'sqlite', temporalModel: 'bitemporal' },
+      graphStore: getGraphStoreStatus(),
+      runtime: getAgentRuntimeStatus(),
+      ...configuredModels()
+    });
     return;
   }
 
@@ -891,8 +1227,12 @@ async function handleApi(request, response, url) {
     return;
   }
 
-  if (pathname === '/api/admin/health/ark' && method === 'POST') {
-    sendJson(response, 200, await checkArkHealth());
+  if (['/api/admin/health/models', '/api/admin/health/ark'].includes(pathname) && method === 'POST') {
+    sendJson(response, 200, await checkModelHealth());
+    return;
+  }
+  if (pathname === '/api/admin/graph/replay' && method === 'POST') {
+    sendJson(response, 200, await flushGraphProjectionOutbox({ limit: config.neo4j.projectionBatchSize }));
     return;
   }
 
@@ -903,8 +1243,12 @@ async function handleApi(request, response, url) {
         users: [principal.user],
         agents: db.prepare('SELECT * FROM agents WHERE enabled = 1 ORDER BY created_at').all(),
         scenes: listScenes(),
-        database: { engine: 'SQLite', productionTarget: 'PostgreSQL + pgvector' },
-        models: { text: config.ark.textModel, embedding: config.ark.embeddingModel }
+        database: {
+          sourceOfTruth: 'SQLite', graphProjection: getGraphStoreStatus(),
+          temporalModel: '双时态', deferred: ['SDK', 'PostgreSQL + pgvector']
+        },
+        runtime: getAgentRuntimeStatus(),
+        models: configuredModels()
       });
       return;
     }
@@ -913,8 +1257,12 @@ async function handleApi(request, response, url) {
       users: db.prepare("SELECT * FROM users WHERE status = 'active' ORDER BY created_at").all(),
       agents: db.prepare('SELECT * FROM agents WHERE enabled = 1 ORDER BY created_at').all(),
       scenes: listScenes(),
-      database: { engine: 'SQLite', productionTarget: 'PostgreSQL + pgvector' },
-      models: { text: config.ark.textModel, embedding: config.ark.embeddingModel }
+      database: {
+        sourceOfTruth: 'SQLite', graphProjection: getGraphStoreStatus(),
+        temporalModel: '双时态', deferred: ['SDK', 'PostgreSQL + pgvector']
+      },
+      runtime: getAgentRuntimeStatus(),
+      models: configuredModels()
     });
     return;
   }
@@ -950,9 +1298,17 @@ async function handleApi(request, response, url) {
       : db.prepare('SELECT * FROM agents WHERE enabled = 1 ORDER BY created_at').all());
     return;
   }
+  if (pathname === '/api/agents' && method === 'POST') {
+    sendJson(response, 201, createAgent(await readBody(request)));
+    return;
+  }
 
   if (pathname === '/api/scenes' && method === 'GET') {
     sendJson(response, 200, listScenes());
+    return;
+  }
+  if (pathname === '/api/scenes' && method === 'POST') {
+    sendJson(response, 201, createScene(await readBody(request)));
     return;
   }
   const memoryProfileMatch = pathname.match(/^\/api\/scenes\/([^/]+)\/memory-profile$/);
@@ -1025,6 +1381,25 @@ async function handleApi(request, response, url) {
   if (conversationMatch && method === 'GET') {
     const userId = assertUserAccess(principal, url.searchParams.get('user_id'));
     sendJson(response, 200, getConversationMessages(conversationMatch[1], userId));
+    return;
+  }
+  const conversationExtractionMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/memory-extraction$/);
+  if (conversationExtractionMatch && method === 'GET') {
+    const conversation = db.prepare('SELECT user_id FROM conversations WHERE id = ?')
+      .get(conversationExtractionMatch[1]);
+    if (!conversation) throw new HttpError(404, '会话不存在', 'CONVERSATION_NOT_FOUND');
+    const userId = assertUserAccess(principal, conversation.user_id);
+    sendJson(response, 200, getConversationMemoryExtractionStatus(conversationExtractionMatch[1], userId));
+    return;
+  }
+  if (conversationExtractionMatch && method === 'POST') {
+    const conversation = db.prepare('SELECT user_id FROM conversations WHERE id = ?')
+      .get(conversationExtractionMatch[1]);
+    if (!conversation) throw new HttpError(404, '会话不存在', 'CONVERSATION_NOT_FOUND');
+    const userId = assertUserAccess(principal, conversation.user_id);
+    sendJson(response, 200, await extractConversationMemoryNow({
+      conversationId: conversationExtractionMatch[1], userId
+    }));
     return;
   }
 
@@ -1107,7 +1482,11 @@ async function handleApi(request, response, url) {
   if (pathname === '/api/memory/graph' && method === 'GET') {
     const scope = queryScope(url);
     scope.userId = assertUserAccess(principal, scope.userId);
-    sendJson(response, 200, listGraph(scope));
+    sendJson(response, 200, listGraph(scope, {
+      includeHistory: url.searchParams.get('include_history') === 'true',
+      validAt: url.searchParams.get('valid_at') || '',
+      knownAt: url.searchParams.get('known_at') || ''
+    }));
     return;
   }
   if (pathname === '/api/memory/events' && method === 'GET') {
@@ -1115,7 +1494,9 @@ async function handleApi(request, response, url) {
     scope.userId = assertUserAccess(principal, scope.userId);
     sendJson(response, 200, listEvents(scope, {
       includeHistory: url.searchParams.get('include_history') === 'true',
-      order: url.searchParams.get('order') === 'created' ? 'created' : 'story'
+      order: url.searchParams.get('order') === 'created' ? 'created' : 'story',
+      validAt: url.searchParams.get('valid_at') || '',
+      knownAt: url.searchParams.get('known_at') || ''
     }));
     return;
   }
@@ -1157,7 +1538,19 @@ async function handleApi(request, response, url) {
   }
 
   if (pathname === '/api/plots' && method === 'GET') {
-    sendJson(response, 200, listPlots(url.searchParams.get('agent_id')));
+    let scope = null;
+    if (url.searchParams.get('user_id')) {
+      scope = queryScope(url);
+      scope.userId = assertUserAccess(principal, scope.userId);
+    } else if (principal.role === 'user') {
+      scope = {
+        userId: principal.userId,
+        agentId: url.searchParams.get('agent_id') || '',
+        storyId: 'main_story',
+        branchId: 'main'
+      };
+    }
+    sendJson(response, 200, listPlots(url.searchParams.get('agent_id'), scope));
     return;
   }
   if (pathname === '/api/plots' && method === 'POST') {
@@ -1186,6 +1579,39 @@ async function handleApi(request, response, url) {
 
   if (pathname === '/api/tools' && method === 'GET') {
     sendJson(response, 200, decodeRows(listTools(), ['input_schema_json', 'config_json']));
+    return;
+  }
+
+  if (pathname === '/api/props/templates/skill.zip' && method === 'GET') {
+    sendBuffer(response, 200, skillTemplateZip(), 'application/zip', 'memory-agent-skill-template.zip');
+    return;
+  }
+  if (pathname === '/api/props/templates/mcp.json' && method === 'GET') {
+    sendBuffer(response, 200, mcpTemplateBuffer(), 'application/json; charset=utf-8', 'memory-agent-mcp-template.json');
+    return;
+  }
+  if (pathname === '/api/props' && method === 'GET') {
+    const agentId = url.searchParams.get('agent_id') || '';
+    let scope = null;
+    if (url.searchParams.get('user_id') || principal.role === 'user') {
+      const userId = assertUserAccess(principal, url.searchParams.get('user_id') || principal.userId);
+      scope = {
+        userId,
+        agentId,
+        storyId: url.searchParams.get('story_id') || 'main_story',
+        branchId: url.searchParams.get('branch_id') || 'main'
+      };
+    }
+    sendJson(response, 200, listProps(agentId, scope, { includeDrafts: principal.role === 'admin' }));
+    return;
+  }
+  if (pathname === '/api/props' && method === 'POST') {
+    sendJson(response, 201, saveProp(await readBody(request, 8_000_000)));
+    return;
+  }
+  const propMatch = pathname.match(/^\/api\/props\/([^/]+)$/);
+  if (propMatch && method === 'PUT') {
+    sendJson(response, 200, saveProp(await readBody(request), propMatch[1]));
     return;
   }
 
@@ -1258,7 +1684,7 @@ export const server = http.createServer(async (request, response) => {
 });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  server.listen(config.port, '127.0.0.1', () => {
-    console.log(`Memory Agent Studio: http://127.0.0.1:${config.port}${config.basePath || '/'}`);
+  server.listen(config.port, config.host, () => {
+    console.log(`Memory Agent Studio: http://${config.host}:${config.port}${config.basePath || '/'}`);
   });
 }
