@@ -420,9 +420,10 @@
 
                   <section class="architecture-domain runtime-domain">
                     <header><span>02</span><strong>Agent Runtime</strong><small id="architectureRuntimeName">Pi Agent Core</small></header>
-                    <div class="architecture-node" data-phase="generate"><i data-lucide="orbit"></i><span><strong>Pi Turn Runtime</strong><small id="architecturePiNodeMeta">状态 + 生命周期事件 + 工具循环边界</small></span></div>
+                    <div class="architecture-node" data-phase="generate"><i data-lucide="orbit"></i><span><strong>Pi ReAct Runtime</strong><small id="architecturePiNodeMeta">模型 → 工具 → toolResult → 模型续答</small></span></div>
                     <div class="architecture-node" data-phase="pre generate write"><i data-lucide="route"></i><span><strong>会话锁与 Turn Pipeline</strong><small>同一会话串行，保留现有调度功能</small></span></div>
                     <div class="architecture-node" data-phase="pre generate input"><i data-lucide="layers-3"></i><span><strong>Prompt Compiler</strong><small>硬规则 + 角色属性 + 状态 + 最终召回</small></span></div>
+                    <div class="architecture-node" data-phase="pre generate write"><i data-lucide="plug-zap"></i><span><strong>Capability Gateway</strong><small>解锁过滤、白名单、确认、Skill/MCP 执行回执</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="brain-circuit"></i><span><strong>Recall Planner</strong><small>轻量目录 → LLM 决策 → 详情展开</small></span></div>
                     <div class="architecture-node" data-phase="input"><i data-lucide="scan-search"></i><span><strong>Architecture RAG</strong><small>代码切片 + 混合检索 + 证据约束</small></span></div>
                   </section>
@@ -434,7 +435,7 @@
                     <div class="architecture-node" data-phase="pre"><i data-lucide="badge-check"></i><span><strong>角色固定属性</strong><small>agent 全局，每轮固定注入</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="user-round"></i><span><strong>用户记忆</strong><small>结构化状态 + 双时态用户事件</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="book-heart"></i><span><strong>我们的故事</strong><small>角色言行 + 共同承诺，双向且隔离</small></span></div>
-                    <div class="architecture-node" data-phase="pre write"><i data-lucide="package-open"></i><span><strong>剧情与道具资格</strong><small>条件命中后解锁，执行仍过能力网关</small></span></div>
+                    <div class="architecture-node" data-phase="pre write"><i data-lucide="package-open"></i><span><strong>剧情与道具资格</strong><small>条件命中后解锁；当轮通过能力网关暴露给 Pi</small></span></div>
                     <div class="architecture-node" data-phase="write"><i data-lucide="scan-text"></i><span><strong id="architectureExtractionNodeTitle">长期记忆更新（每 X 轮）</strong><small id="architectureTemporalNodeMeta">抽取 → 双时态版本 → 图投影 → 触发</small></span></div>
                   </section>
 
@@ -505,8 +506,8 @@
                 </div>
                 <div class="flow-node grid-col-7 has-arrow" data-phase="generate">
                   <span class="step-number">06</span><i data-lucide="bot"></i>
-                  <strong>角色回复</strong>
-                  <small>Pi 生命周期驱动 Provider，并保存 assistant 消息</small>
+                  <strong>ReAct 回复循环</strong>
+                  <small>Pi 驱动模型；需要时执行工具并携 toolResult 续答</small>
                   <span class="timing sync">同步</span>
                 </div>
                 <a class="flow-node grid-col-8 has-arrow config-flow-node" href="#schemaTable" data-phase="write" data-config-link data-jump-page="schemas" data-jump-schema-tab="extraction" data-jump-target="#schemaTable">
@@ -521,6 +522,22 @@
                   <small>主库提交、图投影尝试与后置触发完成后返回</small>
                   <span class="timing blocking">完成后解锁</span>
                 </div>
+              </section>
+
+              <section class="timeline-grid swimlane capability-lane" aria-label="已解锁能力的 ReAct 调用机制">
+                <div class="lane-label">
+                  <i data-lucide="plug-zap"></i>
+                  <strong>能力调用</strong>
+                  <span>动态暴露 · ReAct</span>
+                </div>
+                <a class="retrieval-architecture-step grid-col-2 has-arrow" href="#automationContent" data-phase="pre" data-config-link data-jump-page="automation" data-jump-tab="props" data-jump-target="#automationContent"><span>01</span><strong>资格过滤</strong><small>当前用户、角色、故事、分支已解锁 + 管理员启用</small></a>
+                <div class="retrieval-architecture-step grid-col-3 has-arrow" data-phase="pre"><span>02</span><strong>能力发现</strong><small>MCP tools/list；Skill ZIP 校验并加载声明式工具</small></div>
+                <div class="retrieval-architecture-step grid-col-4 has-arrow" data-phase="generate"><span>03</span><strong>Schema 暴露</strong><small>仅白名单工具进入本轮主模型 tools</small></div>
+                <div class="retrieval-architecture-step planner grid-col-5 has-arrow" data-phase="generate"><span>04 · MODEL</span><strong>模型自主选择</strong><small>相关时产生 tool call；无关时直接回复</small></div>
+                <div class="retrieval-architecture-step gate grid-col-6 has-arrow" data-phase="generate write"><span>05</span><strong>能力网关</strong><small>确认策略、次数限制、HTTP/stdio 主机与命令白名单</small></div>
+                <div class="retrieval-architecture-step graph grid-col-7 has-arrow" data-phase="generate write"><span>06</span><strong>真实执行</strong><small>MCP tools/call 或已审核 Skill template / HTTP</small></div>
+                <div class="retrieval-architecture-step merge grid-col-8 has-arrow" data-phase="generate"><span>07</span><strong>toolResult</strong><small>结果标记为外部数据并写执行回执</small></div>
+                <div class="retrieval-architecture-step planner grid-col-9" data-phase="generate"><span>08 · MODEL</span><strong>模型续答</strong><small>结合结果二次推理；失败不得声称成功</small></div>
               </section>
 
               <section class="timeline-grid swimlane retrieval-lane" aria-label="两阶段记忆召回机制">
@@ -679,11 +696,11 @@
                     <div>
                       <span class="request-index">REQUEST #N</span>
                       <strong>第 N 次文本模型请求</strong>
-                      <small>N 为当前会话内的主回复模型调用序号；召回规划器是回复前的独立模型请求</small>
+                      <small>N 为本次主回复 Agent turn 内的模型调用序号；第 2 次起会追加上一轮 tool call 与 toolResult</small>
                     </div>
                     <div class="request-facts">
                       <code>Provider API</code>
-                      <code>input.length = 1 + X</code>
+                      <code>context = system + messages + tools</code>
                       <code id="architectureInputLimit">0 &lt; X &le; 16</code>
                     </div>
                   </div>
@@ -739,7 +756,7 @@
 
                     <section class="input-envelope messages-envelope" aria-label="最近对话输入组成">
                       <header><div><code>input[1..X]</code><strong>messages</strong></div><span id="architectureMessageLimit">X &le; 16</span></header>
-                      <div class="message-window-note">按时间升序保留 role 与原文；本轮用户消息已经包含在 X 条之内。</div>
+                      <div class="message-window-note">第 1 次请求按时间升序保留 role 与原文；本轮用户消息已包含在 X 条之内。</div>
                       <a class="message-slice config-source" href="#messageList" data-config-link data-jump-page="chat" data-jump-target="#messageList">
                         <span>messages[0..X-2]</span>
                         <strong>最近历史消息</strong>
@@ -752,6 +769,12 @@
                         <small>当前 request 的最后一条 input</small>
                         <b>角色对话<i data-lucide="external-link"></i></b>
                       </a>
+                      <div class="message-slice tool-result-message">
+                        <span>request #N · N ≥ 2</span>
+                        <strong>assistant tool call + toolResult</strong>
+                        <small>Pi 追加实际工具参数、成功/失败与受控结果，再请求模型续答</small>
+                        <b>运行时自动装配</b>
+                      </div>
                     </section>
 
                     <div class="slice-join" aria-hidden="true"><i data-lucide="arrow-right"></i></div>
@@ -762,10 +785,10 @@
                         <div><dt>model</dt><dd>TEXT_PROVIDER / *_TEXT_MODEL</dd></div>
                         <div><dt>temperature</dt><dd>0.7</dd></div>
                         <div><dt>max_output_tokens</dt><dd>1200</dd></div>
-                        <div><dt>stream</dt><dd>false</dd></div>
-                        <div><dt>tools</dt><dd>[] · 主回复请求</dd></div>
+                        <div><dt>stream</dt><dd>有工具 true · 无工具沿用 Provider bridge</dd></div>
+                        <div><dt>tools</dt><dd>当轮已解锁白名单 · 0..16</dd></div>
                       </dl>
-                      <div class="model-target"><i data-lucide="bot"></i><span><strong>Configured Text Provider</strong><small>生成角色回复并返回 usage</small></span></div>
+                      <div class="model-target"><i data-lucide="bot"></i><span><strong>Configured Text Provider</strong><small>返回文本或 tool call；toolResult 后继续推理</small></span></div>
                     </section>
                   </div>
 

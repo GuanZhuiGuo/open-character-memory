@@ -9,6 +9,7 @@ import {
   getConversationMessages, listConversations, MAIN_MODEL_MESSAGE_LIMIT
 } from './lib/agent.js';
 import { answerArchitectureQuestion, getArchitectureIndexStatus } from './lib/architecture.js';
+import { getCapabilityRuntimeStatus } from './lib/capabilities.js';
 import { config } from './lib/config.js';
 import { db, initializeDatabase } from './lib/db.js';
 import {
@@ -24,6 +25,7 @@ import {
   retrieveMemory, setMemoryValue
 } from './lib/memory.js';
 import { getTrace, listTraces } from './lib/trace.js';
+import { parseSkillPackage } from './lib/skill-package.js';
 import { listPlots, listProps, listTools, listTriggers } from './lib/triggers.js';
 import { hash, json, nowIso, parseJson, safeText, uid } from './lib/utils.js';
 import { createZip } from './lib/zip.js';
@@ -438,6 +440,23 @@ function validateMcpManifest(manifest) {
   if (!['streamable_http', 'stdio'].includes(transport)) {
     throw new Error('MCP transport 仅支持 streamable_http 或 stdio 描述');
   }
+  const server = manifest.server || manifest;
+  if (transport === 'streamable_http') {
+    let url;
+    try {
+      url = new URL(server.url);
+    } catch {
+      throw new Error('MCP streamable_http 缺少有效 server.url');
+    }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+      throw new Error('MCP server.url 仅允许不含账密的 HTTP(S) 地址');
+    }
+  } else if (!String(server.command || '').trim()) {
+    throw new Error('MCP stdio 缺少 server.command');
+  }
+  if (!Array.isArray(manifest.allowed_tools) || !manifest.allowed_tools.length) {
+    throw new Error('MCP 必须配置非空 allowed_tools 白名单');
+  }
   return manifest;
 }
 
@@ -470,8 +489,8 @@ function saveProp(body, id = null) {
   const key = normalizePropKey(body.key || current?.key || '');
   const name = safeText(body.name ?? current?.name, 100).trim();
   if (!name) throw new Error('道具名称不能为空');
-  const version = safeText(body.version ?? current?.version ?? '1.0.0', 30) || '1.0.0';
-  const manifest = packageType === 'mcp_json'
+  let version = safeText(body.version ?? current?.version ?? '1.0.0', 30) || '1.0.0';
+  let manifest = packageType === 'mcp_json'
     ? validateMcpManifest(body.manifest ?? parseJson(current?.manifest_json, {}))
     : (body.manifest ?? parseJson(current?.manifest_json, {}));
   const timestamp = nowIso();
@@ -486,6 +505,12 @@ function saveProp(body, id = null) {
       throw new Error('请选择不超过 5MB 的 Skill ZIP');
     }
     if (file[0] !== 0x50 || file[1] !== 0x4b) throw new Error('Skill 文件不是有效 ZIP');
+    const parsedSkill = parseSkillPackage(file, key);
+    if (containsInlineSecret(parsedSkill.manifest)) {
+      throw new Error('Skill 清单不允许包含明文密钥，请使用 ${secret:NAME}');
+    }
+    manifest = parsedSkill.manifest;
+    version = parsedSkill.manifest.version;
     const uploadDir = path.join(config.rootDir, 'data', 'uploads', 'props');
     fs.mkdirSync(uploadDir, { recursive: true });
     fileName = safeText(body.file_name || `${key}.zip`, 120).replace(/[^a-z0-9._-]/gi, '_');
@@ -531,11 +556,23 @@ function skillTemplateZip() {
     name: '语音信笺',
     version: '1.0.0',
     capabilities: [{ key: 'send_audio', risk: 'external_side_effect', confirmation: 'each_call' }],
-    entry: 'SKILL.md'
+    entry: 'SKILL.md',
+    tools: [{
+      name: 'compose_voice_letter',
+      description: '根据用户要求生成一份可交给语音服务的信笺文本。',
+      input_schema: {
+        type: 'object',
+        properties: { message: { type: 'string', description: '信笺正文' } },
+        required: ['message']
+      },
+      execution: { type: 'template', template: '语音信笺文本已准备：{{message}}' },
+      confirmation: 'none',
+      read_only: true
+    }]
   };
   return createZip([
     { name: 'skill.json', content: `${JSON.stringify(manifest, null, 2)}\n` },
-    { name: 'SKILL.md', content: '# 语音信笺\n\n描述该能力的输入、输出、边界和失败回退。上传后必须由管理员审核启用；包内内容不会在上传时执行。\n' }
+    { name: 'SKILL.md', content: '# 语音信笺\n\n先理解用户想表达的情绪，再使用 compose_voice_letter 生成简短、自然的信笺文本。不得声称真实音频已发送，除非后续语音服务返回成功回执。\n' }
   ]);
 }
 
@@ -647,6 +684,7 @@ function architectureOverview(sceneId) {
       queryParameters: ['valid_at', 'known_at']
     },
     runtime: getAgentRuntimeStatus(),
+    capabilities: getCapabilityRuntimeStatus(),
     graphStore: getGraphStoreStatus(),
     compression: {
       rollingSummaryEnabled: false,
@@ -1215,6 +1253,7 @@ async function handleApi(request, response, url) {
       database: { sourceOfTruth: 'sqlite', temporalModel: 'bitemporal' },
       graphStore: getGraphStoreStatus(),
       runtime: getAgentRuntimeStatus(),
+      capabilities: getCapabilityRuntimeStatus(),
       ...configuredModels()
     });
     return;
@@ -1248,6 +1287,7 @@ async function handleApi(request, response, url) {
           temporalModel: '双时态', deferred: ['SDK', 'PostgreSQL + pgvector']
         },
         runtime: getAgentRuntimeStatus(),
+        capabilities: getCapabilityRuntimeStatus(),
         models: configuredModels()
       });
       return;
@@ -1262,6 +1302,7 @@ async function handleApi(request, response, url) {
         temporalModel: '双时态', deferred: ['SDK', 'PostgreSQL + pgvector']
       },
       runtime: getAgentRuntimeStatus(),
+      capabilities: getCapabilityRuntimeStatus(),
       models: configuredModels()
     });
     return;

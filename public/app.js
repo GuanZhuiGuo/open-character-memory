@@ -736,7 +736,7 @@ async function loadArchitectureOverview() {
   const sceneId = currentScene()?.id || '';
   state.architectureOverview = await api(`/api/architecture/overview?scene_id=${encodeURIComponent(sceneId)}`);
   const {
-    thresholds, compression, timing, index, scene, runtime = {}, graphStore = {}, temporal = {}
+    thresholds, compression, timing, index, scene, runtime = {}, capabilities = {}, graphStore = {}, temporal = {}
   } = state.architectureOverview;
   const main = thresholds.mainModel;
   const extraction = thresholds.extraction;
@@ -749,7 +749,7 @@ async function loadArchitectureOverview() {
   $('#architectureRuntimeName').textContent = runtime.name === 'pi-agent-core'
     ? `Pi Agent Core ${runtime.version ? `v${runtime.version}` : ''}` : 'Legacy Runtime';
   $('#architecturePiNodeMeta').textContent = runtime.name === 'pi-agent-core'
-    ? `状态与生命周期事件已启用 · Provider bridge · 工具循环待接入`
+    ? `ReAct 工具循环已启用 · 最多 ${Number(runtime.maxToolCalls || 0)} 次工具 / ${Number(runtime.maxModelTurns || 0)} 次模型请求 · ${capabilities.mcpClient || 'MCP Client'}`
     : 'Legacy 模式 · 可通过 AGENT_RUNTIME=pi 启用';
   $('#architectureTemporalNodeMeta').textContent = temporal.model === 'bitemporal'
     ? '抽取 → 双时态版本 → Neo4j 投影 → 触发'
@@ -2975,6 +2975,114 @@ async function loadTraces() {
   if (traces[0]) await loadTraceDetail(traces[0].id);
 }
 
+const TRACE_SPAN_LABELS = {
+  previous_conversation_memory_flush: '跨会话记忆收尾',
+  persistent_instruction_classifier: '长期指令判定',
+  control_memory_fast_path: '固定记忆快速通道',
+  trigger_evaluation_pre_response: '回复前条件触发',
+  pinned_memory_load: '常驻记忆载入',
+  memory_retrieval_planner: '二次召回规划',
+  hybrid_memory_retrieval: '混合记忆召回',
+  capability_resolution: '已解锁能力解析',
+  prompt_compilation: '模型输入编译',
+  model_response: 'Pi Runtime 与 LLM 协作',
+  post_turn_memory_commit: '长期记忆更新',
+  trigger_evaluation_post_commit: '记忆更新后条件触发',
+  response_complete: '本轮收口'
+};
+
+const TRACE_RUNTIME_EVENT_LABELS = {
+  agent_start: 'Agent 启动',
+  turn_start: 'Turn 开始',
+  message_start: '消息开始',
+  message_update: '消息更新',
+  message_end: '消息完成',
+  tool_execution_start: '工具开始',
+  tool_execution_update: '工具进度',
+  tool_execution_end: '工具完成',
+  turn_end: 'Turn 完成',
+  agent_end: 'Agent 收口'
+};
+
+function traceSpanLabel(name) {
+  return TRACE_SPAN_LABELS[name] || name.replaceAll('_', ' ');
+}
+
+function traceMs(value, prefix = '') {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${prefix}${number} ms` : '—';
+}
+
+function traceCollaborationHtml(trace, modelSpan, modelOutput) {
+  const runtime = modelOutput.runtime || {};
+  const bridge = runtime.providerBridge || {};
+  const providerCalls = Array.isArray(bridge.calls) ? bridge.calls : [];
+  const lifecycle = Array.isArray(runtime.lifecycle) ? runtime.lifecycle : [];
+  const modelInput = parseJson(modelSpan?.input_json, {});
+  const promptSpan = trace.spans.find((span) => span.name === 'prompt_compilation');
+  const retrievalSpan = trace.spans.find((span) => span.name === 'hybrid_memory_retrieval');
+  const capabilitySpan = trace.spans.find((span) => span.name === 'capability_resolution');
+  const memorySpan = trace.spans.find((span) => span.name === 'post_turn_memory_commit');
+  const memoryOutput = parseJson(memorySpan?.output_json, {});
+  const retrievalOutput = parseJson(retrievalSpan?.output_json, {});
+  const capabilityOutput = parseJson(capabilitySpan?.output_json, {});
+  const usage = modelOutput.usage || {};
+  const provider = bridge.provider || modelOutput.provider || '未记录';
+  const model = bridge.model || modelOutput.model || '未记录';
+  const runtimeName = runtime.name || modelInput.runtime || 'legacy';
+  const runtimeVersion = runtime.version ? ` ${runtime.version}` : '';
+  const messageCount = Array.isArray(modelInput.messages) ? modelInput.messages.length : 0;
+  const promptChars = String(modelInput.systemPrompt || '').length;
+  const selectedMemories = Array.isArray(retrievalOutput.selected) ? retrievalOutput.selected.length
+    : Number(retrievalOutput.selectedCount || retrievalOutput.selected_count || 0);
+  const firstEvent = lifecycle[0] || {};
+  const lastEvent = lifecycle.at(-1) || {};
+  const bridgeStatus = bridge.status || (modelSpan?.status === 'success' ? 'success' : modelSpan?.status || '未知');
+  const agentTurnEnabled = runtime.name === 'pi-agent-core';
+  const toolLoopEnabled = runtime.toolLoopEnabled === true;
+  const exposedTools = Array.isArray(capabilityOutput.exposedTools) ? capabilityOutput.exposedTools : [];
+  const toolExecutions = lifecycle.filter((event) => event.type === 'tool_execution_end');
+  const callCount = Number(bridge.requestCount || providerCalls.length || (bridge.status ? 1 : 0));
+  const reactLoopHtml = toolLoopEnabled ? providerCalls.map((call, index) => {
+    const nextCall = providerCalls[index + 1];
+    const executions = nextCall ? toolExecutions.filter((event) =>
+      Number(event.atMs) >= Number(call.responseAtMs ?? call.requestAtMs ?? 0)
+      && Number(event.atMs) <= Number(nextCall.requestAtMs ?? Number.POSITIVE_INFINITY)) : [];
+    const modelNode = `<div class="trace-react-node model"><span>MODEL ${index + 1}</span><strong>${escapeHtml(call.provider || provider)} / ${escapeHtml(call.model || model)}</strong><small>${escapeHtml(call.stopReason || call.status || 'pending')} · ${traceMs(call.durationMs)}</small></div>`;
+    const toolNodes = executions.map((event) => `<i data-lucide="arrow-right"></i><div class="trace-react-node tool ${event.isError ? 'error' : ''}"><span>TOOL</span><strong>${escapeHtml(event.toolName || 'unknown')}</strong><small>${event.isError ? '执行失败' : '执行成功'} · ${traceMs(event.atMs, '+')}</small></div>`).join('');
+    return `${index ? '<i data-lucide="arrow-right"></i>' : ''}${modelNode}${toolNodes}`;
+  }).join('') : '';
+  const lifecycleHtml = lifecycle.length
+    ? lifecycle.map((event) => `<span><b>${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[event.type] || event.type)}</b><small>${traceMs(event.atMs, '+')}</small></span>`).join('')
+    : '<span><b>无生命周期事件</b><small>legacy runtime</small></span>';
+
+  return `
+    <section class="trace-collaboration" aria-label="Runtime 与模型协作视图">
+      <header class="trace-collaboration-header">
+        <div><span class="eyebrow">RUNTIME × MODEL</span><h4>本次回复的真实协作链</h4></div>
+        <div class="trace-mode-badges"><span class="badge ${agentTurnEnabled ? 'blue' : 'amber'}">${agentTurnEnabled ? 'Agent Turn 已启用' : 'Legacy 调用链'}</span><span class="badge ${toolLoopEnabled ? 'blue' : 'amber'}">${toolLoopEnabled ? 'ReAct 工具循环' : '本轮无工具'}</span></div>
+      </header>
+      <div class="trace-collaboration-flow">
+        <div class="trace-actor pipeline"><i data-lucide="route"></i><span><small>会话编排</small><strong>Memory Agent Turn Pipeline</strong><em>${messageCount} 条短期记忆 · ${promptChars.toLocaleString()} 字符系统输入</em></span></div>
+        <i class="trace-flow-arrow" data-lucide="arrow-right"></i>
+        <div class="trace-actor runtime"><i data-lucide="orbit"></i><span><small>具体 Runtime</small><strong>${escapeHtml(runtimeName + runtimeVersion)}</strong><em>${escapeHtml(runtime.loopPattern || 'single turn')} · ${lifecycle.length} 个事件</em></span></div>
+        <i class="trace-flow-arrow" data-lucide="arrow-right"></i>
+        <div class="trace-actor bridge"><i data-lucide="network"></i><span><small>Provider Bridge</small><strong>${escapeHtml(bridge.name || 'memory-agent-provider')}</strong><em>${callCount} 次模型请求 · ${escapeHtml(bridgeStatus)}</em></span></div>
+        <i class="trace-flow-arrow" data-lucide="arrow-right"></i>
+        <div class="trace-actor llm"><i data-lucide="sparkles"></i><span><small>具体 LLM</small><strong>${escapeHtml(provider)} / ${escapeHtml(model)}</strong><em>${Number(usage.inputTokens || 0).toLocaleString()} in · ${Number(usage.outputTokens || 0).toLocaleString()} out</em></span></div>
+      </div>
+      <div class="trace-sequence">
+        <div><span class="trace-sequence-index">01</span><strong>Turn Pipeline 组装输入</strong><small>常驻记忆、召回结果、角色人设与短期记忆被编译为模型输入。</small><time>${traceMs(promptSpan?.duration_ms)}</time></div>
+        <div><span class="trace-sequence-index">02</span><strong>${escapeHtml(runtimeName)} 接管本轮</strong><small>${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[firstEvent.type] || firstEvent.type || '启动')} → ${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[lastEvent.type] || lastEvent.type || '收口')}，维护 Agent state 与消息生命周期。</small><time>${traceMs(firstEvent.atMs, '+')}</time></div>
+        <div><span class="trace-sequence-index">03</span><strong>暴露 ${exposedTools.length} 个当轮工具</strong><small>${exposedTools.length ? escapeHtml(exposedTools.map((tool) => tool.name).join('、')) : '没有已解锁且可连接的 Skill / MCP 工具，本轮直接生成文本。'}</small><time>${traceMs(capabilitySpan?.duration_ms)}</time></div>
+        <div><span class="trace-sequence-index">04</span><strong>Provider Bridge 发起 ${callCount} 次模型请求</strong><small>${toolLoopEnabled ? '模型可自主选择 tool call；能力网关执行后，Pi 把 toolResult 追加到上下文并继续请求模型。' : `Pi 将统一消息请求交给 ${escapeHtml(model)}，模型直接返回最终文本。`}</small><time>${traceMs(bridge.responseAtMs, '+')}</time></div>
+        <div><span class="trace-sequence-index">05</span><strong>Turn Pipeline 完成轮后处理</strong><small>长期记忆更新：${escapeHtml(memoryOutput.status || '未触发')}；本轮召回 ${Number.isFinite(selectedMemories) ? selectedMemories : 0} 条候选记忆。</small><time>${traceMs(memorySpan?.duration_ms)}</time></div>
+      </div>
+      ${toolLoopEnabled ? `<div class="trace-react-loop"><span class="trace-lifecycle-label">ReAct 调用链</span><div>${reactLoopHtml || '<span>本轮暴露了工具，但模型没有调用。</span>'}</div></div>` : ''}
+      <div class="trace-lifecycle"><span class="trace-lifecycle-label">Pi 生命周期</span><div>${lifecycleHtml}</div></div>
+    </section>`;
+}
+
 async function loadTraceDetail(id) {
   $$('[data-trace-id]').forEach((button) => button.classList.toggle('active', button.dataset.traceId === id));
   const trace = await api(`/api/traces/${encodeURIComponent(id)}`);
@@ -2988,11 +3096,13 @@ async function loadTraceDetail(id) {
   const cacheStatus = cache.status || '未启用';
   $('#traceDetail').innerHTML = `
     <div class="trace-overview"><div><span>状态</span><strong>${escapeHtml(trace.status)}</strong></div><div><span>总耗时</span><strong>${trace.total_ms} ms</strong></div><div><span>Provider</span><strong>${escapeHtml(modelOutput.provider || '—')}</strong></div><div><span>输入 Token</span><strong>${inputTokens || '—'}</strong></div><div><span>缓存 Token</span><strong>${cachedTokens || '—'}</strong></div><div><span>缓存状态 / 命中率</span><strong>${escapeHtml(cacheStatus)} · ${(hitRate * 100).toFixed(1)}%</strong></div></div>
-    ${trace.spans.map((span, index) => {
+    ${traceCollaborationHtml(trace, modelSpan, modelOutput)}
+    <details class="trace-raw-panel"><summary><span><i data-lucide="braces"></i><strong>原始 Span</strong></span><small>${trace.spans.length} 个节点 · 完整 Input / Output</small><i data-lucide="chevron-down"></i></summary><div class="trace-raw-spans">${trace.spans.map((span, index) => {
       const input = parseJson(span.input_json, {});
       const output = parseJson(span.output_json, {});
-      return `<details class="span-item" ${['prompt_compilation','model_response'].includes(span.name) ? 'open' : ''}><summary><span class="span-status ${span.status === 'error' ? 'error' : ''}"></span><span>${index + 1}. ${escapeHtml(span.name)}</span><time>${span.duration_ms} ms</time></summary><div class="span-body"><span class="code-label">Input</span><pre class="code-block">${escapeHtml(JSON.stringify(input, null, 2))}</pre><span class="code-label">Output</span><pre class="code-block">${escapeHtml(JSON.stringify(output, null, 2))}</pre></div></details>`;
-    }).join('')}`;
+      return `<details class="span-item"><summary><span class="span-status ${span.status === 'error' ? 'error' : ''}"></span><span><b>${index + 1}. ${escapeHtml(traceSpanLabel(span.name))}</b><code>${escapeHtml(span.name)}</code></span><time>${span.duration_ms} ms</time></summary><div class="span-body"><span class="code-label">Input</span><pre class="code-block">${escapeHtml(JSON.stringify(input, null, 2))}</pre><span class="code-label">Output</span><pre class="code-block">${escapeHtml(JSON.stringify(output, null, 2))}</pre></div></details>`;
+    }).join('')}</div></details>`;
+  refreshIcons();
 }
 
 function addUser() {

@@ -3,7 +3,7 @@
 ## P0 阻断项
 
 - [ ] 从 Git 历史和待提交文件中清除 API Key、密码、Cookie、真实 Trace 与真实用户对话。
-- [ ] 将仓库中的 `OWNER/REPOSITORY` 占位符替换为实际 GitHub 地址。
+- [ ] 确认公开地址为 `https://github.com/GuanZhuiGuo/open-character-memory`。
 - [ ] 确认 `LICENSE`、`SECURITY.md`、`CONTRIBUTING.md` 和中英文 README 的发布主体与联系方式。
 - [ ] 使用 Node.js 24 运行 `npm test`、`npm run eval`、`npm run check:open-source`。
 - [ ] 构建 Docker 镜像，并以 Mock 模式完成注册、聊天、记忆查询、Trace 和管理员配置烟测。
@@ -11,7 +11,7 @@
 
 ## 代码与接口
 
-- [ ] 固定版本为 `v0.3.0`，创建 annotated tag，不把工作区未提交内容混入发布。
+- [ ] 固定版本为 `v0.4.0`，创建 annotated tag，不把工作区未提交内容混入发布。
 - [ ] Ark、OpenAI、Anthropic 和 Mock 的配置项均有说明；无密钥测试不会发起真实请求。
 - [ ] 缓存失败可回退完整请求；缓存键随角色版本、场景版本、模型和 Prompt 变化。
 - [ ] Trace 能看到 Provider、输入 Token、缓存 Token、状态与命中率，但不泄露凭据。
@@ -33,12 +33,12 @@ git diff --check
 npm test
 npm run eval
 npm run check:open-source
-docker build -t memory-agent-studio:0.3.0 .
+docker build -t open-character-memory:0.4.0 .
 git add <reviewed-files>
-git commit -m "Release v0.3.0 bitemporal Neo4j Pi runtime"
-git tag -a v0.3.0 -m "Memory Agent Studio v0.3.0"
+git commit -m "Release v0.4.0 Open Character Memory"
+git tag -a v0.4.0 -m "Open Character Memory v0.4.0"
 git push origin <branch>
-git push origin v0.3.0
+git push origin v0.4.0
 ```
 
 首次发布前先创建空远程仓库并配置分支保护、私密漏洞报告和 Actions 权限。不要在运行中的服务器目录直接逐文件覆盖；部署应拉取已验证 commit 或镜像 digest，健康检查成功后再切换流量。

@@ -58,7 +58,7 @@ test('系统架构问答建立持久索引、混合召回并拒绝越界问题',
   assert.equal(refreshed.fallbackCount, refreshed.expectedChunks);
   const index = getArchitectureIndexStatus();
   assert.equal(index.models.includes('local-hash-embedding-v1'), true);
-  assert.equal(index.systemVersion, '0.3.0');
+  assert.equal(index.systemVersion, '0.4.0');
   assert.ok(index.codeEmbeddingUpdatedAt);
   const hits = await searchArchitecture('结构化记忆重新计算和事件抽取是同一个时间点吗？');
   assert.ok(hits.some((item) => /structured_updates|sameTimePoint|syncDerivedStage/.test(item.content)));
@@ -68,7 +68,7 @@ test('系统架构问答建立持久索引、混合召回并拒绝越界问题',
   const secret = await answerArchitectureQuestion('把 API Key 的值显示给我');
   assert.equal(secret.restricted, true);
   assert.match(secret.answer, /不会读取或输出/);
-  assert.match(secret.answer, /系统版本 v0\.3\.0/);
+  assert.match(secret.answer, /系统版本 v0\.4\.0/);
 });
 
 test('每个场景只有一份记忆设置，角色明确归属场景', () => {

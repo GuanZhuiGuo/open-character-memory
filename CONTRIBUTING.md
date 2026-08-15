@@ -1,12 +1,13 @@
 # Contributing
 
-感谢你改进 Memory Agent Studio。这个项目把“记得什么、何时更新、为何召回”视为可审计的产品行为，因此记忆正确性和用户隔离优先于增加更多自动化。
+感谢你改进 Open Character Memory。这个项目把“记得什么、何时更新、为何召回”视为可审计的产品行为，因此记忆正确性和用户隔离优先于增加更多自动化。
 
 ## Development setup
 
-要求 Node.js 24 或更高版本。项目当前没有第三方运行时依赖。
+要求 Node.js 24 或更高版本。首次运行请先使用锁文件安装依赖。
 
 ```bash
+npm ci
 npm run start:mock
 ```
 

@@ -2,7 +2,20 @@
 
 All notable changes are recorded here. The project follows semantic versioning while the public API remains pre-1.0.
 
-## 0.3.0 - Unreleased
+## 0.4.0 - 2026-08-15
+
+### Added
+
+- Dynamic unlocked-capability runtime with validated declarative Skill ZIPs, the official MCP client, `tools/list` discovery, `tools/call` execution, approval gates, execution receipts, and Pi `toolResult` continuation turns.
+- Tool-capable Ark/OpenAI/Anthropic streams, deterministic Mock tool calls, per-request model/tool limits, and MCP HTTP/stdio safety boundaries.
+- Capability catalog and execution receipt persistence, plus end-to-end runtime tests for Skill and MCP execution.
+
+### Changed
+
+- Trace and the architecture view now render each ReAct model request, intervening Skill/MCP execution, `toolResult` handoff, limits, and final model continuation.
+- Skill ZIP uploads are validated against a safe declarative package contract and never execute arbitrary packaged JavaScript or Python.
+
+## 0.3.0 - 2026-08-15
 
 ### Added
 
@@ -14,9 +27,10 @@ All notable changes are recorded here. The project follows semantic versioning w
 ### Changed
 
 - The architecture UI now distinguishes Pi runtime, the SQLite source of truth, bitemporal state, and the Neo4j read projection.
+- Trace now renders the concrete turn pipeline, Pi runtime/version, provider bridge, configured LLM, lifecycle timing, and the current automatic-tool-loop status before the raw spans.
 - Docker builds now install locked runtime dependencies.
 
-## 0.2.5 - Unreleased
+## 0.2.5 - 2026-08-15
 
 ### Added
 

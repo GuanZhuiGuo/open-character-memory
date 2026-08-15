@@ -2,19 +2,20 @@
 
 ## 当前版本边界
 
-`0.3.0` 的运行结构是：
+`0.4.0` 的运行结构是：
 
 ```text
 HTTP /api/chat
   -> 原有会话锁、固定规则、触发器、两阶段召回与 Prompt Compiler
-  -> Pi Agent Core turn state + lifecycle events
-  -> 现有 Text Provider bridge（Ark / OpenAI / Anthropic / Mock）
+  -> 已解锁 Skill/MCP 解析与工具白名单
+  -> Pi Agent Core ReAct turn state + lifecycle events
+  -> Text Provider -> 可选 tool call -> 能力网关 -> toolResult -> Text Provider 续答
   -> SQLite 双时态主记录
   -> graph_projection_outbox
   -> Neo4j 当前图投影
 ```
 
-SQLite 是当前唯一事实源。Neo4j 可以删除后从 SQLite 全量重建；它不裁决记忆版本，也不保存独有业务事实。Pi Agent Core 管理主回复 turn 的状态和生命周期，现有剧情、道具、触发器与权限逻辑仍由服务端管线负责。
+SQLite 是当前唯一事实源。Neo4j 可以删除后从 SQLite 全量重建；它不裁决记忆版本，也不保存独有业务事实。Pi Agent Core 管理主回复 turn 的状态、生命周期和 ReAct 工具循环；道具资格、白名单、确认、网络/进程边界与执行回执仍由服务端能力网关裁决。
 
 ## 双时态语义
 
@@ -71,13 +72,16 @@ GET /api/memory/graph?...&valid_at=...&known_at=...
 Pi runtime 当前提供：
 
 - 一次主回复的 Agent state。
-- `agent_start / turn_start / message_* / turn_end / agent_end` 生命周期事件。
-- 统一的 stream contract 与未来工具执行边界。
+- `agent_start / turn_start / message_* / tool_execution_* / turn_end / agent_end` 生命周期事件。
+- 模型产生 tool call、服务端执行工具、标准 `toolResult` 回传和模型续答的 ReAct 循环。
 - 会话 ID 透传。
+- 每次请求的模型轮数、工具调用次数与同批工具串行/并行上限。
 
-Provider bridge 将现有非流式 Provider 结果转换为 Pi 的消息事件，因此 Ark 显式前缀缓存、OpenAI/Anthropic Provider 管理缓存、Mock 测试和现有 Trace 均继续生效。
+没有可用工具时，Provider bridge 将现有非流式结果转换为 Pi 消息事件，继续使用 Ark 显式前缀缓存。存在当轮工具时，Ark/OpenAI/Anthropic 改走 Pi 原生 tool-capable stream；Mock 用确定性桥接器验证同一事件合同。工具请求由模型决定，但工具是否可见、是否允许和执行结果是否成功均由服务端决定。
 
-当前不应宣称的能力：主回复模型尚未通过 Pi 自动调用 Skill/MCP；道具只是服务端授予的资格，外部执行仍需受控能力网关、确认策略和真实执行回执。`AGENT_RUNTIME=legacy` 可用于紧急回退。
+Skill ZIP 当前是受控声明式包：`skill.json` 可声明 template 或 HTTP 工具并附带 `SKILL.md`，不会加载或执行 ZIP 内任意 JavaScript/Python。MCP 使用官方 TypeScript Client 执行 `tools/list / tools/call`；HTTP 受主机白名单约束，stdio 默认关闭且受命令白名单约束。`AGENT_RUNTIME=legacy` 可用于紧急回退，但 legacy 不执行动态能力。
+
+这里的运行架构是 ReAct 式工具循环，不是独立 Plan-Execute，也不是 Deep Agent。`AGENT_TOOL_EXECUTION=sequential|parallel` 只控制同一批工具如何执行；`AGENT_THINKING_LEVEL` 只控制支持该能力的模型推理强度。若要 Plan-Execute，需要在 Pi 外增加持久化计划、Planner/Executor 状态机和重规划节点；若要 Deep Agent，还要增加子 Agent、工作区/文件、任务树、检查点和跨任务调度。
 
 ## 保留的既有功能
 
@@ -87,6 +91,14 @@ Provider bridge 将现有非流式 Provider 结果转换为 Pi 的消息事件�
 
 ```dotenv
 AGENT_RUNTIME=pi
+AGENT_THINKING_LEVEL=off
+AGENT_TOOL_EXECUTION=sequential
+AGENT_MAX_TOOL_CALLS=6
+AGENT_MAX_MODEL_TURNS=6
+CAPABILITY_RUNTIME_ENABLED=true
+CAPABILITY_HTTP_ALLOWED_HOSTS=mcp.example.com
+MCP_ALLOW_STDIO=false
+MCP_STDIO_ALLOWED_COMMANDS=
 GRAPH_STORE=neo4j
 NEO4J_URI=bolt://127.0.0.1:7687
 NEO4J_USERNAME=neo4j

@@ -1,8 +1,19 @@
-# Memory Agent Studio
+# Open Character Memory
 
-Memory Agent Studio is a runnable memory workbench for role-play companions and tutoring agents. It separates durable controls, structured state, event/claim history, graph evidence, short-term dialogue, and retrieval so that a model does not treat every semantically similar memory as current truth.
+[English](README.en.md) | [中文](README.md) | [Apache-2.0](LICENSE)
 
-Version `0.3.0` runs main turns through Pi Agent Core, stores bitemporal records in SQLite as the current source of truth, and projects the current graph to Neo4j through a replayable outbox.
+Open Character Memory is an open-source role-user memory runtime and visual studio for role-play companions and tutoring agents. It remembers user facts, character commitments, shared stories, corrections, relationship state, and narrative branches without treating every semantically similar memory as current truth.
+
+Version `0.4.0` runs main turns through a Pi Agent Core ReAct loop, stores bitemporal records in SQLite as the current source of truth, projects the current graph to Neo4j through a replayable outbox, and exposes only unlocked, server-approved Skill/MCP capabilities.
+
+## Highlights
+
+- Bidirectional user, character, and shared-story memory with strict user/agent/story/branch isolation.
+- Active-state versioning with `active`, `superseded`, `retracted`, valid time, and transaction time.
+- Event/entity/claim graph visualization and two-stage vector, keyword, graph, and planner retrieval.
+- Configurable structured fields, extraction cadence, prompts, retrieval policy, plots, and low-code triggers.
+- Controlled Skill/MCP tool exposure, execution receipts, and Pi `toolResult` continuation turns.
+- Inspectable Trace views for prompts, injected memory, retrieval evidence, model/tool calls, and post-turn writes.
 
 ## What is implemented
 
@@ -12,7 +23,7 @@ Version `0.3.0` runs main turns through Pi Agent Core, stores bitemporal records
 - Versioned claims with `active`, `superseded`, and `retracted` states.
 - Bitemporal `valid_*` and `transaction_*` intervals with `valid_at` / `known_at` as-of queries.
 - Neo4j graph projection with tenant scope keys, idempotent replacement, outbox replay, and SQLite fallback.
-- Pi Agent Core state and lifecycle events while preserving the existing provider, prompt, trace, retrieval, plot, and prop pipeline.
+- Pi Agent Core state, lifecycle events, and a ReAct-style tool loop. Only unlocked scoped props are exposed; validated declarative Skill tools and allowlisted MCP tools execute through the server gateway and return `toolResult` before the model continues.
 - User memory plus role/user shared-story events, entities, claims, and evidence-backed relations.
 - Two-stage retrieval: a lightweight candidate catalog followed by planner-selected detail and graph expansion.
 - Conditional story unlocking and auditable function calls driven by structured state.
