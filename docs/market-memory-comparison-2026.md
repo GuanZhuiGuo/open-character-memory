@@ -203,23 +203,30 @@ TencentDB Agent Memory is stronger as a team-level Memory Hub with portable Chat
 
 ## 官方资料
 
+- Open Character Memory repository: https://github.com/GuanZhuiGuo/open-character-memory
+- OpenAI Codex repository: https://github.com/openai/codex
 - OpenAI Codex Memories: https://learn.chatgpt.com/docs/customization/memories
 - OpenAI Codex `AGENTS.md`: https://learn.chatgpt.com/docs/agent-configuration/agents-md
+- Claude Code repository: https://github.com/anthropics/claude-code
 - Claude Code memory: https://code.claude.com/docs/en/memory
+- Cursor repository/product feedback entry: https://github.com/cursor/cursor
 - Cursor Memories: https://docs.cursor.com/en/context/memories
 - Cursor Rules: https://docs.cursor.com/context/rules
 - Cursor Series D and scale disclosure: https://cursor.com/blog/series-d
 - TencentDB Agent Memory: https://github.com/TencentCloud/TencentDB-Agent-Memory
 - TencentDB Agent Memory v2.0.0: https://github.com/TencentCloud/TencentDB-Agent-Memory/releases/tag/v2.0.0
 - Tencent Cloud Memory API: https://cloud.tencent.com/document/product/1813/132001
+- Mem0 repository: https://github.com/mem0ai/mem0
 - Mem0 Platform Graph Memory: https://docs.mem0.ai/platform/features/graph-memory
 - Mem0 Platform v3 migration: https://docs.mem0.ai/migration/platform-v2-to-v3
 - Zep graph model: https://help.getzep.com/v2/understanding-the-graph
 - Zep Memory API: https://help.getzep.com/v2/memory
 - Graphiti: https://github.com/getzep/graphiti
+- Letta repository: https://github.com/letta-ai/letta
 - Letta context hierarchy: https://docs.letta.com/guides/core-concepts/memory/context-hierarchy
 - Letta memory blocks: https://docs.letta.com/guides/core-concepts/memory/memory-blocks
 - LangGraph memory concepts: https://docs.langchain.com/oss/python/concepts/memory
 - LangGraph persistence: https://docs.langchain.com/oss/python/langgraph/persistence
+- LangGraph repository: https://github.com/langchain-ai/langgraph
 - Hindsight: https://github.com/vectorize-io/hindsight
 - Hindsight paper: https://arxiv.org/abs/2512.12818
