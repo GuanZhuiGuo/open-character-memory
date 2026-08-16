@@ -89,6 +89,25 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+function renderMarkdown(value) {
+  const source = String(value ?? '');
+  if (!window.marked?.parse || !window.DOMPurify?.sanitize) {
+    return escapeHtml(source).replaceAll('\n', '<br>');
+  }
+  const markup = window.marked.parse(source, { gfm: true, breaks: true, async: false });
+  return window.DOMPurify.sanitize(markup, {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ['style', 'iframe', 'form', 'input', 'button', 'textarea', 'select', 'option']
+  });
+}
+
+function secureRenderedLinks(root) {
+  $$('a[href]', root).forEach((link) => {
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+  });
+}
+
 function parseJson(value, fallback = null) {
   if (typeof value !== 'string') return value ?? fallback;
   try { return JSON.parse(value); } catch { return fallback; }
@@ -128,6 +147,59 @@ async function api(path, options = {}) {
     throw error;
   }
   return payload;
+}
+
+async function streamApi(path, options = {}, onEvent = () => {}) {
+  const response = await fetch(`${appBasePath}${path}`, {
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/x-ndjson',
+      ...(options.headers || {})
+    },
+    ...options,
+    body: options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const authRequest = ['/api/auth/login', '/api/auth/register', '/api/admin/login'].includes(path);
+    if (response.status === 401 && !authRequest) showLogin();
+    const error = new Error(payload.error || `请求失败 (${response.status})`);
+    error.status = response.status;
+    error.code = payload.code || 'REQUEST_FAILED';
+    error.details = payload.details || null;
+    throw error;
+  }
+  if (!response.body) throw new Error('浏览器不支持流式响应');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let completed = null;
+  const consumeLine = (line) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    if (event.type === 'error') {
+      const error = new Error(event.error?.message || '流式回复失败');
+      error.code = event.error?.code || 'STREAM_FAILED';
+      error.details = event.error?.details || null;
+      throw error;
+    }
+    onEvent(event);
+    if (event.type === 'complete') completed = event.result;
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    lines.forEach(consumeLine);
+    if (done) break;
+  }
+  if (buffer.trim()) consumeLine(buffer);
+  if (!completed) throw new Error('流式回复在完成事件前结束');
+  return completed;
 }
 
 function toast(message, type = 'success') {
@@ -457,7 +529,8 @@ function renderWelcome() {
   const agent = currentAgent();
   const user = currentUser();
   $('#messageList').innerHTML = `
-    <div class="message-row assistant"><span class="message-avatar" style="background:${escapeHtml(agent?.avatar_color || '#2563eb')}">${escapeHtml(agent?.name?.slice(0, 1) || '角')}</span><div class="message-body"><div class="message-bubble">${escapeHtml(agent?.greeting || '今天想聊什么？')}</div></div></div>`;
+    <div class="message-row assistant"><span class="message-avatar" style="background:${escapeHtml(agent?.avatar_color || '#2563eb')}">${escapeHtml(agent?.name?.slice(0, 1) || '角')}</span><div class="message-body"><div class="message-bubble markdown-body">${renderMarkdown(agent?.greeting || '今天想聊什么？')}</div></div></div>`;
+  secureRenderedLinks($('#messageList'));
   renderExtractionStatus();
   loadUnlockedCatalog().catch(() => {});
 }
@@ -482,10 +555,11 @@ function renderMessages(extraHtml = '') {
     <div class="message-row ${message.role}">
       <span class="message-avatar" style="background:${escapeHtml(message.role === 'assistant' ? (agent?.avatar_color || '#2563eb') : (user?.avatar_color || '#2563eb'))}">${escapeHtml(message.role === 'assistant' ? (agent?.name?.slice(0, 1) || '角') : (user?.display_name?.slice(0, 1) || '你'))}</span>
       <div class="message-body">
-        <div class="message-bubble">${escapeHtml(message.content)}</div>
+        <div class="message-bubble markdown-body">${renderMarkdown(message.content)}</div>
         <div class="message-meta"><time>${formatDate(message.created_at)}</time>${String(message.id).startsWith('local_') ? '' : `<button class="message-feedback-button" data-feedback-message="${escapeHtml(message.id)}" title="对这条消息提反馈" aria-label="对这条消息提反馈"><i data-lucide="message-square-warning"></i></button>`}</div>
       </div>
     </div>`).join('') + extraHtml;
+  secureRenderedLinks(root);
   $$('[data-feedback-message]', root).forEach((button) => button.addEventListener('click', () => {
     openMessageFeedback(button.dataset.feedbackMessage);
   }));
@@ -584,10 +658,7 @@ async function loadChatUtilities() {
 }
 
 async function extractMemoryNow() {
-  if (!state.currentConversationId) {
-    toast('先完成一轮对话，才有可更新的长期记忆', 'error');
-    return;
-  }
+  if (!state.currentConversationId) return;
   if (!state.extractionStatus?.canExtract || state.sending || state.extractingMemory) return;
   state.extractingMemory = true;
   renderExtractionStatus();
@@ -596,9 +667,8 @@ async function extractMemoryNow() {
       method: 'POST'
     });
     state.extractionStatus = result.status;
+    renderExtractionStatus();
     await loadUnlockedCatalog();
-    const committed = result.result?.status === 'success';
-    toast(committed ? `长期记忆已更新 · ${Number(result.result.pendingTurns || 0)} 轮` : '当前没有可更新的完整轮次');
   } catch (error) {
     toast(error.message, 'error');
   } finally {
@@ -656,9 +726,26 @@ async function sendMessage(text) {
   };
   state.messages.push(optimistic);
   const agent = currentAgent();
-  renderMessages(`<div class="message-row assistant" id="thinkingRow"><span class="message-avatar" style="background:${escapeHtml(agent?.avatar_color || '#2563eb')}">${escapeHtml(agent?.name?.slice(0, 1) || '角')}</span><div class="message-body"><div class="message-bubble thinking"><i></i><i></i><i></i></div></div></div>`);
+  renderMessages(`<div class="message-row assistant" id="streamingRow"><span class="message-avatar" style="background:${escapeHtml(agent?.avatar_color || '#2563eb')}">${escapeHtml(agent?.name?.slice(0, 1) || '角')}</span><div class="message-body"><div class="message-bubble thinking" id="streamingBubble"><i></i><i></i><i></i></div></div></div>`);
+  let streamedText = '';
+  const renderStreamedText = () => {
+    const bubble = $('#streamingBubble');
+    if (!bubble) return;
+    if (!streamedText) {
+      bubble.classList.add('thinking');
+      bubble.classList.remove('markdown-body');
+      bubble.innerHTML = '<i></i><i></i><i></i>';
+    } else {
+      bubble.classList.remove('thinking');
+      bubble.classList.add('markdown-body');
+      bubble.innerHTML = renderMarkdown(streamedText);
+      secureRenderedLinks(bubble);
+    }
+    const messageList = $('#messageList');
+    messageList.scrollTop = messageList.scrollHeight;
+  };
   try {
-    const result = await api('/api/chat', {
+    const result = await streamApi('/api/chat', {
       method: 'POST',
       body: {
         user_id: state.currentUserId,
@@ -667,12 +754,23 @@ async function sendMessage(text) {
         previous_conversation_id: state.previousConversationId,
         message
       }
+    }, (event) => {
+      if (event.type === 'turn_start') {
+        streamedText = '';
+        renderStreamedText();
+      }
+      if (event.type === 'delta' && event.delta) {
+        streamedText += event.delta;
+        renderStreamedText();
+      }
     });
+    streamedText = String(result.message?.content || streamedText);
+    renderStreamedText();
     state.currentConversationId = result.conversation.id;
+    state.extractionStatus = result.memoryExtraction || state.extractionStatus;
+    renderExtractionStatus();
     if (result.diagnostics?.previousMemoryFlushStatus !== 'degraded') state.previousConversationId = '';
     await loadConversations();
-    const commitLabel = result.diagnostics?.memoryCommitStatus === 'skipped' ? '记忆抽取已停用' : '记忆已提交';
-    toast(`${commitLabel} · Trace ${result.traceId.slice(-6)}`);
   } catch (error) {
     state.messages = state.messages.filter((item) => item.id !== optimistic.id);
     renderMessages();

@@ -2,7 +2,7 @@
 
 ## 当前版本边界
 
-`0.4.0` 的运行结构是：
+`0.4.1` 的运行结构是：
 
 ```text
 HTTP /api/chat
@@ -77,7 +77,7 @@ Pi runtime 当前提供：
 - 会话 ID 透传。
 - 每次请求的模型轮数、工具调用次数与同批工具串行/并行上限。
 
-没有可用工具时，Provider bridge 将现有非流式结果转换为 Pi 消息事件，继续使用 Ark 显式前缀缓存。存在当轮工具时，Ark/OpenAI/Anthropic 改走 Pi 原生 tool-capable stream；Mock 用确定性桥接器验证同一事件合同。工具请求由模型决定，但工具是否可见、是否允许和执行结果是否成功均由服务端决定。
+没有可用工具时，Provider bridge 将 Provider 的流式结果转换为 Pi 消息事件；Ark 默认使用 Responses Provider 托管缓存，显式 Context 仅为 Endpoint ID 部署的可选模式。存在当轮工具时，Ark/OpenAI/Anthropic 改走 Pi 原生 tool-capable stream；Mock 用确定性桥接器验证同一事件合同。工具请求由模型决定，但工具是否可见、是否允许和执行结果是否成功均由服务端决定。
 
 Skill ZIP 当前是受控声明式包：`skill.json` 可声明 template 或 HTTP 工具并附带 `SKILL.md`，不会加载或执行 ZIP 内任意 JavaScript/Python。MCP 使用官方 TypeScript Client 执行 `tools/list / tools/call`；HTTP 受主机白名单约束，stdio 默认关闭且受命令白名单约束。`AGENT_RUNTIME=legacy` 可用于紧急回退，但 legacy 不执行动态能力。
 

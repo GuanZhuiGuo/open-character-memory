@@ -4,7 +4,9 @@
 
 Open Character Memory is an open-source role-user memory runtime and visual studio for role-play companions and tutoring agents. It remembers user facts, character commitments, shared stories, corrections, relationship state, and narrative branches without treating every semantically similar memory as current truth.
 
-Version `0.4.0` runs main turns through a Pi Agent Core ReAct loop, stores bitemporal records in SQLite as the current source of truth, projects the current graph to Neo4j through a replayable outbox, and exposes only unlocked, server-approved Skill/MCP capabilities.
+Version `0.4.1` runs main turns through a Pi Agent Core ReAct loop, stores bitemporal records in SQLite as the current source of truth, projects the current graph to Neo4j through a replayable outbox, and exposes only unlocked, server-approved Skill/MCP capabilities.
+
+![Open Character Memory v0.4.1 architecture](docs/assets/overall-architecture-v0.4.1.png)
 
 ## Highlights
 
@@ -14,6 +16,10 @@ Version `0.4.0` runs main turns through a Pi Agent Core ReAct loop, stores bitem
 - Configurable structured fields, extraction cadence, prompts, retrieval policy, plots, and low-code triggers.
 - Controlled Skill/MCP tool exposure, execution receipts, and Pi `toolResult` continuation turns.
 - Inspectable Trace views for prompts, injected memory, retrieval evidence, model/tool calls, and post-turn writes.
+
+## Market comparison
+
+See the [2026 agent-memory comparison](docs/market-memory-comparison-2026.md) for a current review of TencentDB Agent Memory, Mem0, Zep/Graphiti, Letta, LangGraph, Hindsight, and the repository-memory approaches used by Codex, Claude Code, and Cursor. The report includes dated GitHub popularity and market-scale signals, plus an English executive summary.
 
 ## What is implemented
 
@@ -30,6 +36,7 @@ Version `0.4.0` runs main turns through a Pi Agent Core ReAct loop, stores bitem
 - Role prompt, memory injection, retrieval, model usage, and cache diagnostics in Trace.
 - Provider adapters for Ark, OpenAI, Anthropic, and an offline Mock mode.
 - Stable-prefix caching: role instructions and fixed attributes are cacheable; user state, retrieved memory, plots, and recent dialogue stay dynamic.
+- NDJSON chat streaming with turn resets for multi-step tool loops, plus sanitized GFM Markdown rendering. Routine memory-extraction start/completion stays silent and the completion event refreshes the progress ring directly.
 
 ## Quick start
 
@@ -72,7 +79,7 @@ Tests and memory evaluations run without external model calls.
 
 The database, state machine, and prompt compiler remain the only source of truth. The cache stores only a provider context identifier for the stable prompt prefix. Its key contains the provider/model, agent, profile version, scene configuration version, and stable prompt hash. Any profile edit creates a new key. Cache failure falls back to a complete uncached request and never changes memory correctness.
 
-Ark uses the explicit `common_prefix` Context API when enabled. OpenAI reports provider-managed cached token usage. Anthropic marks the stable system block as ephemeral cache content. Trace reports provider, input tokens, cached tokens, status, and hit rate.
+Ark defaults to provider-managed caching reported by Responses usage. Explicit `common_prefix` Context caching remains opt-in for deployments configured with a compatible endpoint ID. Tool-bearing turns use Pi's native provider stream; adapter and native paths both preserve real usage and cache statistics. OpenAI reports provider-managed cached token usage. Anthropic marks the stable system block as ephemeral cache content.
 
 ## Storage boundary
 

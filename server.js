@@ -33,7 +33,12 @@ import { createZip } from './lib/zip.js';
 initializeDatabase();
 await initializeGraphStore();
 
-const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
+const projectDir = path.dirname(fileURLToPath(import.meta.url));
+const publicDir = path.join(projectDir, 'public');
+const vendorFiles = new Map([
+  ['/vendor/marked.umd.js', path.join(projectDir, 'node_modules/marked/lib/marked.umd.js')],
+  ['/vendor/purify.min.js', path.join(projectDir, 'node_modules/dompurify/dist/purify.min.js')]
+]);
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -68,6 +73,25 @@ function sendJson(response, status, payload, headers = {}) {
     ...headers
   });
   response.end(JSON.stringify(payload));
+}
+
+function beginNdjson(response) {
+  response.writeHead(200, {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-store, no-transform',
+    'X-Accel-Buffering': 'no',
+    'X-Content-Type-Options': 'nosniff'
+  });
+  response.flushHeaders?.();
+}
+
+function writeNdjson(response, payload) {
+  if (response.destroyed || response.writableEnded) return false;
+  try {
+    return response.write(`${JSON.stringify(payload)}\n`);
+  } catch {
+    return false;
+  }
 }
 
 function sendBuffer(response, status, buffer, contentType, filename) {
@@ -1458,13 +1482,36 @@ async function handleApi(request, response, url) {
       );
     }
     const userId = assertUserAccess(principal, body.user_id);
-    sendJson(response, 200, await chat({
+    const chatRequest = {
       userId,
       agentId: body.agent_id,
       conversationId: body.conversation_id || '',
       previousConversationId: body.previous_conversation_id || '',
       message
-    }));
+    };
+    if (!String(request.headers.accept || '').includes('application/x-ndjson')) {
+      sendJson(response, 200, await chat(chatRequest));
+      return;
+    }
+    beginNdjson(response);
+    writeNdjson(response, { type: 'ready' });
+    try {
+      const result = await chat({
+        ...chatRequest,
+        onStreamEvent: (event) => writeNdjson(response, event)
+      });
+      writeNdjson(response, { type: 'complete', result });
+    } catch (error) {
+      writeNdjson(response, {
+        type: 'error',
+        error: {
+          message: error.message || '请求处理失败',
+          code: error.code || 'REQUEST_FAILED',
+          ...(error.details ? { details: error.details } : {})
+        }
+      });
+    }
+    if (!response.writableEnded) response.end();
     return;
   }
 
@@ -1681,8 +1728,10 @@ async function handleApi(request, response, url) {
 
 function serveStatic(response, pathname) {
   const requested = pathname === '/' ? '/index.html' : pathname;
-  const filePath = path.resolve(publicDir, `.${requested}`);
-  if (!filePath.startsWith(publicDir) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+  const vendorFile = vendorFiles.get(requested);
+  const filePath = vendorFile || path.resolve(publicDir, `.${requested}`);
+  const isPublicFile = filePath === publicDir || filePath.startsWith(`${publicDir}${path.sep}`);
+  if ((!vendorFile && !isPublicFile) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     sendJson(response, 404, { error: '页面不存在' });
     return;
   }
@@ -1716,6 +1765,10 @@ export const server = http.createServer(async (request, response) => {
     if (routedUrl.pathname.startsWith('/api/')) await handleApi(request, response, routedUrl);
     else serveStatic(response, routedUrl.pathname);
   } catch (error) {
+    if (response.headersSent) {
+      if (!response.writableEnded) response.end();
+      return;
+    }
     sendJson(response, error.status || 400, {
       error: error.message || '请求处理失败',
       code: error.code || 'REQUEST_FAILED',

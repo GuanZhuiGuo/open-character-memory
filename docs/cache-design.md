@@ -8,7 +8,7 @@
 
 稳定前缀包括角色人设、运行时通用硬规则和角色固定属性。动态部分包括当前用户/角色/故事/分支命名空间、常驻结构化记忆、已解锁剧情、两阶段召回结果和最近 16 条对话消息。
 
-稳定前缀由 `lib/agent.js` 编译，Provider 只负责如何向上游表达缓存。SQLite 中的 `model_prefix_caches` 只保存 Ark Context ID、版本键、过期时间和命中统计，不保存另一份业务状态。
+稳定前缀由 `lib/agent.js` 编译，Provider 只负责如何向上游表达缓存。默认 `provider_managed` 模式直接使用 Responses usage 返回的 cached tokens，不在本地保存 Context ID。只有可选 `common_prefix` 模式会在 SQLite `model_prefix_caches` 中保存 Ark Context ID、版本键、过期时间和命中统计，该表不保存业务状态。
 
 ## 缓存键与失效
 
@@ -22,7 +22,7 @@ provider + model + agent_id + profile_version + scene_config_version + stable_pr
 
 ## Provider 行为
 
-- Ark：使用 `common_prefix` 创建 Context；后续请求只发送动态系统段和短期对话。Context 调用失败时使本地记录失效，并以完整 Responses 请求降级完成本轮。
+- Ark：默认 `provider_managed`，完整请求保持稳定前缀位于输入开头，并从 Responses usage 读取 cached tokens。仅当部署配置了 Context API 可接受的 Endpoint ID 并显式设置 `ARK_PREFIX_CACHE_MODE=common_prefix` 时，才创建 Context 并解析其 SSE 增量；失败时可回退完整 Responses 请求。
 - OpenAI：保持稳定内容位于输入开头，由 Provider 管理缓存；从 usage 读取 cached tokens。
 - Anthropic：稳定系统块携带 `cache_control`，动态系统块不缓存。
 - Mock：不创建缓存，用于离线开发和 CI。

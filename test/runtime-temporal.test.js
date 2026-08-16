@@ -14,6 +14,7 @@ process.env.MCP_ALLOW_STDIO = 'true';
 process.env.MCP_STDIO_ALLOWED_COMMANDS = process.execPath;
 
 const { db, initializeDatabase } = await import('../lib/db.js');
+const { extractConversationMemoryNow } = await import('../lib/agent.js');
 const { runAgentModel } = await import('../lib/pi-runtime.js');
 const { listEvents, listGraph, storeEvent } = await import('../lib/memory.js');
 const { closeCapabilityRuntime, resolveAgentCapabilities } = await import('../lib/capabilities.js');
@@ -61,6 +62,42 @@ test('Pi runtime executes an exposed tool and feeds toolResult into a second mod
   assert.ok(result.runtime.lifecycle.some((item) => item.type === 'tool_execution_start'));
   assert.ok(result.runtime.lifecycle.some((item) => item.type === 'tool_execution_end' && !item.isError));
   assert.match(result.text, /执行完成/);
+});
+
+test('memory backlog is committed in configured turn batches instead of one growing prompt', async () => {
+  const conversationId = 'conversation_extraction_backlog';
+  const timestamp = new Date().toISOString();
+  db.prepare(`INSERT INTO conversations
+    (id, user_id, agent_id, story_id, branch_id, title, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, '抽取积压测试', ?, ?)`)
+    .run(conversationId, scope.userId, scope.agentId, scope.storyId, scope.branchId, timestamp, timestamp);
+  const insertMessage = db.prepare(`INSERT INTO messages
+    (id, conversation_id, user_id, role, content, metadata_json, created_at)
+    VALUES (?, ?, ?, ?, ?, '{}', ?)`);
+  for (let turn = 1; turn <= 5; turn += 1) {
+    insertMessage.run(`backlog_user_${turn}`, conversationId, scope.userId, 'user', `用户消息 ${turn}`,
+      new Date(Date.now() + turn * 2).toISOString());
+    insertMessage.run(`backlog_assistant_${turn}`, conversationId, scope.userId, 'assistant', `角色回复 ${turn}`,
+      new Date(Date.now() + turn * 2 + 1).toISOString());
+  }
+  db.prepare(`INSERT INTO conversation_extraction_states
+    (conversation_id, profile_id, last_extracted_message_id, last_extracted_at, created_at, updated_at)
+    VALUES (?, 'extraction_companion', '', NULL, ?, ?)`)
+    .run(conversationId, timestamp, timestamp);
+  db.prepare(`UPDATE event_extraction_profiles SET extraction_interval_turns = 2
+    WHERE id = 'extraction_companion'`).run();
+
+  const first = await extractConversationMemoryNow({ conversationId, userId: scope.userId });
+  assert.equal(first.result.profile.batchTurnCount, 2);
+  assert.equal(first.status.pendingTurns, 3);
+  const second = await extractConversationMemoryNow({ conversationId, userId: scope.userId });
+  assert.equal(second.result.profile.batchTurnCount, 2);
+  assert.equal(second.status.pendingTurns, 1);
+  const tail = await extractConversationMemoryNow({ conversationId, userId: scope.userId });
+  assert.equal(tail.result.profile.batchTurnCount, 1);
+  assert.equal(tail.status.pendingTurns, 0);
+  db.prepare(`UPDATE event_extraction_profiles SET extraction_interval_turns = 8
+    WHERE id = 'extraction_companion'`).run();
 });
 
 test('unlocked Skill ZIP tools are exposed, executed, and recorded', async () => {
@@ -164,10 +201,12 @@ test('unlocked MCP props perform tools/list and tools/call through the official 
 });
 
 test('Pi runtime preserves the configured provider result and emits turn lifecycle events', async () => {
+  const streamed = [];
   const result = await runAgentModel({
     systemPrompt: '你是测试角色。',
     messages: [{ role: 'user', content: '你好' }],
-    sessionId: 'runtime_test_session'
+    sessionId: 'runtime_test_session',
+    onStreamEvent: (event) => streamed.push(event)
   });
   assert.match(result.text, /你好/);
   assert.equal(result.runtime.name, 'pi-agent-core');
@@ -182,6 +221,9 @@ test('Pi runtime preserves the configured provider result and emits turn lifecyc
   assert.equal(result.runtime.providerBridge.provider, 'mock');
   assert.ok(Number.isFinite(result.runtime.providerBridge.durationMs));
   assert.equal(result.runtime.toolLoopEnabled, false);
+  assert.deepEqual(streamed.map((item) => item.type), ['turn_start', 'delta']);
+  assert.equal(streamed[0].turn, 1);
+  assert.equal(streamed[1].delta, result.text);
 });
 
 test('双时态事件可分别回放当时认知与当前历史真值', async () => {

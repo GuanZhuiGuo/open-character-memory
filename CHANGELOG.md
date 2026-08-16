@@ -2,6 +2,20 @@
 
 All notable changes are recorded here. The project follows semantic versioning while the public API remains pre-1.0.
 
+## 0.4.1 - 2026-08-16
+
+### Added
+
+- NDJSON main-response streaming with sanitized GFM Markdown rendering and direct long-term-memory progress refresh.
+- A 2026 comparison of application memory systems and coding-agent repository memory.
+
+### Fixed
+
+- Ark cache observability now preserves provider usage through the Pi adapter and defaults to provider-managed Responses caching; explicit Context caching remains opt-in for compatible endpoint IDs.
+- Long-term extraction disables reasoning, allows complete structured output, and drains overdue conversations in configured eight-turn batches instead of retrying an ever-growing backlog.
+- Event reconciliation prevents key collisions, converges same-topic update branches, ignores redundant same-message retractions, and closes stale meeting-attendance claims.
+- Retrieval defaults are calibrated to `0.36 / 0.48 / 0.12`; high-fanout graph entities no longer force unrelated events into the main-model input.
+
 ## 0.4.0 - 2026-08-15
 
 ### Added

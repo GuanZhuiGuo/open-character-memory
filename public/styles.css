@@ -100,9 +100,31 @@ textarea { resize: vertical; line-height: 1.55; }
 .message-list { min-height: 0; padding: 24px max(24px, calc((100% - 760px) / 2)); overflow: auto; background: #f8fafc; }
 .message-row { display: flex; margin: 0 0 18px; }
 .message-row.user { justify-content: flex-end; }
-.message-bubble { max-width: min(72%, 680px); padding: 11px 14px; font-size: 14px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 7px; }
+.message-bubble { max-width: min(72%, 680px); padding: 11px 14px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; border-radius: 7px; }
 .message-row.assistant .message-bubble { color: #263238; background: #fff; border: 1px solid var(--line); box-shadow: 0 2px 8px rgba(25, 47, 55, 0.04); }
 .message-row.user .message-bubble { color: #fff; background: var(--primary); }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body p { margin: 0 0 .62em; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 { margin: .9em 0 .38em; letter-spacing: 0; line-height: 1.35; }
+.markdown-body h1 { font-size: 1.24em; }
+.markdown-body h2 { font-size: 1.16em; }
+.markdown-body h3, .markdown-body h4 { font-size: 1.08em; }
+.markdown-body ul, .markdown-body ol { margin: .42em 0 .68em; padding-left: 1.45em; }
+.markdown-body li + li { margin-top: .18em; }
+.markdown-body blockquote { margin: .58em 0; padding: .16em 0 .16em .8em; color: #53657a; border-left: 3px solid #b8cae8; }
+.message-row.user .markdown-body blockquote { color: rgba(255,255,255,.86); border-left-color: rgba(255,255,255,.48); }
+.markdown-body code { padding: .12em .32em; background: #eef2f7; border-radius: 4px; font: .88em/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.message-row.user .markdown-body code { background: rgba(0,0,0,.16); }
+.markdown-body pre { max-width: 100%; margin: .62em 0; padding: 10px 11px; overflow: auto; color: #dce7f7; background: #182235; border-radius: 6px; }
+.markdown-body pre code { padding: 0; color: inherit; background: transparent; border-radius: 0; white-space: pre; }
+.markdown-body table { display: block; max-width: 100%; margin: .62em 0; overflow-x: auto; border-collapse: collapse; }
+.markdown-body th, .markdown-body td { padding: 5px 8px; border: 1px solid #dbe3ed; text-align: left; white-space: nowrap; }
+.message-row.user .markdown-body th, .message-row.user .markdown-body td { border-color: rgba(255,255,255,.34); }
+.markdown-body a { color: #1d5db8; text-decoration: underline; text-underline-offset: 2px; }
+.message-row.user .markdown-body a { color: #fff; }
+.markdown-body img { display: block; max-width: 100%; height: auto; margin: .62em 0; border-radius: 6px; }
+.markdown-body hr { margin: .8em 0; border: 0; border-top: 1px solid #dbe3ed; }
 .message-meta { display: flex; align-items: center; gap: 6px; min-height: 24px; margin-top: 3px; color: #8a959d; font-size: 10px; }
 .message-row.user .message-meta { justify-content: flex-end; }
 .message-feedback-button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; color: #8592a3; background: transparent; border: 0; border-radius: 5px; }

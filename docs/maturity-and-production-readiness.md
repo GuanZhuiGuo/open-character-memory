@@ -28,16 +28,20 @@
 
 当前 `conversationTurnQueues` 是进程内 `Map`：它只能串行同一个 Node 进程里的用户-角色请求。启动第二个副本后，两个副本彼此不知道对方的锁；阈值轮抽取也仍在 HTTP 请求内等待完成。因此它适合单机演示，不是可横向扩容的 Durable Execution。
 
-## 为什么时序图谱与图数据库能力偏弱
+## 为什么时序图谱与图数据库能力仍有边界
 
 当前并非“没有图谱”：`events / entities / event_entities / claims / entity_edges` 已经组成可视化证据图，声明也有版本、状态、剧情时间和分支。
 
-偏弱的是两层能力：
+`0.4.1` 已经实现完整的应用级双时态合同：事件、声明、关系边和结构化历史统一使用 `valid_from / valid_to` 与 `transaction_from / transaction_to`，并支持通过 `valid_at + known_at` 回放“故事世界当时成立什么”以及“系统当时知道什么”。SQLite 是版本事实源，Neo4j 是通过 outbox 构建的当前有效图投影。
 
-1. 时序模型还不是完整双时态。系统有 `story_time / created_at / updated_at`，但没有统一的 `valid_from / valid_to` 与 `transaction_from / transaction_to`，因此不易直接回答“故事世界在当时成立什么”与“系统在当时知道什么”这两个不同问题。
-2. `0.3.0` 已加入 Neo4j 当前图投影、scope 隔离、outbox 重放和召回回退，但应用层仍只消费 1-2 跳证据，尚未提供通用 Cypher API、社区算法、长路径规划、独立投影 worker 或大图压测。
+剩余边界主要是工程和通用图能力：
 
-Graphiti 的双时态事实、有效期和自动失效能力可作为时序图谱的参照：https://github.com/getzep/graphiti 。当前场景主要做 1-2 跳证据展开，关系表是合理起点；只有长路径查询成为真实瓶颈时才值得引入 Neo4j 等图数据库。
+1. Neo4j 当前只投影当前有效版本，完整历史仍在 SQLite，因此还不能直接在图数据库里执行任意 `valid_at + known_at` 历史路径查询。
+2. 应用层主要消费 1-2 跳证据，尚未提供通用 Cypher API、社区算法、长路径规划、独立投影 worker 或大图压测。
+3. 实体和关系类型服务于当前角色陪聊 schema，缺少 Graphiti 式可扩展 ontology、批量 episode 解析与通用时序图 SDK。
+4. outbox 重放器仍在单个 Node 进程内；多副本生产环境需要租约、幂等 worker、死信和投影延迟指标。
+
+Graphiti 的 episode 溯源、可扩展 ontology、时序事实和混合图检索仍是下一阶段参照：https://github.com/getzep/graphiti 。详细市场对比见 [`market-memory-comparison-2026.md`](market-memory-comparison-2026.md)。
 
 ## SQLite 是否比 PostgreSQL + pgvector 差很多
 
@@ -57,4 +61,4 @@ Graphiti 的双时态事实、有效期和自动失效能力可作为时序图�
 - 有 Trace，但还没有 OpenTelemetry、指标、告警、SLO、容量压测和成本预算。
 - 没有滚动升级、备份恢复演练、数据迁移校验与灾难恢复 Runbook。
 
-`0.3.0` 已补 Pi turn runtime、双时态版本和 Neo4j 图投影；SDK、PostgreSQL/pgvector、持久化抽取队列和多副本执行仍是明确的生产扩展 backlog，不能把单机可运行等同于分布式生产就绪。
+`0.4.1` 已补 Pi ReAct 工具循环、双时态版本、Neo4j 图投影和受控 Skill/MCP 能力网关；SDK、PostgreSQL/pgvector、持久化抽取队列和多副本执行仍是明确的生产扩展 backlog，不能把单机可运行等同于分布式生产就绪。

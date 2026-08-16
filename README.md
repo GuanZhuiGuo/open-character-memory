@@ -6,7 +6,9 @@
 
 Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的开源记忆 Agent 参考实现和可视化工作台。它不只“记得用户”，也会管理角色说过的话、双方共同经历、事件更正、关系状态与剧情分支。系统将管理员定义的结构化字段、用户明确偏好、事件图谱、当前有效状态和混合召回分层管理。
 
-当前 `0.4.0` 采用 **Pi Agent Core ReAct runtime + SQLite 双时态主账本 + Neo4j 图查询投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
+当前 `0.4.1` 采用 **Pi Agent Core ReAct runtime + SQLite 双时态主账本 + Neo4j 图查询投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
+
+![Open Character Memory v0.4.1 总体架构](docs/assets/overall-architecture-v0.4.1.png)
 
 ## 项目特点
 
@@ -16,6 +18,10 @@ Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的�
 - **可配置记忆契约**：管理员可定义结构化字段、抽取节奏、提示词、召回策略和基于状态的剧情/道具触发。
 - **受控 Agent 能力**：已解锁的 Skill/MCP 才会当轮暴露，工具结果回传 Pi 后再由主模型续答，并保留确认、白名单和执行回执。
 - **可观测与可评测**：Trace 展示完整 Prompt、记忆注入、召回证据、模型/工具循环与轮后写入，仓库附带离线回归评测。
+
+## 方案对比
+
+最新市场对比见 [`docs/market-memory-comparison-2026.md`](docs/market-memory-comparison-2026.md)。文档分别比较了 TencentDB Agent Memory、Mem0、Zep/Graphiti、Letta、LangGraph、Hindsight 等应用型记忆方案，以及 Codex、Claude Code、Cursor 的编码 Agent 记忆机制，并附带注明日期和口径的公开热度/市场信号。
 
 ## 已实现
 
@@ -39,7 +45,7 @@ Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的�
 - “剧情与道具”工作台：剧情节点按前置节点组成故事树；低代码触发器通过下拉选择结构化记忆、剧情/道具状态、判断条件和后续动作，并实时生成可读规则预览。预设“雨夜来信”包含男、女、非二元/不透露三条无刻板印象支线及各自后续章节，性别只接受用户明确自述。
 - 道具库支持下载模板、上传 Skill ZIP 或 MCP JSON，并经草稿、风险检查和管理员审核后才能被条件解锁。每轮只把当前用户-角色-故事-分支已解锁的工具暴露给主模型；MCP 通过官方 Client 执行 `tools/list / tools/call`，Skill 支持经校验的说明加载与声明式 template / HTTP 工具，不执行 ZIP 内任意脚本。
 - 角色设置支持新建角色并强制归属场景；记忆设置支持新建场景，创建时同步生成唯一的记忆设置、长期记忆抽取配置和召回策略。
-- 对话页展示双方头像、长期记忆更新进度环、已解锁道具和已解锁剧情；点击进度环可立即提交当前待抽取批次，更新期间冻结输入和发送。
+- 对话页展示双方头像、长期记忆更新进度环、已解锁道具和已解锁剧情；点击进度环可立即提交当前待抽取批次，更新期间冻结输入和发送。主回复通过 NDJSON 增量输出，消息按 GFM Markdown 渲染并由 DOMPurify 清洗；正常抽取开始/完成不弹窗，完成事件直接刷新并清空水位环。
 - 侧栏可切换管理端与用户端；用户端提供“见字如面 / 我们的故事 / 角色清单 / 剧情与道具”四个沉浸式视图。普通用户仍可切换到管理端查看完整配置，但所有写入能力保持只读。
 - Trace 协作视图：直观展示 `Memory Agent Turn Pipeline → Pi ReAct Runtime → 第 N 次模型请求 → Tool → toolResult → 模型续答 → 轮后记忆更新`，同时保留已暴露工具、执行状态、常驻记忆、召回结果、完整系统 Prompt、模型输入/输出和原始 Span。
 - 管理员“系统架构图”：查看入口、Agent Runtime、记忆平面、模型与数据层，以及真实轮次阈值、写入顺序和第 N 次主模型请求的完整 Input 切片；可跳转到对应配置来源。
@@ -48,7 +54,7 @@ Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的�
 - 文本 Provider 支持 Ark、OpenAI、Anthropic 和离线 Mock；Embedding 支持 Ark、OpenAI 和本地确定性降级，可独立选择。
 - 主回复由 `@earendil-works/pi-agent-core` 承担 ReAct 式 turn 状态、生命周期与工具循环。服务端能力网关按解锁资格、工具白名单、确认策略、主机/命令白名单和次数上限暴露并执行 Skill/MCP，结果以标准 `toolResult` 返回 Pi 后触发模型二次推理；`AGENT_TOOL_EXECUTION` 只控制同批工具串行或并行，不改变推理架构。
 - Neo4j 保存当前实体、事件、声明和证据关系的只读图投影；SQLite 提交成功后按 scope 合并 outbox，投影失败不丢主记录，可由 `POST /api/admin/graph/replay` 重放。
-- 主模型 Input 分为稳定前缀与动态上下文：角色人设、通用硬规则和角色固定属性可缓存；结构化记忆、剧情、召回结果与短期对话逐轮重新编译。Ark 使用显式 `common_prefix` Context，失败时自动退回完整请求；Trace 展示输入 Token、缓存 Token、状态和命中率。
+- 主模型 Input 分为稳定前缀与动态上下文：角色人设、通用硬规则和角色固定属性可缓存；结构化记忆、剧情、召回结果与短期对话逐轮重新编译。Ark 默认读取 Responses usage 中的 Provider 托管缓存；只有在配置兼容的 Endpoint ID 并显式设置 `ARK_PREFIX_CACHE_MODE=common_prefix` 时才使用 Context API。Trace 展示输入 Token、缓存 Token、状态和命中率。
 
 ## 运行
 
@@ -126,7 +132,7 @@ docker compose up --build
 
 当前运行模式是 `blocking_after_assistant`：系统在每条 assistant 消息落库后检查会话抽取水位，累计达到场景配置的 X 个完整轮次才启动抽取；如果未满 X 轮就切换或新建对话，则在下一次跨对话发送前先提交上一对话的尾批次。抽取与记忆写入都在 `/api/chat` 请求内，调用方会阻塞等待模型、Embedding 和数据库操作完成；连续对话的非阈值轮不调用抽取模型。抽取成功后才推进水位，失败则保留批次等待后续重试。服务端按用户与角色串行化聊天请求，避免跨对话尾批次与当前回复并发改写同一记忆作用域；该锁不提供通用的数据库读取隔离。
 
-当前缓存只优化主模型稳定前缀，不缓存动态记忆，也不参与记忆是否有效的判断。逻辑键包含 Provider/模型、角色、角色版本、场景配置版本和稳定 Prompt Hash；人设修改会生成新键。当本轮没有暴露动态工具时继续使用现有 Provider bridge 与 Ark 显式 Context 缓存；存在可用工具时改走 Pi 原生 tool-capable stream，由 Provider 管理缓存，不使用 Ark 显式 Context ID。具体边界见 [`docs/cache-design.md`](docs/cache-design.md)。
+当前缓存只优化主模型稳定前缀，不缓存动态记忆，也不参与记忆是否有效的判断。Ark 默认使用 Responses 的 Provider 托管缓存；`common_prefix` 仅作为需要兼容 Endpoint ID 的显式可选模式。存在当轮工具时由 Pi 原生 tool-capable stream 执行，无工具时由内置 Provider bridge 执行，两条路径都保留真实 usage 和缓存命中统计。具体边界见 [`docs/cache-design.md`](docs/cache-design.md)。
 
 主模型当前把最近 16 条消息（约 8 轮）作为短期记忆直接装配进 Input，未实现 token 阈值或滚动摘要。长期记忆更新默认每 8 轮执行一次，可按场景调低为 1-8 轮，但不能超过短期记忆容量；用户明确提出的长期回复规则仍走即时快通道。陪伴场景的抽取辅助上下文默认读取待抽取批次之前 2 轮、最多 4 条只读消息，只用来理解“它、那件事、还是改到银座”等代词、省略或承接关系，不会把这些历史内容重复写入长期记忆，可按场景配置为 1-10 轮。
 
