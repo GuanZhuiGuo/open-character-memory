@@ -141,6 +141,7 @@ test('registered users get read-only configuration, isolated data, own traces, a
     const bootstrap = await request(baseUrl, '/api/bootstrap', { cookie: aliceCookie });
     assert.equal(bootstrap.status, 200);
     assert.equal(bootstrap.payload.role, 'user');
+    assert.match(bootstrap.payload.systemVersion, /^\d+\.\d+\.\d+$/);
     assert.deepEqual(bootstrap.payload.users.map((item) => item.id), [alice.id]);
     assert.ok(bootstrap.payload.agents[0].system_prompt);
 
@@ -197,8 +198,20 @@ test('registered users get read-only configuration, isolated data, own traces, a
     assert.equal(ownTrace.status, 200);
     const modelSpan = ownTrace.payload.spans.find((span) => span.name === 'model_response');
     const modelInput = JSON.parse(modelSpan.input_json);
-    assert.match(modelInput.systemPrompt, /## 角色固定属性/);
-    assert.match(modelInput.systemPrompt, /\[身份\] 林晚/);
+    const promptSpan = ownTrace.payload.spans.find((span) => span.name === 'prompt_compilation');
+    const promptOutput = JSON.parse(promptSpan.output_json);
+    const assembledPrompt = `${promptOutput.promptComposition.stablePrefix}\n\n${promptOutput.promptComposition.dynamicMemory}`;
+    assert.match(assembledPrompt, /## 角色固定属性/);
+    assert.match(assembledPrompt, /## 服务器当前时间/);
+    assert.match(assembledPrompt, /Asia\/Shanghai/);
+    assert.match(assembledPrompt, /\[身份\] 林晚/);
+    assert.equal(promptOutput.prompt, undefined);
+    assert.equal(promptOutput.sections, undefined);
+    assert.equal(promptOutput.sectionReferences.pinnedMemory.sourceSpan, 'pinned_memory_load');
+    assert.equal(promptOutput.sectionReferences.retrieval.sourceSpan, 'hybrid_memory_retrieval');
+    assert.equal(typeof modelInput.systemPrompt, 'object');
+    assert.equal(modelInput.systemPrompt.reference, 'prompt_compilation.output.promptComposition');
+    assert.equal(modelInput.systemPrompt.assembledCharacters, assembledPrompt.length);
     const crossUserTrace = await request(baseUrl, `/api/traces/${chat.payload.traceId}`, { cookie: bobCookie });
     assert.equal(crossUserTrace.status, 403);
 
@@ -218,10 +231,11 @@ test('registered users get read-only configuration, isolated data, own traces, a
     assert.equal(ruleTrace.status, 200);
     const classifierSpan = ruleTrace.payload.spans.find((span) => span.name === 'persistent_instruction_classifier');
     assert.ok(classifierSpan);
-    const ruleModelSpan = ruleTrace.payload.spans.find((span) => span.name === 'model_response');
-    const ruleModelInput = JSON.parse(ruleModelSpan.input_json);
-    assert.match(ruleModelInput.systemPrompt, /每句话附带动作描写/);
-    assert.match(ruleModelInput.systemPrompt, /使用反问句/);
+    const rulePromptSpan = ruleTrace.payload.spans.find((span) => span.name === 'prompt_compilation');
+    const rulePromptOutput = JSON.parse(rulePromptSpan.output_json);
+    const ruleAssembledPrompt = `${rulePromptOutput.promptComposition.stablePrefix}\n\n${rulePromptOutput.promptComposition.dynamicMemory}`;
+    assert.match(ruleAssembledPrompt, /每句话附带动作描写/);
+    assert.match(ruleAssembledPrompt, /使用反问句/);
 
     const feedback = await request(baseUrl, '/api/feedback', {
       method: 'POST',

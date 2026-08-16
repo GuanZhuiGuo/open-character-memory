@@ -6,14 +6,14 @@
 
 Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的开源记忆 Agent 参考实现和可视化工作台。它不只“记得用户”，也会管理角色说过的话、双方共同经历、事件更正、关系状态与剧情分支。系统将管理员定义的结构化字段、用户明确偏好、事件图谱、当前有效状态和混合召回分层管理。
 
-当前 `0.4.1` 采用 **Pi Agent Core ReAct runtime + SQLite 双时态主账本 + Neo4j 图查询投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
+当前 `0.4.3` 采用 **Pi Agent Core ReAct runtime + SQLite 双时态主账本 + Neo4j 图查询投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
 
-![Open Character Memory v0.4.1 总体架构](docs/assets/overall-architecture-v0.4.1.png)
+![Open Character Memory 总体架构](docs/assets/overall-architecture-v0.4.1.png)
 
 ## 项目特点
 
 - **双向记忆**：分开用户事实、角色固定属性和按用户-角色隔离的“我们的故事”。
-- **有效状态优先**：使用 `active / superseded / retracted` 和双时态区间处理更正、撤回与历史回放。
+- **有效状态优先**：使用 `create / enrich / update / supersede / retract` 操作和双时态区间区分补充、现实变化、旧认知纠正、撤回与历史回放。
 - **图谱与混合召回**：事件、实体、声明和证据关系可视化，支持向量、关键词、图关系和 Recall Planner 两阶段召回。
 - **可配置记忆契约**：管理员可定义结构化字段、抽取节奏、提示词、召回策略和基于状态的剧情/道具触发。
 - **受控 Agent 能力**：已解锁的 Skill/MCP 才会当轮暴露，工具结果回传 Pi 后再由主模型续答，并保留确认、白名单和执行回执。
@@ -34,10 +34,12 @@ Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的�
 - 记忆查询包含独立的“结构化记忆”和“事件列表”；事件列表可按故事时间或写入时间排序，并可选择查看已被更新/撤回的历史版本。
 - 事件、实体、事件-实体证据链接、关系边、带视角声明和剧情线图谱。
 - 图形化记忆网络：事件、实体、声明和关系边可缩放、筛选并查看节点详情；点击实体可查看并定位关联事件。
-- `active / superseded / retracted` 状态和完整版本历史。`superseded` 表示旧结论已被新版本替代，`retracted` 表示结论被明确撤回或取消；两者均保留证据，但不进入默认回答。
+- `active / superseded / retracted` 状态和完整版本历史。`enrich` 会保留原有有效声明并增加新细节；`superseded` 表示旧结论已被新版本替代，`retracted` 表示结论被明确撤回或取消。
 - 事件、声明、关系边和结构化历史采用双时态模型：`valid_from / valid_to` 回答“故事世界中何时成立”，`transaction_from / transaction_to` 回答“系统何时知道并采用”；事件/图查询支持 `valid_at + known_at` 历史回放。
 - 事件对齐器会在模型生成不同 event key 时，仍然将地点/时间更新到原事件槽位。
-- 两阶段记忆召回：第一阶段只生成事件名、实体和关系的轻量候选目录；独立 Recall Planner 可请求事件详情或沿图谱关系补充证据，只有通过严格详情门槛的内容才会进入主模型 Input。
+- 两阶段记忆召回：第一阶段只生成事件名、实体和关系的轻量候选目录；独立 Recall Planner 可请求事件详情、沿图谱关系补充证据或发起二次 Query。确认的用户记忆在进入安全目录后可由 Planner 授权展开；待用户承接的共享剧情仍必须有直接证据。
+- 图谱本体采用“高度抽象实体类型 + 受控核心关系族 + 可追溯开放谓词”：具体关系文本用于解释，`child_of / parent_of / spouse_of / sibling_of / owns / located_at / participates_in / related_to` 关系族用于通用遍历。查询会先解析当前用户身份锚点和“我的女儿/父亲/配偶/物品”等关系意图，再扩展证据事件。
+- 确定性关系召回会生成“当前用户锚点 + 关系族 + 关系对象 + 有效证据边”的回答契约。若最近对话中的历史 assistant 旧答与当前有效图谱冲突，本轮隔离旧答并以长期记忆为准；该策略覆盖亲属、配偶、所属物和后续可扩展的关系族，并在 Trace 中显示采用原因与省略消息数。
 - 场景级召回策略：可分别配置候选目录阈值、纯向量详情阈值、Planner、向量/关键词/图谱通道、TopK、排序权重、图谱跳数和时效半衰期；`Active Only` 是不可关闭的硬保护。
 - 召回测试工作台：展示实时 Embedding 模型/维度/向量预览、候选目录、详情资格、Planner 决策、图谱证据事件、过滤原因和最终 Prompt 注入片段。
 - 角色固定属性按角色全局常驻注入；用户事实写入 `user_memory`；角色和用户共同发生的承诺、物件、对话进展写入按用户-角色-故事-分支隔离的 `shared_story`，不会串到该角色与其他用户的会话。
@@ -45,7 +47,7 @@ Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的�
 - “剧情与道具”工作台：剧情节点按前置节点组成故事树；低代码触发器通过下拉选择结构化记忆、剧情/道具状态、判断条件和后续动作，并实时生成可读规则预览。预设“雨夜来信”包含男、女、非二元/不透露三条无刻板印象支线及各自后续章节，性别只接受用户明确自述。
 - 道具库支持下载模板、上传 Skill ZIP 或 MCP JSON，并经草稿、风险检查和管理员审核后才能被条件解锁。每轮只把当前用户-角色-故事-分支已解锁的工具暴露给主模型；MCP 通过官方 Client 执行 `tools/list / tools/call`，Skill 支持经校验的说明加载与声明式 template / HTTP 工具，不执行 ZIP 内任意脚本。
 - 角色设置支持新建角色并强制归属场景；记忆设置支持新建场景，创建时同步生成唯一的记忆设置、长期记忆抽取配置和召回策略。
-- 对话页展示双方头像、长期记忆更新进度环、已解锁道具和已解锁剧情；点击进度环可立即提交当前待抽取批次，更新期间冻结输入和发送。主回复通过 NDJSON 增量输出，消息按 GFM Markdown 渲染并由 DOMPurify 清洗；正常抽取开始/完成不弹窗，完成事件直接刷新并清空水位环。
+- 对话页展示双方头像、长期记忆更新进度环、道具图鉴和剧情图鉴；未解锁项显示部分名称线索并置灰，不暴露 Skill/MCP 实现。点击进度环可立即提交当前待抽取批次，更新期间冻结输入和发送。主回复通过 NDJSON 增量输出，消息按 GFM Markdown 渲染并由 DOMPurify 清洗。
 - 侧栏可切换管理端与用户端；用户端提供“见字如面 / 我们的故事 / 角色清单 / 剧情与道具”四个沉浸式视图。普通用户仍可切换到管理端查看完整配置，但所有写入能力保持只读。
 - Trace 协作视图：直观展示 `Memory Agent Turn Pipeline → Pi ReAct Runtime → 第 N 次模型请求 → Tool → toolResult → 模型续答 → 轮后记忆更新`，同时保留已暴露工具、执行状态、常驻记忆、召回结果、完整系统 Prompt、模型输入/输出和原始 Span。
 - 管理员“系统架构图”：查看入口、Agent Runtime、记忆平面、模型与数据层，以及真实轮次阈值、写入顺序和第 N 次主模型请求的完整 Input 切片；可跳转到对应配置来源。
@@ -54,7 +56,7 @@ Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的�
 - 文本 Provider 支持 Ark、OpenAI、Anthropic 和离线 Mock；Embedding 支持 Ark、OpenAI 和本地确定性降级，可独立选择。
 - 主回复由 `@earendil-works/pi-agent-core` 承担 ReAct 式 turn 状态、生命周期与工具循环。服务端能力网关按解锁资格、工具白名单、确认策略、主机/命令白名单和次数上限暴露并执行 Skill/MCP，结果以标准 `toolResult` 返回 Pi 后触发模型二次推理；`AGENT_TOOL_EXECUTION` 只控制同批工具串行或并行，不改变推理架构。
 - Neo4j 保存当前实体、事件、声明和证据关系的只读图投影；SQLite 提交成功后按 scope 合并 outbox，投影失败不丢主记录，可由 `POST /api/admin/graph/replay` 重放。
-- 主模型 Input 分为稳定前缀与动态上下文：角色人设、通用硬规则和角色固定属性可缓存；结构化记忆、剧情、召回结果与短期对话逐轮重新编译。Ark 默认读取 Responses usage 中的 Provider 托管缓存；只有在配置兼容的 Endpoint ID 并显式设置 `ARK_PREFIX_CACHE_MODE=common_prefix` 时才使用 Context API。Trace 展示输入 Token、缓存 Token、状态和命中率。
+- 主模型 Input 分为稳定前缀与动态上下文：角色人设、通用硬规则和角色固定属性可缓存；服务器当前时间、结构化记忆、剧情、召回结果与短期对话逐轮重新编译。Ark 默认只展示 Responses usage 中的 Provider 托管缓存；`cached_tokens=0` 表示上游未报告命中或本次未命中，不能推断为本地缓存故障。只有配置兼容的 Endpoint ID 并显式设置 `ARK_PREFIX_CACHE_MODE=common_prefix` 时才使用 Context API。
 
 ## 运行
 
@@ -91,6 +93,7 @@ ARK_API_KEY='' npm test
 ```
 
 测试会使用本地确定性向量降级器，不消耗远程 API。
+配置真实文本与 Embedding Provider 后，可运行 `npm run eval:long-term:real` 复测跨会话出行排序与宠物护理时间线；脚本会为每条事实建立独立会话，最终提问只保留当前消息，因此会消耗真实 API 额度。
 
 完整发布前检查：
 

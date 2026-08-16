@@ -420,6 +420,7 @@ async function initialize() {
 
 async function loadBootstrap() {
   state.bootstrap = await api('/api/bootstrap');
+  $('#appVersion').textContent = `v${state.bootstrap.systemVersion || '—'}`;
   state.role = state.bootstrap.role || state.role || 'user';
   if (!['management', 'user'].includes(state.portalMode)) {
     state.portalMode = state.role === 'admin' ? 'management' : 'user';
@@ -679,28 +680,37 @@ async function extractMemoryNow() {
 }
 
 function openUnlockedProps() {
-  const items = state.props.filter((item) => ['unlocked', 'active'].includes(item.user_status));
+  const items = state.props.filter((item) => item.status === 'enabled')
+    .sort((left, right) => Number(['unlocked', 'active'].includes(right.user_status))
+      - Number(['unlocked', 'active'].includes(left.user_status)));
+  const unlockedCount = items.filter((item) => ['unlocked', 'active'].includes(item.user_status)).length;
   openModal({
-    title: '已解锁道具',
+    title: `道具图鉴 · ${unlockedCount} / ${items.length} 已解锁`,
     readOnly: true,
     width: 680,
     body: items.length ? `<div class="unlocked-quick-list">${items.map((item) => {
+      const unlocked = ['unlocked', 'active'].includes(item.user_status);
       const presentation = userPropPresentation(item);
-      return `<article><span class="quick-item-icon"><i data-lucide="${presentation.icon}"></i></span><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(presentation.description)}</p><small>${escapeHtml(presentation.label)} · 已可在剧情中使用</small></div><span class="badge blue">已解锁</span></article>`;
+      return `<article class="${unlocked ? '' : 'locked'}"><span class="quick-item-icon"><i data-lucide="${unlocked ? presentation.icon : 'lock-keyhole'}"></i></span><div><strong>${escapeHtml(unlocked ? item.name : partiallyRevealName(item.name))}</strong><p>${escapeHtml(unlocked ? presentation.description : '名字显露了一角，用途会随剧情解锁。')}</p><small>${escapeHtml(presentation.label)} · ${unlocked ? '已可在剧情中使用' : '等待解锁'}</small></div><span class="badge ${unlocked ? 'blue' : ''}">${unlocked ? '已解锁' : '未解锁'}</span></article>`;
     }).join('')}</div>`
-      : emptyState('package-open', '还没有解锁道具')
+      : emptyState('package-open', '还没有可解锁道具')
   });
 }
 
 function openUnlockedPlots() {
-  const items = state.plots.filter((item) => ['unlocked', 'active', 'completed'].includes(item.user_status));
+  const items = state.plots.filter((item) => item.enabled)
+    .sort((left, right) => Number(['unlocked', 'active', 'completed'].includes(right.user_status))
+      - Number(['unlocked', 'active', 'completed'].includes(left.user_status)));
+  const unlockedCount = items.filter((item) => ['unlocked', 'active', 'completed'].includes(item.user_status)).length;
   openModal({
-    title: '已解锁剧情',
+    title: `剧情图鉴 · ${unlockedCount} / ${items.length} 已解锁`,
     readOnly: true,
     width: 680,
-    body: items.length ? `<div class="unlocked-quick-list">${items.map((item) => `
-      <article><span class="quick-item-icon"><i data-lucide="scroll-text"></i></span><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.premise || '剧情已经向你打开。')}</p><small>${escapeHtml(item.branch_label || '主线')} · ${formatDate(item.unlocked_at)}</small></div><span class="badge blue">${escapeHtml(item.user_status === 'completed' ? '已完成' : '已解锁')}</span></article>`).join('')}</div>`
-      : emptyState('scroll-text', '还没有解锁剧情')
+    body: items.length ? `<div class="unlocked-quick-list">${items.map((item) => {
+      const unlocked = ['unlocked', 'active', 'completed'].includes(item.user_status);
+      return `<article class="${unlocked ? '' : 'locked'}"><span class="quick-item-icon"><i data-lucide="${unlocked ? 'scroll-text' : 'lock-keyhole'}"></i></span><div><strong>${escapeHtml(unlocked ? item.name : partiallyRevealName(item.name))}</strong><p>${escapeHtml(unlocked ? (item.premise || '剧情已经向你打开。') : '只露出一点线索，完整篇章会随关系与选择打开。')}</p><small>${escapeHtml(item.branch_label || '主线')} · ${unlocked ? formatDate(item.unlocked_at) : '等待解锁'}</small></div><span class="badge ${unlocked ? 'blue' : ''}">${escapeHtml(item.user_status === 'completed' ? '已完成' : unlocked ? '已解锁' : '未解锁')}</span></article>`;
+    }).join('')}</div>`
+      : emptyState('scroll-text', '还没有可解锁剧情')
   });
 }
 
@@ -834,7 +844,8 @@ async function loadArchitectureOverview() {
   const sceneId = currentScene()?.id || '';
   state.architectureOverview = await api(`/api/architecture/overview?scene_id=${encodeURIComponent(sceneId)}`);
   const {
-    thresholds, compression, timing, index, scene, runtime = {}, capabilities = {}, graphStore = {}, temporal = {}
+    thresholds, compression, timing, index, scene, runtime = {}, capabilities = {}, graphStore = {}, temporal = {},
+    graphOntology = {}
   } = state.architectureOverview;
   const main = thresholds.mainModel;
   const extraction = thresholds.extraction;
@@ -850,12 +861,12 @@ async function loadArchitectureOverview() {
     ? `ReAct 工具循环已启用 · 最多 ${Number(runtime.maxToolCalls || 0)} 次工具 / ${Number(runtime.maxModelTurns || 0)} 次模型请求 · ${capabilities.mcpClient || 'MCP Client'}`
     : 'Legacy 模式 · 可通过 AGENT_RUNTIME=pi 启用';
   $('#architectureTemporalNodeMeta').textContent = temporal.model === 'bitemporal'
-    ? '抽取 → 双时态版本 → Neo4j 投影 → 触发'
+    ? `${(graphOntology.eventOperations || ['create', 'update', 'supersede', 'retract']).join(' / ')} → 双时态版本`
     : '抽取 → 结构化派生 → 事件图谱 → 触发';
   $('#architectureSqliteNodeMeta').textContent = '双时态账本、向量、Trace、outbox；大规模混合检索可增 OpenSearch';
   const graphReady = graphStore.mode === 'neo4j' && graphStore.connected;
   $('#architectureNeo4jNodeMeta').textContent = graphStore.mode === 'neo4j'
-    ? `${graphReady ? '已连接' : '降级回退'} · 待投影 ${Number(graphStore.pendingProjections || 0)} 个 scope`
+    ? `${graphReady ? '已连接' : '降级回退'} · ${graphOntology.relationModel === 'controlled_core_with_open_extension' ? '受控关系族 + 开放扩展' : '关系投影'} · 待投影 ${Number(graphStore.pendingProjections || 0)} 个 scope`
     : (graphStore.mode === 'sqlite'
       ? 'SQLite 降级模式 · 设置 GRAPH_STORE=neo4j 后启用投影'
       : '运行态未连接 · Compose/生产环境默认启用 Neo4j');
@@ -1474,7 +1485,7 @@ function renderRetrievalResult(payload) {
         <div><span>Active 硬过滤</span><strong>${pipeline.afterActiveGuard}</strong></div><i data-lucide="chevron-right"></i>
         <div><span>意图过滤</span><strong>${pipeline.afterIntentFilter}</strong></div><i data-lucide="chevron-right"></i>
         <div><span>轻量目录</span><strong>${pipeline.afterCatalogThreshold}</strong></div><i data-lucide="chevron-right"></i>
-        <div><span>可展开详情</span><strong>${pipeline.expansionEligible}</strong></div><i data-lucide="chevron-right"></i>
+        <div><span>确定性 / 规划可选</span><strong>${pipeline.expansionEligible} / ${pipeline.plannerEligible ?? pipeline.expansionEligible}</strong></div><i data-lucide="chevron-right"></i>
         <div><span>二阶段合并</span><strong>${pipeline.afterRelevanceThreshold}</strong></div><i data-lucide="chevron-right"></i>
         <div class="selected"><span>最终 TopK</span><strong>${pipeline.selected}</strong></div>
       </div>
@@ -1489,7 +1500,7 @@ function renderRetrievalResult(payload) {
           <td><span class="cell-main">${escapeHtml(item.title)}</span><span class="cell-sub">${escapeHtml(item.eventType)} · ${escapeHtml(statusLabel(item.status))}</span></td>
           <td><code>${scoreText(item.similarity)}</code></td><td><code>${scoreText(item.keywordScore)}</code></td>
           <td>${scoreText(item.importance)}</td><td>${scoreText(item.recencyScore)}</td><td><strong>${scoreText(item.finalScore)}</strong></td>
-          <td><span class="badge ${item.selected ? 'blue' : (item.expansionEligible ? 'amber' : '')}">${item.selected ? '已展开' : (item.expansionEligible ? '可展开' : (item.inCatalog ? '仅目录' : '未入目录'))}</span></td>
+          <td><span class="badge ${item.selected ? 'blue' : (item.expansionEligible || item.plannerEligible ? 'amber' : '')}">${item.selected ? '已展开' : (item.expansionEligible ? '确定性可展开' : (item.plannerEligible ? '规划可选' : (item.inCatalog ? '仅目录' : '未入目录')))}</span></td>
           <td><span class="badge ${item.vectorSource === 'disabled' ? '' : (item.vectorCompatible ? 'blue' : 'red')}">${item.vectorSource === 'disabled' ? '通道关闭' : (item.vectorCompatible ? (item.vectorSource === 'stored' ? '已存向量' : '降级重算') : '维度不兼容')}</span></td>
           <td><span class="badge ${item.selected ? 'blue' : (item.decision.includes('硬过滤') ? 'red' : 'amber')}">${escapeHtml(item.decision)}</span></td>
         </tr>`).join('')}</tbody></table>` : emptyState('scan-search', '作用域内没有可计算的事件向量')}</div>
@@ -3083,6 +3094,7 @@ const TRACE_SPAN_LABELS = {
   hybrid_memory_retrieval: '混合记忆召回',
   capability_resolution: '已解锁能力解析',
   prompt_compilation: '模型输入编译',
+  short_term_history_policy: '短期记忆冲突隔离',
   model_response: 'Pi Runtime 与 LLM 协作',
   post_turn_memory_commit: '长期记忆更新',
   trigger_evaluation_post_commit: '记忆更新后条件触发',
@@ -3118,11 +3130,15 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
   const lifecycle = Array.isArray(runtime.lifecycle) ? runtime.lifecycle : [];
   const modelInput = parseJson(modelSpan?.input_json, {});
   const promptSpan = trace.spans.find((span) => span.name === 'prompt_compilation');
+  const promptOutput = parseJson(promptSpan?.output_json, {});
+  const promptComposition = promptOutput.promptComposition || modelInput.promptComposition || {};
   const retrievalSpan = trace.spans.find((span) => span.name === 'hybrid_memory_retrieval');
+  const historyPolicySpan = trace.spans.find((span) => span.name === 'short_term_history_policy');
   const capabilitySpan = trace.spans.find((span) => span.name === 'capability_resolution');
   const memorySpan = trace.spans.find((span) => span.name === 'post_turn_memory_commit');
   const memoryOutput = parseJson(memorySpan?.output_json, {});
   const retrievalOutput = parseJson(retrievalSpan?.output_json, {});
+  const historyPolicyOutput = parseJson(historyPolicySpan?.output_json, {});
   const capabilityOutput = parseJson(capabilitySpan?.output_json, {});
   const usage = modelOutput.usage || {};
   const provider = bridge.provider || modelOutput.provider || '未记录';
@@ -3130,9 +3146,13 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
   const runtimeName = runtime.name || modelInput.runtime || 'legacy';
   const runtimeVersion = runtime.version ? ` ${runtime.version}` : '';
   const messageCount = Array.isArray(modelInput.messages) ? modelInput.messages.length : 0;
-  const promptChars = String(modelInput.systemPrompt || '').length;
-  const selectedMemories = Array.isArray(retrievalOutput.selected) ? retrievalOutput.selected.length
-    : Number(retrievalOutput.selectedCount || retrievalOutput.selected_count || 0);
+  const promptChars = Number(promptComposition.assembledCharacters)
+    || Number(modelInput.systemPrompt?.assembledCharacters)
+    || String(modelInput.systemPrompt || '').length;
+  const selectedMemories = Array.isArray(retrievalOutput.events) ? retrievalOutput.events.length
+    : (Array.isArray(retrievalOutput.selected) ? retrievalOutput.selected.length
+      : Number(retrievalOutput.selectedCount || retrievalOutput.selected_count || 0));
+  const isolatedHistory = historyPolicyOutput.mode === 'authoritative_memory_current_turn';
   const firstEvent = lifecycle[0] || {};
   const lastEvent = lifecycle.at(-1) || {};
   const bridgeStatus = bridge.status || (modelSpan?.status === 'success' ? 'success' : modelSpan?.status || '未知');
@@ -3158,7 +3178,7 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
     <section class="trace-collaboration" aria-label="Runtime 与模型协作视图">
       <header class="trace-collaboration-header">
         <div><span class="eyebrow">RUNTIME × MODEL</span><h4>本次回复的真实协作链</h4></div>
-        <div class="trace-mode-badges"><span class="badge ${agentTurnEnabled ? 'blue' : 'amber'}">${agentTurnEnabled ? 'Agent Turn 已启用' : 'Legacy 调用链'}</span><span class="badge ${toolLoopEnabled ? 'blue' : 'amber'}">${toolLoopEnabled ? 'ReAct 工具循环' : '本轮无工具'}</span></div>
+        <div class="trace-mode-badges"><span class="badge ${agentTurnEnabled ? 'blue' : 'amber'}">${agentTurnEnabled ? 'Agent Turn 已启用' : 'Legacy 调用链'}</span><span class="badge ${toolLoopEnabled ? 'blue' : 'amber'}">${toolLoopEnabled ? 'ReAct 工具循环' : '本轮无工具'}</span>${isolatedHistory ? '<span class="badge blue">长期证据优先</span>' : ''}</div>
       </header>
       <div class="trace-collaboration-flow">
         <div class="trace-actor pipeline"><i data-lucide="route"></i><span><small>会话编排</small><strong>Memory Agent Turn Pipeline</strong><em>${messageCount} 条短期记忆 · ${promptChars.toLocaleString()} 字符系统输入</em></span></div>
@@ -3170,7 +3190,7 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
         <div class="trace-actor llm"><i data-lucide="sparkles"></i><span><small>具体 LLM</small><strong>${escapeHtml(provider)} / ${escapeHtml(model)}</strong><em>${Number(usage.inputTokens || 0).toLocaleString()} in · ${Number(usage.outputTokens || 0).toLocaleString()} out</em></span></div>
       </div>
       <div class="trace-sequence">
-        <div><span class="trace-sequence-index">01</span><strong>Turn Pipeline 组装输入</strong><small>常驻记忆、召回结果、角色人设与短期记忆被编译为模型输入。</small><time>${traceMs(promptSpan?.duration_ms)}</time></div>
+        <div><span class="trace-sequence-index">01</span><strong>Turn Pipeline 组装输入</strong><small>${isolatedHistory ? `检测到确定性长期记忆证据，省略 ${Number(historyPolicyOutput.omittedMessages || 0)} 条可能冲突的历史消息，只保留当前问题。` : '常驻记忆、召回结果、角色人设与短期记忆被编译为模型输入。'}</small><time>${traceMs(promptSpan?.duration_ms)}</time></div>
         <div><span class="trace-sequence-index">02</span><strong>${escapeHtml(runtimeName)} 接管本轮</strong><small>${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[firstEvent.type] || firstEvent.type || '启动')} → ${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[lastEvent.type] || lastEvent.type || '收口')}，维护 Agent state 与消息生命周期。</small><time>${traceMs(firstEvent.atMs, '+')}</time></div>
         <div><span class="trace-sequence-index">03</span><strong>暴露 ${exposedTools.length} 个当轮工具</strong><small>${exposedTools.length ? escapeHtml(exposedTools.map((tool) => tool.name).join('、')) : '没有已解锁且可连接的 Skill / MCP 工具，本轮直接生成文本。'}</small><time>${traceMs(capabilitySpan?.duration_ms)}</time></div>
         <div><span class="trace-sequence-index">04</span><strong>Provider Bridge 发起 ${callCount} 次模型请求</strong><small>${toolLoopEnabled ? '模型可自主选择 tool call；能力网关执行后，Pi 把 toolResult 追加到上下文并继续请求模型。' : `Pi 将统一消息请求交给 ${escapeHtml(model)}，模型直接返回最终文本。`}</small><time>${traceMs(bridge.responseAtMs, '+')}</time></div>
@@ -3192,8 +3212,12 @@ async function loadTraceDetail(id) {
   const cachedTokens = Number(usage.cachedTokens || cache.cachedTokens || 0);
   const hitRate = Number(usage.cacheHitRate ?? cache.hitRate ?? (inputTokens ? cachedTokens / inputTokens : 0));
   const cacheStatus = cache.status || '未启用';
+  const cacheStatusLabel = ({
+    hit: '已命中', miss_created: '未命中·已创建', disabled: '已关闭',
+    not_reported_or_miss: '上游未报告命中或本次未命中', miss: '本次未命中'
+  })[cacheStatus] || cacheStatus;
   $('#traceDetail').innerHTML = `
-    <div class="trace-overview"><div><span>状态</span><strong>${escapeHtml(trace.status)}</strong></div><div><span>总耗时</span><strong>${trace.total_ms} ms</strong></div><div><span>Provider</span><strong>${escapeHtml(modelOutput.provider || '—')}</strong></div><div><span>输入 Token</span><strong>${inputTokens || '—'}</strong></div><div><span>缓存 Token</span><strong>${cachedTokens || '—'}</strong></div><div><span>缓存状态 / 命中率</span><strong>${escapeHtml(cacheStatus)} · ${(hitRate * 100).toFixed(1)}%</strong></div></div>
+    <div class="trace-overview"><div><span>状态</span><strong>${escapeHtml(trace.status)}</strong></div><div><span>总耗时</span><strong>${trace.total_ms} ms</strong></div><div><span>Provider</span><strong>${escapeHtml(modelOutput.provider || '—')}</strong></div><div><span>输入 Token</span><strong>${inputTokens || '—'}</strong></div><div><span>缓存 Token</span><strong>${cachedTokens || '—'}</strong></div><div><span>缓存状态 / 命中率</span><strong title="provider_managed 模式只展示模型服务返回的 cached_tokens，0 不代表本地缓存异常。">${escapeHtml(cacheStatusLabel)} · ${(hitRate * 100).toFixed(1)}%</strong></div></div>
     ${traceCollaborationHtml(trace, modelSpan, modelOutput)}
     <details class="trace-raw-panel"><summary><span><i data-lucide="braces"></i><strong>原始 Span</strong></span><small>${trace.spans.length} 个节点 · 完整 Input / Output</small><i data-lucide="chevron-down"></i></summary><div class="trace-raw-spans">${trace.spans.map((span, index) => {
       const input = parseJson(span.input_json, {});

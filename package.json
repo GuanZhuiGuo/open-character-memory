@@ -1,6 +1,6 @@
 {
   "name": "open-character-memory",
-  "version": "0.4.1",
+  "version": "0.4.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "start:mock": "node scripts/start-mock.js",
     "test": "node --test",
     "eval": "node scripts/run-memory-evals.js",
+    "eval:long-term:real": "node scripts/run-long-term-memory-badcases.js",
     "check:open-source": "node scripts/open-source-check.js"
   },
   "engines": {

@@ -4,14 +4,14 @@
 
 Open Character Memory is an open-source role-user memory runtime and visual studio for role-play companions and tutoring agents. It remembers user facts, character commitments, shared stories, corrections, relationship state, and narrative branches without treating every semantically similar memory as current truth.
 
-Version `0.4.1` runs main turns through a Pi Agent Core ReAct loop, stores bitemporal records in SQLite as the current source of truth, projects the current graph to Neo4j through a replayable outbox, and exposes only unlocked, server-approved Skill/MCP capabilities.
+Version `0.4.3` runs main turns through a Pi Agent Core ReAct loop, stores bitemporal records in SQLite as the current source of truth, projects the current graph to Neo4j through a replayable outbox, and exposes only unlocked, server-approved Skill/MCP capabilities.
 
-![Open Character Memory v0.4.1 architecture](docs/assets/overall-architecture-v0.4.1.png)
+![Open Character Memory architecture](docs/assets/overall-architecture-v0.4.1.png)
 
 ## Highlights
 
 - Bidirectional user, character, and shared-story memory with strict user/agent/story/branch isolation.
-- Active-state versioning with `active`, `superseded`, `retracted`, valid time, and transaction time.
+- Event operations for `create`, additive `enrich`, real-world `update`, belief correction `supersede`, and `retract`, backed by valid and transaction time.
 - Event/entity/claim graph visualization and two-stage vector, keyword, graph, and planner retrieval.
 - Configurable structured fields, extraction cadence, prompts, retrieval policy, plots, and low-code triggers.
 - Controlled Skill/MCP tool exposure, execution receipts, and Pi `toolResult` continuation turns.
@@ -26,16 +26,18 @@ See the [2026 agent-memory comparison](docs/market-memory-comparison-2026.md) fo
 - Hard isolation by user, agent, story, and branch.
 - Admin-defined structured memory fields with types, scopes, constraints, extraction instructions, and prompt templates.
 - User-defined persistent response rules that pass server-side safety boundaries.
-- Versioned claims with `active`, `superseded`, and `retracted` states.
+- Versioned claims with additive `enrich` plus `active`, `superseded`, and `retracted` states.
 - Bitemporal `valid_*` and `transaction_*` intervals with `valid_at` / `known_at` as-of queries.
 - Neo4j graph projection with tenant scope keys, idempotent replacement, outbox replay, and SQLite fallback.
 - Pi Agent Core state, lifecycle events, and a ReAct-style tool loop. Only unlocked scoped props are exposed; validated declarative Skill tools and allowlisted MCP tools execute through the server gateway and return `toolResult` before the model continues.
 - User memory plus role/user shared-story events, entities, claims, and evidence-backed relations.
-- Two-stage retrieval: a lightweight candidate catalog followed by planner-selected detail and graph expansion.
+- Two-stage retrieval: a lightweight safe catalog followed by planner-authorized detail, graph expansion, and optional follow-up queries. Confirmed user memories may be planner-authorized from the catalog; provisional shared-story memories still require direct evidence.
+- A hybrid graph ontology: six broad entity classes, controlled core relation families, preserved concrete predicates, and open traceable extensions. First-person relational queries resolve the current user identity before traversing family, ownership, and evidence edges.
+- Deterministic relationship retrieval emits a grounded answer contract containing the user anchor, requested relation family, resolved object, and active evidence edge. Conflicting historical assistant answers are excluded from that model turn, and the decision is visible in Trace.
 - Conditional story unlocking and auditable function calls driven by structured state.
 - Role prompt, memory injection, retrieval, model usage, and cache diagnostics in Trace.
 - Provider adapters for Ark, OpenAI, Anthropic, and an offline Mock mode.
-- Stable-prefix caching: role instructions and fixed attributes are cacheable; user state, retrieved memory, plots, and recent dialogue stay dynamic.
+- Stable-prefix caching: role instructions and fixed attributes are cacheable; server time, user state, retrieved memory, plots, and recent dialogue stay dynamic. A zero provider-managed `cached_tokens` value means the upstream reported no hit or no cache usage, not that a local cache failed.
 - NDJSON chat streaming with turn resets for multi-step tool loops, plus sanitized GFM Markdown rendering. Routine memory-extraction start/completion stays silent and the completion event refreshes the progress ring directly.
 
 ## Quick start
@@ -74,6 +76,7 @@ npm run check:open-source
 ```
 
 Tests and memory evaluations run without external model calls.
+With real text and embedding providers configured, `npm run eval:long-term:real` reruns the cross-session trip-ordering and pet-care timeline cases. Each fact is seeded in a separate conversation and the final question keeps only its current message, so this command consumes real provider quota and measures long-term memory rather than short-term context.
 
 ## Cache boundary
 

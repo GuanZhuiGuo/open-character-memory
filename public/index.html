@@ -52,7 +52,7 @@
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-mark small">M</span>
-        <span>记忆 Agent</span>
+        <span class="brand-copy"><span>记忆 Agent</span><small id="appVersion">v—</small></span>
       </div>
       <nav id="managementNav" class="nav-list" data-portal-nav="management" aria-label="管理端导航">
         <button class="nav-item active" data-page="chat" aria-label="角色对话"><i data-lucide="messages-square"></i><span>角色对话</span></button>
@@ -126,8 +126,8 @@
               <div class="composer-dock">
                 <div class="composer-shortcuts" aria-label="对话快捷操作">
                   <button id="memoryExtractionButton" class="composer-tool progress-tool" type="button" title="立即更新长期记忆" aria-label="立即更新长期记忆"><span id="memoryExtractionProgress" class="progress-ring" style="--progress:0"><i data-lucide="brain-circuit"></i></span></button>
-                  <button id="unlockedPropsButton" class="composer-tool" type="button" title="已解锁道具" aria-label="查看已解锁道具"><i data-lucide="package-open"></i><span id="unlockedPropsCount" class="tool-count">0</span></button>
-                  <button id="unlockedPlotsButton" class="composer-tool" type="button" title="已解锁剧情" aria-label="查看已解锁剧情"><i data-lucide="scroll-text"></i><span id="unlockedPlotsCount" class="tool-count">0</span></button>
+                  <button id="unlockedPropsButton" class="composer-tool" type="button" title="查看道具图鉴" aria-label="查看道具图鉴"><i data-lucide="package-open"></i><span id="unlockedPropsCount" class="tool-count">0</span></button>
+                  <button id="unlockedPlotsButton" class="composer-tool" type="button" title="查看剧情图鉴" aria-label="查看剧情图鉴"><i data-lucide="scroll-text"></i><span id="unlockedPlotsCount" class="tool-count">0</span></button>
                 </div>
                 <form id="composerForm" class="composer">
                   <div class="composer-input-wrap">
@@ -425,6 +425,7 @@
                     <div class="architecture-node" data-phase="pre generate input"><i data-lucide="layers-3"></i><span><strong>Prompt Compiler</strong><small>硬规则 + 角色属性 + 状态 + 最终召回</small></span></div>
                     <div class="architecture-node" data-phase="pre generate write"><i data-lucide="plug-zap"></i><span><strong>Capability Gateway</strong><small>解锁过滤、白名单、确认、Skill/MCP 执行回执</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="brain-circuit"></i><span><strong>Recall Planner</strong><small>轻量目录 → LLM 决策 → 详情展开</small></span></div>
+                    <div class="architecture-node" data-phase="pre generate"><i data-lucide="shield-check"></i><span><strong>Grounding Guard</strong><small>确定性图谱答案优先，隔离冲突的历史助手旧答</small></span></div>
                     <div class="architecture-node" data-phase="input"><i data-lucide="scan-search"></i><span><strong>Architecture RAG</strong><small>代码切片 + 混合检索 + 证据约束</small></span></div>
                   </section>
 

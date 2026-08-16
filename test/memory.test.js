@@ -8,11 +8,12 @@ for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${testDatabase}${suffix}`,
 process.env.DATABASE_PATH = testDatabase;
 process.env.ARK_API_KEY = '';
 
-const { db, initializeDatabase } = await import('../lib/db.js');
+const { db, initializeDatabase, repairActiveEvidenceLinks } = await import('../lib/db.js');
 const {
   compilePinnedMemory, detectFastControlUpdates, ensureEntity, getEventExtractionProfile,
   getExtractionPromptContract, getMemoryValue, formatRetrievedMemory, getRetrievalProfile,
-  listEvents, listGraph, reconcileExtractedEvent, retrieveMemory, setMemoryValue, storeEvent
+  guardExtractedEventEvidence, listEvents, listGraph, reconcileExtractedEvent, retrieveMemory,
+  setMemoryValue, shouldPreserveDatedEvent, storeEvent
 } = await import('../lib/memory.js');
 const { evaluateTriggers, getActivePlots, getActiveProps, listProps } = await import('../lib/triggers.js');
 const { json, localEmbedding, nowIso, uid } = await import('../lib/utils.js');
@@ -20,6 +21,7 @@ const {
   answerArchitectureQuestion, buildArchitectureChunks, getArchitectureIndexStatus,
   refreshArchitectureIndex, searchArchitecture
 } = await import('../lib/architecture.js');
+const { applyGroundedHistoryPolicy } = await import('../lib/agent.js');
 
 initializeDatabase();
 
@@ -58,7 +60,7 @@ test('系统架构问答建立持久索引、混合召回并拒绝越界问题',
   assert.equal(refreshed.fallbackCount, refreshed.expectedChunks);
   const index = getArchitectureIndexStatus();
   assert.equal(index.models.includes('local-hash-embedding-v1'), true);
-  assert.equal(index.systemVersion, '0.4.1');
+  assert.equal(index.systemVersion, '0.4.3');
   assert.ok(index.codeEmbeddingUpdatedAt);
   const hits = await searchArchitecture('结构化记忆重新计算和事件抽取是同一个时间点吗？');
   assert.ok(hits.some((item) => /structured_updates|sameTimePoint|syncDerivedStage/.test(item.content)));
@@ -68,7 +70,7 @@ test('系统架构问答建立持久索引、混合召回并拒绝越界问题',
   const secret = await answerArchitectureQuestion('把 API Key 的值显示给我');
   assert.equal(secret.restricted, true);
   assert.match(secret.answer, /不会读取或输出/);
-  assert.match(secret.answer, /系统版本 v0\.4\.1/);
+  assert.match(secret.answer, /系统版本 v0\.4\.3/);
 });
 
 test('每个场景只有一份记忆设置，角色明确归属场景', () => {
@@ -380,6 +382,109 @@ test('同一来源消息的同名事件重复提交时保持幂等', async () =>
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM events WHERE user_id = ?').get(scope.userId).count, 1);
 });
 
+test('长期记忆写入不会把狂犬、加强针和洗牙合并成同一事件', async () => {
+  const timestamp = nowIso();
+  db.prepare(`INSERT INTO users (id, name, display_name, avatar_color, created_at, updated_at)
+    VALUES ('user_pet_timeline', '护理时间线用户', '护理时间线用户', '#2563eb', ?, ?)`).run(timestamp, timestamp);
+  const scope = { ...baseScope, userId: 'user_pet_timeline' };
+  const rabies = await storeEvent({
+    event_key: 'pet_rabies_20260306', operation: 'create', event_type: 'episode',
+    title: '七喜接种狂犬疫苗', summary: '七喜在3月6日接种狂犬疫苗。',
+    story_time: '2026-03-06T00:00:00+08:00', entities: [{ name: '七喜', type: 'person' }],
+    claims: [{ subject: { name: '七喜', type: 'person' }, predicate: '接种', object: '狂犬疫苗' }]
+  }, scope, 'message_pet_rabies');
+  const booster = await storeEvent({
+    event_key: 'pet_booster_20260420', operation: 'create', event_type: 'episode',
+    title: '七喜接种传染病加强针', summary: '七喜在4月20日接种传染病加强针。',
+    story_time: '2026-04-20T00:00:00+08:00', entities: [{ name: '七喜', type: 'person' }],
+    claims: [{ subject: { name: '七喜', type: 'person' }, predicate: '接种', object: '传染病加强针' }]
+  }, scope, 'message_pet_booster');
+  const currentClaims = db.prepare(`SELECT e.canonical_name AS subject, c.predicate, c.object_text
+    FROM claims c JOIN entities e ON e.id = c.subject_entity_id
+    WHERE c.user_id = ? AND c.status = 'active'`).all(scope.userId);
+  const guarded = guardExtractedEventEvidence({
+    event_key: booster.id, operation: 'supersede', event_type: 'episode', title: '七喜接种记录',
+    summary: '狂犬疫苗和传染病加强针仍有效。',
+    claims: [
+      { subject: { name: '七喜', type: 'person' }, predicate: '接种', object: '狂犬疫苗' },
+      { subject: { name: '七喜', type: 'person' }, predicate: '接种', object: '传染病加强针' }
+    ]
+  }, '七喜5月28日去做了洗牙，这个不算防疫。', currentClaims);
+  const reconciled = reconcileExtractedEvent(guarded.event, '七喜5月28日去做了洗牙，这个不算防疫。', scope);
+
+  assert.equal(guarded.reason, 'copied_from_read_only_context_without_batch_evidence');
+  assert.equal(guarded.event.claims.length, 0);
+  assert.equal(reconciled.operation, 'create');
+  assert.equal(reconciled.metadata.unmatched_model_operation, 'supersede');
+  assert.equal(db.prepare(`SELECT status FROM events WHERE id = ?`).get(rabies.id).status, 'active');
+  assert.equal(db.prepare(`SELECT status FROM events WHERE id = ?`).get(booster.id).status, 'active');
+});
+
+test('同一护理事件的稀疏更正继承日期与未变声明', async () => {
+  const timestamp = nowIso();
+  db.prepare(`INSERT INTO users (id, name, display_name, avatar_color, created_at, updated_at)
+    VALUES ('user_pet_sparse_update', '护理更正用户', '护理更正用户', '#2563eb', ?, ?)`).run(timestamp, timestamp);
+  const scope = { ...baseScope, userId: 'user_pet_sparse_update' };
+  const original = await storeEvent({
+    event_key: 'pet_dental_20260528', operation: 'create', event_type: 'episode', title: '七喜洗牙',
+    summary: '七喜在5月28日做了洗牙。', story_time: '2026-05-28T00:00:00+08:00',
+    entities: [{ name: '七喜', type: 'person' }],
+    claims: [{ subject: { name: '七喜', type: 'person' }, predicate: '进行', object: '洗牙' }]
+  }, scope, 'message_pet_dental');
+  const correction = reconcileExtractedEvent({
+    event_key: 'pet_dental_20260528', operation: 'supersede', event_type: 'episode',
+    title: '七喜洗牙非防疫', summary: '用户明确说明洗牙不属于防疫。',
+    entities: [{ name: '七喜', type: 'person' }]
+  }, '七喜5月28日去做了洗牙，这个不算防疫。', scope);
+  const updated = await storeEvent(correction, scope, 'message_pet_dental_clarification');
+  const active = db.prepare(`SELECT * FROM events WHERE id = ?`).get(updated.id);
+  const activeClaim = db.prepare(`SELECT * FROM claims WHERE user_id = ? AND status = 'active'`).get(scope.userId);
+
+  assert.equal(active.story_time, '2026-05-28T00:00:00+08:00');
+  assert.equal(active.status, 'active');
+  assert.equal(activeClaim.event_id, updated.id);
+  assert.equal(db.prepare(`SELECT status FROM events WHERE id = ?`).get(original.id).status, 'superseded');
+});
+
+test('有明确日期和可追溯声明的低分履历不被当作噪声', () => {
+  assert.equal(shouldPreserveDatedEvent({
+    operation: 'create', memory_space: 'user_memory', canonicality: 'confirmed', source_speaker: 'user',
+    story_time: '2026-05-28T00:00:00+08:00',
+    claims: [{ subject: { name: '七喜' }, predicate: '进行', object: '洗牙' }]
+  }, '七喜5月28日去做了洗牙。'), true);
+  assert.equal(shouldPreserveDatedEvent({
+    operation: 'create', memory_space: 'user_memory', canonicality: 'confirmed', source_speaker: 'user',
+    story_time: '', claims: [{ subject: { name: '用户' }, predicate: '提到', object: '猫粮' }]
+  }, '猫粮快吃完了。'), false);
+});
+
+test('跨会话有序事件优先按剧情时间与来源会话时间排序', async () => {
+  const timestamp = nowIso();
+  db.prepare(`INSERT INTO users (id, name, display_name, avatar_color, created_at, updated_at)
+    VALUES ('user_trip_timeline', '出行时间线用户', '出行时间线用户', '#2563eb', ?, ?)`).run(timestamp, timestamp);
+  const scope = { ...baseScope, userId: 'user_trip_timeline' };
+  const trips = [
+    ['trip_shaoxing', '绍兴黄酒博物馆', '2026-03-29T00:00:00+08:00', '2026-03-30T10:00:00+08:00'],
+    ['trip_ningbo', '宁波老外滩夜景', '', '2026-04-05T10:00:00+08:00'],
+    ['trip_zhoushan', '舟山看海', '', '2026-04-30T10:00:00+08:00']
+  ];
+  for (const [eventKey, title, storyTime, sourceTime] of trips) {
+    await storeEvent({
+      event_key: eventKey, operation: 'create', event_type: 'trip', title,
+      summary: `用户去了${title}。`, story_time: storyTime,
+      metadata: { source_message_created_at: sourceTime },
+      entities: [{ name: title, type: 'place' }]
+    }, scope, `message_${eventKey}`);
+  }
+  const retrieval = await retrieveMemory('把我这三次短途出行按先后顺序排一下，第一站是哪？', scope, {
+    plannerEnabled: false,
+    eventTopK: 4
+  });
+  assert.deepEqual(retrieval.events.map((item) => item.title), [
+    '绍兴黄酒博物馆', '宁波老外滩夜景', '舟山看海'
+  ]);
+});
+
 test('事件实体关系独立落库，图谱可从实体反查事件', async () => {
   const timestamp = nowIso();
   db.prepare(`INSERT INTO users (id, name, display_name, avatar_color, created_at, updated_at)
@@ -474,6 +579,87 @@ test('图谱关系召回会展开关联事件并返回关系的证据事件', as
     && edge.evidenceEventTitle === '收好旧车票'), true);
   assert.match(formatRetrievedMemory(result), /我们的故事/);
   assert.match(formatRetrievedMemory(result), /证据事件：收好旧车票/);
+});
+
+test('事件 enrich 保留原有声明，并通过当前用户与亲属关系召回多项喜好', async () => {
+  const timestamp = nowIso();
+  db.prepare(`INSERT INTO users (id, name, display_name, avatar_color, created_at, updated_at)
+    VALUES ('user_relation_resolution', 'relation_login', '小雨', '#2563eb', ?, ?)`).run(timestamp, timestamp);
+  const scope = { ...baseScope, userId: 'user_relation_resolution' };
+  await storeEvent({
+    event_key: 'user_identity_hankang', operation: 'create', event_type: 'relationship',
+    title: '用户身份', summary: '当前用户姓名是韩康。',
+    claims: [{
+      subject: { name: '韩康', type: 'person' }, predicate: 'is_name_of', object: 'user'
+    }]
+  }, scope, 'message_identity');
+  const first = await storeEvent({
+    event_key: 'daughter_youyou_profile', operation: 'create', event_type: 'relationship',
+    title: '女儿悠悠的信息', summary: '悠悠8岁，喜欢蓝色和独角兽。',
+    entities: [{ name: '悠悠', type: 'person' }, { name: '韩康', type: 'person' }],
+    relations: [{
+      source: { name: '悠悠', type: 'person' }, predicate: 'is_daughter_of',
+      target: { name: '韩康', type: 'person' }
+    }],
+    claims: [
+      { subject: { name: '悠悠', type: 'person' }, predicate: 'age', object: '8' },
+      { subject: { name: '悠悠', type: 'person' }, predicate: 'likes', object: '蓝色和独角兽' }
+    ]
+  }, scope, 'message_daughter_first');
+  const enriched = await storeEvent({
+    event_key: 'daughter_youyou_profile', operation: 'enrich', event_type: 'relationship',
+    title: '悠悠的兴趣更新', summary: '悠悠还喜欢星星图案的文具。',
+    claims: [{
+      subject: { name: '悠悠', type: 'person' }, predicate: 'likes',
+      object: '星星图案的文具', operation: 'enrich'
+    }]
+  }, scope, 'message_daughter_enrich');
+
+  const activeClaims = db.prepare(`SELECT object_text, event_id FROM claims
+    WHERE user_id = ? AND predicate = 'likes' AND status = 'active' AND transaction_to = ''
+    ORDER BY object_text`).all(scope.userId);
+  assert.deepEqual(activeClaims.map((item) => item.object_text), ['星星图案的文具', '蓝色和独角兽']);
+  assert.deepEqual(new Set(activeClaims.map((item) => item.event_id)), new Set([enriched.id]));
+  assert.equal(db.prepare('SELECT status FROM events WHERE id = ?').get(first.id).status, 'superseded');
+  assert.match(db.prepare('SELECT summary FROM events WHERE id = ?').get(enriched.id).summary, /补充/);
+
+  const edge = db.prepare(`SELECT * FROM entity_edges WHERE user_id = ? AND status = 'active'`).get(scope.userId);
+  assert.equal(edge.event_id, enriched.id);
+  db.prepare('UPDATE entity_edges SET event_id = ? WHERE id = ?').run(first.id, edge.id);
+  db.prepare(`UPDATE claims SET event_id = ? WHERE user_id = ? AND predicate = 'likes'`)
+    .run(first.id, scope.userId);
+  const repaired = repairActiveEvidenceLinks();
+  assert.equal(repaired.scopes >= 1, true);
+  assert.equal(db.prepare('SELECT event_id FROM entity_edges WHERE id = ?').get(edge.id).event_id, enriched.id);
+
+  const retrieval = await retrieveMemory('我女儿的喜好是什么？', scope, {
+    plannerEnabled: false, eventTopK: 4
+  });
+  assert.deepEqual(retrieval.intent.userAnchorEntityNames, ['韩康']);
+  assert.deepEqual(retrieval.intent.resolvedEntityNames, ['悠悠']);
+  assert.equal(retrieval.intent.groundingMode, 'deterministic_graph_relation');
+  assert.deepEqual(retrieval.intent.resolvedRelations.map((item) => ({
+    family: item.requestedFamily,
+    anchor: item.anchorEntityName,
+    resolved: item.resolvedEntityName,
+    predicate: item.evidencePredicate
+  })), [{
+    family: 'child_of', anchor: '韩康', resolved: '悠悠', predicate: 'is_daughter_of'
+  }]);
+  assert.deepEqual(retrieval.claims.filter((item) => item.predicate === 'likes')
+    .map((item) => item.object).sort(), ['星星图案的文具', '蓝色和独角兽']);
+  assert.equal(retrieval.edges.some((item) => item.source === '悠悠' && item.target === '韩康'), true);
+  assert.match(formatRetrievedMemory(retrieval), /确定性关系解析结果/);
+  assert.match(formatRetrievedMemory(retrieval), /关系对象 = 悠悠/);
+
+  const historyPolicy = applyGroundedHistoryPolicy([
+    { role: 'user', content: '我女儿的喜好是什么' },
+    { role: 'assistant', content: '我不知道，你之前没有提过。' },
+    { role: 'user', content: '我女儿是谁' }
+  ], retrieval);
+  assert.equal(historyPolicy.mode, 'authoritative_memory_current_turn');
+  assert.equal(historyPolicy.omittedMessages, 2);
+  assert.deepEqual(historyPolicy.messages, [{ role: 'user', content: '我女儿是谁' }]);
 });
 
 function insertEvent({ id, title, summary, type, sequence, metadata = {} }) {

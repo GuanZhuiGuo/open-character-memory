@@ -37,6 +37,9 @@ textarea { resize: vertical; line-height: 1.55; }
 .app-shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); height: 100vh; }
 .sidebar { display: flex; flex-direction: column; min-width: 0; color: var(--text); background: #fff; border-right: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 10px; height: 66px; padding: 0 18px; font-size: 15px; font-weight: 700; border-bottom: 1px solid var(--line); }
+.brand-copy { display: flex; min-width: 0; flex-direction: column; gap: 1px; }
+.brand-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brand-copy > small { color: #8a96a8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 8px; font-weight: 600; }
 .brand-mark { display: grid; place-items: center; width: 44px; height: 44px; color: #fff; font-size: 19px; font-weight: 800; background: var(--primary); border-radius: 8px; }
 .brand-mark.small { width: 28px; height: 28px; font-size: 13px; background: var(--primary); box-shadow: 0 5px 12px rgba(37, 99, 235, .22); }
 .nav-list { display: flex; flex-direction: column; gap: 4px; padding: 14px 10px; }
@@ -1312,6 +1315,9 @@ body[data-role="user"] .select-wrap select:disabled { color: #344054; background
 .composer.frozen { background: #f3f6fa; border-color: #ccd7e5; box-shadow: none; }
 .unlocked-quick-list { display: flex; flex-direction: column; gap: 8px; }
 .unlocked-quick-list article { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 11px; background: #f8fafc; border: 1px solid var(--line); border-radius: 7px; }
+.unlocked-quick-list article.locked { color: #758196; background: #f5f6f8; border-style: dashed; filter: grayscale(.65); }
+.unlocked-quick-list article.locked .quick-item-icon { color: #7e8b9d; background: #e9edf2; }
+.unlocked-quick-list article.locked p, .unlocked-quick-list article.locked small { color: #929cab; }
 .quick-item-icon { display: grid; place-items: center; width: 36px; height: 36px; color: #2563eb; background: #eaf1ff; border-radius: 7px; }
 .quick-item-icon svg { width: 18px; }
 .unlocked-quick-list strong, .unlocked-quick-list p, .unlocked-quick-list small { display: block; }

@@ -8,7 +8,9 @@ import {
   extractConversationMemoryNow, getConversationMemoryExtractionStatus,
   getConversationMessages, listConversations, MAIN_MODEL_MESSAGE_LIMIT
 } from './lib/agent.js';
-import { answerArchitectureQuestion, getArchitectureIndexStatus } from './lib/architecture.js';
+import {
+  answerArchitectureQuestion, getArchitectureIndexStatus, SYSTEM_VERSION
+} from './lib/architecture.js';
 import { getCapabilityRuntimeStatus } from './lib/capabilities.js';
 import { config } from './lib/config.js';
 import { db, initializeDatabase } from './lib/db.js';
@@ -18,6 +20,7 @@ import {
 import { getAgentRuntimeStatus } from './lib/pi-runtime.js';
 import { checkModelHealth, configuredModels } from './lib/providers/index.js';
 import {
+  CORE_RELATION_FAMILIES, ENTITY_TYPE_ONTOLOGY, EVENT_OPERATIONS,
   EXTRACTION_CONTEXT_MAX_MESSAGES, EXTRACTION_CONTEXT_MAX_TURNS, EXTRACTION_INTERVAL_MAX_TURNS,
   formatRetrievedMemory,
   getEventExtractionProfile, getExtractionPromptContract, getRetrievalProfile, listEvents,
@@ -688,7 +691,8 @@ function architectureOverview(sceneId) {
         minSimilarity: Number(retrieval.min_similarity),
         plannerEnabled: Boolean(retrieval.planner_enabled),
         plannerMaxCandidates: Number(retrieval.planner_max_candidates),
-        graphHops: Number(retrieval.graph_hops)
+        graphHops: Number(retrieval.graph_hops),
+        plannerAuthority: '规划器只能从轻量目录选择；已确认的用户记忆可由 Planner 授权展开，待承接的共享剧情仍需直接证据'
       } : null
     },
     memoryOwnership: [
@@ -701,11 +705,22 @@ function architectureOverview(sceneId) {
       validTime: 'valid_from / valid_to：事实在故事世界中何时成立',
       transactionTime: 'transaction_from / transaction_to：系统在何时知道并采用该版本',
       operations: {
+        enrich: '原事件仍成立，增加不冲突的细节、声明或关系',
         update: '现实或剧情状态从某时刻发生变化，同时闭合旧有效期与旧认知期',
         supersede: '纠正系统旧认知，只闭合旧认知期并保留原有效期用于回放',
         retract: '撤回当前采用版本，保留历史证据与当时认知'
       },
       queryParameters: ['valid_at', 'known_at']
+    },
+    graphOntology: {
+      entityTypes: ENTITY_TYPE_ONTOLOGY,
+      relationModel: 'controlled_core_with_open_extension',
+      coreRelationFamilies: CORE_RELATION_FAMILIES,
+      eventOperations: EVENT_OPERATIONS,
+      concretePredicatePreserved: true,
+      queryResolution: ['直接实体指代', '当前用户身份锚点', '关系意图', '图边方向解析', '证据事件展开'],
+      sourceOfTruth: 'SQLite',
+      projection: 'Neo4j'
     },
     runtime: getAgentRuntimeStatus(),
     capabilities: getCapabilityRuntimeStatus(),
@@ -1303,6 +1318,7 @@ async function handleApi(request, response, url) {
     if (principal.role === 'user') {
       sendJson(response, 200, {
         role: 'user',
+        systemVersion: SYSTEM_VERSION,
         users: [principal.user],
         agents: db.prepare('SELECT * FROM agents WHERE enabled = 1 ORDER BY created_at').all(),
         scenes: listScenes(),
@@ -1318,6 +1334,7 @@ async function handleApi(request, response, url) {
     }
     sendJson(response, 200, {
       role: 'admin',
+      systemVersion: SYSTEM_VERSION,
       users: db.prepare("SELECT * FROM users WHERE status = 'active' ORDER BY created_at").all(),
       agents: db.prepare('SELECT * FROM agents WHERE enabled = 1 ORDER BY created_at').all(),
       scenes: listScenes(),
