@@ -1,6 +1,6 @@
 # 2026 Agent 记忆方案对比
 
-> 对比基线：Open Character Memory `0.4.1`  
+> 对比基线：Open Character Memory `0.5.0`
 > 资料核验日期：2026-08-16  
 > 范围：面向应用的长期记忆基础设施，以及 Codex、Claude Code、Cursor 这类编码 Agent 的上下文记忆。
 
@@ -23,7 +23,7 @@ Open Character Memory 不应把自己定位成另一个通用向量记忆 API。
 
 ## 当前方案基线
 
-Open Character Memory `0.4.1` 的记忆由六层组成：
+Open Character Memory `0.5.0` 的记忆由六层组成：
 
 | 层 | 当前实现 | 是否进入主模型 |
 | --- | --- | --- |
@@ -32,7 +32,7 @@ Open Character Memory `0.4.1` 的记忆由六层组成：
 | 当前状态 | 结构化字段和当前有效 Claim | 常驻或按需注入 |
 | 事件账本 | 用户事件与按角色-用户隔离的“我们的故事” | 相关时召回 |
 | 图谱投影 | 实体、事件、声明、证据关系，Neo4j 可重建投影 | 作为召回证据 |
-| Agent Runtime | Pi ReAct、已解锁 Skill/MCP、能力网关和执行回执 | 当轮按资格暴露 |
+| Agent Runtime | Pi ReAct、按需只读记忆工具、已解锁 Skill/MCP、能力网关和执行回执 | 记忆意图或资格命中时暴露 |
 
 长期记忆默认每 8 个完整轮次更新一次，场景可配置为 1-8 轮。用户明确提出的长期回复规则和戏外更正走同步快速通道，不等待批量抽取。事件、声明、关系边和结构化历史均有有效时间与认知时间；默认回答硬过滤非当前版本。
 
@@ -42,7 +42,7 @@ Open Character Memory `0.4.1` 的记忆由六层组成：
 
 | 方案 | 核心定位 | 常驻结构化状态 | 旧事实更新 | 图谱与时间 | 召回方式 | Agent/工具运行时 | 角色陪聊适配 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Open Character Memory 0.4.1** | 角色-用户双向记忆与剧情运行层 | 原生字段、固定属性、必须/避免规则 | 服务端操作与 `active / superseded / retracted`，双时态历史 | 原生事件、实体、Claim、证据边；SQLite 账本 + Neo4j 当前投影 | 向量 + 关键词 + 图关系 + Planner 二次展开 + 硬门槛 | Pi ReAct + 受控 Skill/MCP 网关 | **最贴合**，原生用户、角色、故事、分支和条件触发 |
+| **Open Character Memory 0.5.0** | 角色-用户双向记忆与剧情运行层 | 原生字段、固定属性、必须/避免规则 | 服务端操作与 `active / superseded / retracted`，双时态历史 | 原生事件、实体、Claim、证据边；SQLite 账本 + Neo4j 当前投影 | 混合预召回 + Corrective Planner 跨池改写 + 主模型只读记忆工具 + 硬门槛 | Pi ReAct + 作用域锁定记忆工具 + 受控 Skill/MCP 网关 | **最贴合**，原生用户、角色、故事、分支和条件触发 |
 | **TencentDB Agent Memory 2.0.0** | 面向 Agent 团队的 Memory Hub 与经验资产层 | L0 对话、L1 原子记忆、L2 场景、L3 Persona；另有 Skill、Wiki、CodeGraph | 记忆资产有 owner、version、status 和人工维护；公开合同未提供双时态 `active-only` 状态机 | Wiki 有链接图，CodeGraph 有符号和调用关系；不是角色剧情的时序事件图 | L2/L3 快速恢复，按需下钻 L1/L0；BM25 + 向量 + RRF，并受条数、字符和超时预算限制 | 提供跨 Agent 资产装配及工具协议；官方明确记忆本身不运行 Agent loop | 团队知识和多 Agent 复用很强；角色、用户、故事、分支和视角语义需另建领域层 |
 | **Zep Cloud / Graphiti OSS** | 时序 Context Graph 与 Agent Memory | 可通过实体类型和应用逻辑组装，不是固定注入控制面 | 原生时序事实、失效区间、episode 溯源 | **最强项**，实体、关系、事实、episode 与混合图检索 | 语义 + BM25 + 图遍历，返回面向 Prompt 的上下文 | 不负责完整 Agent Runtime | 很适合复杂人物关系和时间变化；剧情、硬规则、道具仍需应用层 |
 | **Mem0 Platform / OSS** | 易接入的个性化记忆 API | 支持实体 scope、类别和直接导入，但固定规则需应用实现 | 新算法采用 ADD-only，保留新旧事实并在检索排序时处理当前性 | Platform 使用内建实体连接图；不是带类型谓词的关系图。新 OSS 已移除外部图存储 | 语义 + BM25 + Entity Linking，可选 rerank | 提供 SDK/MCP 集成，不是完整业务 Runtime | 快速个性化很合适；对剧情槽位、明确撤回和当前状态硬裁决较弱 |
@@ -128,7 +128,7 @@ Hindsight 将记忆划分为世界事实、Agent 经历、实体总结和持续�
 | **Codex** | 全局/项目/目录级 `AGENTS.md`，越靠近工作目录优先级越高 | 本地 Memories，从符合条件的历史任务生成摘要、持久条目和证据 | 后台生成；等待任务空闲，不保证聊天结束后立即更新 | 本机 `~/.codex/memories/`，可按任务控制是否读取/贡献 | 召回层按需提供；`AGENTS.md` 在运行开始时形成指令链 | 生成记忆可后台整理，但官方要求“必须遵守”的内容放 `AGENTS.md` 或仓库文档 | 记忆不是；`AGENTS.md` 仍是模型指令，不等于数据库或权限网关强制 |
 | **Claude Code** | `CLAUDE.md`、`CLAUDE.local.md`、`.claude/rules/`，支持目录与路径 scope | 每仓库 Auto Memory，`MEMORY.md` 作为索引，详细内容拆到 topic 文件 | Claude 在会话中自行写入，不要求每个会话都写 | 本机 `~/.claude/projects/<project>/memory/`，同仓库 worktree 共享 | 每次启动载入索引前 200 行或 25KB；topic 文件按需读取 | 接近容量时提示合并、移动或删除过期条目；仍依赖模型维护文本一致性 | 否。官方明确 CLAUDE.md 是行为指导；真正强制需 settings、permissions、sandbox 或 hooks |
 | **Cursor** | `.cursor/rules`、User Rules，可按 glob 自动挂载或手动使用 | Memories 是从 Chat 自动生成的 repository-scoped rules | sidecar 后台观察或 Agent tool call；后台建议需用户批准后保存 | 按 Git 仓库隔离，在 Settings > Rules 查看和删除 | 作为 prompt-level rule 注入 Agent/Cmd-K | 用户可审查删除；公开文档未给出双时态或版本冲突合同 | 否，本质是可复用 Prompt 规则 |
-| **Open Character Memory** | 管理员人设、场景记忆 schema、角色固定属性与服务端硬规则 | 结构化字段、事件、实体、Claim、关系和 shared story | 明确规则当轮同步；一般长期记忆每 X 轮或跨对话边界更新 | 数据库按 `user + agent + story + branch` 隔离 | 固定控制常驻；事件经混合召回和 Planner 门控后注入 | 服务端闭合旧版本区间，默认硬过滤 superseded/retracted | **部分是**。数据库状态、权限和能力网关可强制；自然语言风格仍需输出检查 |
+| **Open Character Memory** | 管理员人设、场景记忆 schema、角色固定属性与服务端硬规则 | 结构化字段、事件、实体、Claim、关系和 shared story | 明确规则当轮同步；一般长期记忆每 X 轮或跨对话边界更新 | 数据库按 `user + agent + story + branch` 隔离 | 固定控制常驻；回复前可纠正漏召回，生成中可调用只读记忆工具 | 服务端闭合旧版本区间，默认硬过滤 superseded/retracted | **部分是**。数据库状态、权限和能力网关可强制；自然语言风格仍需输出检查 |
 
 ### 三个关键差异
 
@@ -189,7 +189,7 @@ Open Character Memory 已经不是“向量召回 Demo”，也不是 Codex/Clau
 - **状态正确性较强**：双时态、active-only 和证据版本比单纯 ADD-only 或 TopK 更适合可更正剧情。
 - **团队资产中枢明显落后于腾讯**：尚无成熟的跨 Agent Memory Asset、ACL/loadout、Wiki/CodeGraph、SDK 和服务化生态。
 - **通用图能力中等**：已经有真实 Neo4j 投影与图召回，但历史图遍历、ontology 和大图运行能力弱于 Graphiti/Zep。
-- **Agent 自我学习中等**：有事件抽取和 Planner，但还没有 Hindsight 式独立 reflection，也不让 Agent 自主管理权威记忆。
+- **Agent 自助检索增强、自我学习仍中等**：已有 Corrective Planner 和生成中只读记忆工具，但还没有 Hindsight 式独立 reflection，也不让 Agent 自主管理权威记忆。
 - **生产基础设施偏弱**：单机 SQLite、同步阈值轮抽取、进程内锁和应用层向量扫描仍是主要差距。
 - **编码 Agent 记忆不是竞品替代关系**：Codex/Claude/Cursor 的分层规则设计值得借鉴，但不能替代角色世界状态、用户隔离和剧情触发。
 

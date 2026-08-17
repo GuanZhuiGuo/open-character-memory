@@ -2,20 +2,31 @@
 
 ## 当前版本边界
 
-`0.4.1` 的运行结构是：
+`0.5.0` 的运行结构是：
 
 ```text
 HTTP /api/chat
-  -> 原有会话锁、固定规则、触发器、两阶段召回与 Prompt Compiler
+  -> 会话锁、固定规则、触发器、混合预召回与 Prompt Compiler
+  -> Corrective Recall Planner -> 必要时改写 Query 并跨首轮候选池重检
+  -> 记忆意图路由 -> 只读 memory_search / memory_expand
   -> 已解锁 Skill/MCP 解析与工具白名单
   -> Pi Agent Core ReAct turn state + lifecycle events
-  -> Text Provider -> 可选 tool call -> 能力网关 -> toolResult -> Text Provider 续答
+  -> Text Provider -> 可选记忆/能力 tool call -> toolResult -> Text Provider 续答
   -> SQLite 双时态主记录
   -> graph_projection_outbox
   -> Neo4j 当前图投影
 ```
 
-SQLite 是当前唯一事实源。Neo4j 可以删除后从 SQLite 全量重建；它不裁决记忆版本，也不保存独有业务事实。Pi Agent Core 管理主回复 turn 的状态、生命周期和 ReAct 工具循环；道具资格、白名单、确认、网络/进程边界与执行回执仍由服务端能力网关裁决。
+SQLite 是当前唯一事实源。Neo4j 可以删除后从 SQLite 全量重建；它不裁决记忆版本，也不保存独有业务事实。Pi Agent Core 管理主回复 turn 的状态、生命周期和 ReAct 工具循环；记忆工具的 namespace、Active Only、只读边界与预算由服务端锁定，道具资格、白名单、确认、网络/进程边界与执行回执仍由服务端能力网关裁决。
+
+## 两类二次召回
+
+回复前的 Corrective Recall Planner 与生成中的主模型工具不是同一层：
+
+1. **回复前纠正**：首轮向量、关键词和图召回先形成轻量目录。Planner 判断证据是否足够；目录为空或不足时可生成最多 N 个更具体 Query，并在当前 `user + agent + story + branch` 的全部 active 事件中重检，不再受首轮事件类型/collection 候选池限制。
+2. **生成中补证据**：主模型第一次推理后若仍发现事实缺口，可调用 `memory_search` 改写检索词，或用 `memory_expand` 展开已知 event id / entity 的声明与证据邻居。结果作为 `toolResult` 回灌 Pi，再进行下一次模型推理。
+
+两层都不能修改记忆。模型不能传入或更换作用域键；单轮调用次数、单次 Query 数、TopK、图跳数和 Active Only 均由场景配置及服务端硬限制控制。系统只在记忆相关问题、已有记忆证据或 Planner 请求补查时暴露这两个工具，普通闲聊不承担工具循环开销。
 
 ## 双时态语义
 
@@ -74,10 +85,11 @@ Pi runtime 当前提供：
 - 一次主回复的 Agent state。
 - `agent_start / turn_start / message_* / tool_execution_* / turn_end / agent_end` 生命周期事件。
 - 模型产生 tool call、服务端执行工具、标准 `toolResult` 回传和模型续答的 ReAct 循环。
+- 按需暴露、作用域锁定的只读 `memory_search / memory_expand`，以及与其分离的已解锁 Skill/MCP 工具。
 - 会话 ID 透传。
 - 每次请求的模型轮数、工具调用次数与同批工具串行/并行上限。
 
-没有可用工具时，Provider bridge 将 Provider 的流式结果转换为 Pi 消息事件；Ark 默认使用 Responses Provider 托管缓存，显式 Context 仅为 Endpoint ID 部署的可选模式。存在当轮工具时，Ark/OpenAI/Anthropic 改走 Pi 原生 tool-capable stream；Mock 用确定性桥接器验证同一事件合同。工具请求由模型决定，但工具是否可见、是否允许和执行结果是否成功均由服务端决定。
+没有可用工具时，Provider bridge 将 Provider 的流式结果转换为 Pi 消息事件；Ark 默认使用 Responses Provider 托管缓存，显式 Context 仅为 Endpoint ID 部署的可选模式。存在当轮工具时，Ark/OpenAI/Anthropic 改走 Pi 原生 tool-capable stream；Mock 用确定性桥接器验证同一事件合同。工具请求由模型决定，但记忆工具是否按需暴露、作用域、调用预算，以及外部能力是否允许和执行结果是否成功，均由服务端决定。
 
 Skill ZIP 当前是受控声明式包：`skill.json` 可声明 template 或 HTTP 工具并附带 `SKILL.md`，不会加载或执行 ZIP 内任意 JavaScript/Python。MCP 使用官方 TypeScript Client 执行 `tools/list / tools/call`；HTTP 受主机白名单约束，stdio 默认关闭且受命令白名单约束。`AGENT_RUNTIME=legacy` 可用于紧急回退，但 legacy 不执行动态能力。
 
@@ -85,7 +97,7 @@ Skill ZIP 当前是受控声明式包：`skill.json` 可声明 template 或 HTTP
 
 ## 保留的既有功能
 
-本次升级不改变以下产品合同：用户隔离、普通用户只读配置与自己的 Trace、用户长期必须/避免规则、角色固定属性、用户记忆与“我们的故事”双向记忆、每 X 轮抽取、手动抽取、两阶段召回、剧情性别分支、低代码触发器、Skill/MCP 道具资格、反馈与架构代码问答。
+本次升级不改变以下产品合同：用户隔离、普通用户只读配置与自己的 Trace、用户长期必须/避免规则、角色固定属性、用户记忆与“我们的故事”双向记忆、每 X 轮抽取、手动抽取、剧情性别分支、低代码触发器、Skill/MCP 道具资格、反馈与架构代码问答。原两阶段召回升级为“预召回 + Corrective Planner + 主模型只读记忆工具”，但版本裁决和写入权限仍在服务端。
 
 ## 配置
 

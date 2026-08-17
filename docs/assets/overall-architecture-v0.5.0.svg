@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="1320" viewBox="0 0 1900 1320">
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563EB"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#D97706"/>
+    </marker>
+    <style>
+      text { font-family: "PingFang SC", "Helvetica Neue", Arial, sans-serif; }
+      .title { font-size: 40px; font-weight: 700; fill: #0F172A; }
+      .subtitle { font-size: 20px; font-weight: 400; fill: #475569; }
+      .lane-title { font-size: 24px; font-weight: 700; fill: #0F172A; }
+      .card-title { font-size: 20px; font-weight: 700; fill: #0F172A; }
+      .card-text { font-size: 17px; font-weight: 400; fill: #334155; }
+      .small { font-size: 15px; font-weight: 400; fill: #475569; }
+      .chip { font-size: 15px; font-weight: 700; fill: #1D4ED8; }
+      .white-title { font-size: 20px; font-weight: 700; fill: #FFFFFF; }
+      .white-text { font-size: 16px; font-weight: 400; fill: #DBEAFE; }
+      .line { stroke: #2563EB; stroke-width: 3; fill: none; marker-end: url(#arrow-blue); }
+      .loop { stroke: #D97706; stroke-width: 3; fill: none; marker-end: url(#arrow-amber); }
+    </style>
+  </defs>
+
+  <rect width="1900" height="1320" fill="#FFFFFF"/>
+  <rect x="0" y="0" width="1900" height="12" fill="#2563EB"/>
+  <text x="48" y="68" class="title">Open Character Memory v0.5.0 总体架构</text>
+  <text x="48" y="102" class="subtitle">Corrective Planner、Pi Agentic Memory 工具闭环、长期记忆更新与双时态图投影</text>
+
+  <!-- Entry and governance -->
+  <rect x="40" y="135" width="1820" height="150" rx="6" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="2"/>
+  <text x="64" y="171" class="lane-title">入口与治理</text>
+
+  <rect x="64" y="191" width="315" height="70" rx="6" fill="#EFF6FF" stroke="#93C5FD" stroke-width="2"/>
+  <text x="221" y="220" text-anchor="middle" class="card-title">用户端</text>
+  <text x="221" y="246" text-anchor="middle" class="card-text">对话、反馈、剧情与道具</text>
+
+  <rect x="400" y="191" width="315" height="70" rx="6" fill="#F5F3FF" stroke="#C4B5FD" stroke-width="2"/>
+  <text x="557" y="220" text-anchor="middle" class="card-title">管理端</text>
+  <text x="557" y="246" text-anchor="middle" class="card-text">场景、字段、召回与触发器</text>
+
+  <rect x="736" y="191" width="315" height="70" rx="6" fill="#FFF7ED" stroke="#FDBA74" stroke-width="2"/>
+  <text x="893" y="220" text-anchor="middle" class="card-title">作用域硬隔离</text>
+  <text x="893" y="246" text-anchor="middle" class="card-text">user + agent + story + branch</text>
+
+  <rect x="1072" y="191" width="315" height="70" rx="6" fill="#ECFEFF" stroke="#67E8F9" stroke-width="2"/>
+  <text x="1229" y="220" text-anchor="middle" class="card-title">身份与能力治理</text>
+  <text x="1229" y="246" text-anchor="middle" class="card-text">只读权限、解锁、确认、白名单</text>
+
+  <rect x="1408" y="191" width="428" height="70" rx="6" fill="#F1F5F9" stroke="#94A3B8" stroke-width="2"/>
+  <text x="1622" y="220" text-anchor="middle" class="card-title">Trace 与评测</text>
+  <text x="1622" y="246" text-anchor="middle" class="card-text">Query 改写、跨池命中、模型/工具与写入 Span</text>
+
+  <!-- Main read and response pipeline -->
+  <rect x="40" y="315" width="1820" height="450" rx="6" fill="#F8FBFF" stroke="#60A5FA" stroke-width="3"/>
+  <rect x="40" y="315" width="1820" height="52" rx="6" fill="#1D4ED8"/>
+  <text x="64" y="349" class="white-title">每轮主链路：读取记忆 → 编译 Input → Pi ReAct 推理与工具协作 → 回复落库</text>
+
+  <rect x="64" y="392" width="315" height="330" rx="6" fill="#FFFFFF" stroke="#93C5FD" stroke-width="2"/>
+  <text x="88" y="428" class="lane-title">1. 请求接入</text>
+  <rect x="88" y="451" width="267" height="70" rx="6" fill="#EFF6FF"/>
+  <text x="221" y="480" text-anchor="middle" class="card-title">消息与会话锁</text>
+  <text x="221" y="505" text-anchor="middle" class="small">1000 字上限 · 按用户角色串行</text>
+  <rect x="88" y="539" width="267" height="70" rx="6" fill="#FFF7ED"/>
+  <text x="221" y="568" text-anchor="middle" class="card-title">显式规则快通道</text>
+  <text x="221" y="593" text-anchor="middle" class="small">必须 / 不要 / 戏外更正当轮生效</text>
+  <rect x="88" y="627" width="267" height="70" rx="6" fill="#F1F5F9"/>
+  <text x="221" y="656" text-anchor="middle" class="card-title">证据落库</text>
+  <text x="221" y="681" text-anchor="middle" class="small">保留用户原文与 evidence message id</text>
+
+  <path d="M 379 555 L 411 555" class="line"/>
+
+  <rect x="412" y="392" width="455" height="330" rx="6" fill="#FFFFFF" stroke="#67E8F9" stroke-width="2"/>
+  <text x="436" y="428" class="lane-title">2. 回复前纠正式召回</text>
+  <rect x="436" y="451" width="194" height="76" rx="6" fill="#ECFEFF"/>
+  <text x="533" y="480" text-anchor="middle" class="card-title">常驻控制</text>
+  <text x="533" y="505" text-anchor="middle" class="small">人设、固定属性、规则</text>
+  <rect x="649" y="451" width="194" height="76" rx="6" fill="#F5F3FF"/>
+  <text x="746" y="480" text-anchor="middle" class="card-title">当前状态</text>
+  <text x="746" y="505" text-anchor="middle" class="small">结构化值、active Claim</text>
+  <rect x="436" y="545" width="407" height="70" rx="6" fill="#EFF6FF"/>
+  <text x="639" y="574" text-anchor="middle" class="card-title">Hybrid Catalog</text>
+  <text x="639" y="599" text-anchor="middle" class="small">向量 + 关键词 + 实体 + 图关系</text>
+  <rect x="436" y="633" width="194" height="65" rx="6" fill="#FFF7ED"/>
+  <text x="533" y="660" text-anchor="middle" class="card-title">Corrective Planner</text>
+  <text x="533" y="684" text-anchor="middle" class="small">判充分性 · 改写 Query</text>
+  <rect x="649" y="633" width="194" height="65" rx="6" fill="#EFF6FF"/>
+  <text x="746" y="660" text-anchor="middle" class="card-title">跨首轮池重检</text>
+  <text x="746" y="684" text-anchor="middle" class="small">全 active scope + Detail Gate</text>
+
+  <path d="M 867 555 L 899 555" class="line"/>
+
+  <rect x="900" y="392" width="315" height="330" rx="6" fill="#FFFFFF" stroke="#C4B5FD" stroke-width="2"/>
+  <text x="924" y="428" class="lane-title">3. Prompt Compiler</text>
+  <rect x="924" y="451" width="267" height="70" rx="6" fill="#F5F3FF"/>
+  <text x="1057" y="480" text-anchor="middle" class="card-title">稳定前缀缓存</text>
+  <text x="1057" y="505" text-anchor="middle" class="small">硬规则 + 人设 + 固定属性</text>
+  <rect x="924" y="539" width="267" height="70" rx="6" fill="#EFF6FF"/>
+  <text x="1057" y="568" text-anchor="middle" class="card-title">动态上下文</text>
+  <text x="1057" y="593" text-anchor="middle" class="small">相关记忆 + 最近 16 条消息</text>
+  <rect x="924" y="627" width="267" height="70" rx="6" fill="#ECFEFF"/>
+  <text x="1057" y="656" text-anchor="middle" class="card-title">按需工具清单</text>
+  <text x="1057" y="681" text-anchor="middle" class="small">只读记忆工具 + 已解锁 Skill/MCP</text>
+
+  <path d="M 1215 555 L 1247 555" class="line"/>
+
+  <rect x="1248" y="392" width="588" height="330" rx="6" fill="#FFFFFF" stroke="#60A5FA" stroke-width="2"/>
+  <text x="1272" y="428" class="lane-title">4. Pi Agent Core ReAct Runtime</text>
+  <rect x="1272" y="451" width="230" height="70" rx="6" fill="#EFF6FF"/>
+  <text x="1387" y="480" text-anchor="middle" class="card-title">主模型第 1 次推理</text>
+  <text x="1387" y="505" text-anchor="middle" class="small">回答或产生 tool call</text>
+  <rect x="1574" y="451" width="238" height="70" rx="6" fill="#FFF7ED"/>
+  <text x="1693" y="480" text-anchor="middle" class="card-title">服务端工具边界</text>
+  <text x="1693" y="505" text-anchor="middle" class="small">Scope/Active 锁定 + 能力资格/白名单</text>
+  <path d="M 1502 486 L 1574 486" class="line"/>
+
+  <rect x="1272" y="552" width="230" height="70" rx="6" fill="#ECFEFF"/>
+  <text x="1387" y="581" text-anchor="middle" class="card-title">记忆或能力工具</text>
+  <text x="1387" y="606" text-anchor="middle" class="small">memory_search/expand · Skill/MCP</text>
+  <rect x="1574" y="552" width="238" height="70" rx="6" fill="#F5F3FF"/>
+  <text x="1693" y="581" text-anchor="middle" class="card-title">toolResult 回传 Pi</text>
+  <text x="1693" y="606" text-anchor="middle" class="small">模型第 N 次推理与续答</text>
+  <path d="M 1693 521 L 1693 552" class="line"/>
+  <path d="M 1574 587 L 1502 587" class="loop"/>
+
+  <rect x="1272" y="646" width="540" height="52" rx="6" fill="#1D4ED8"/>
+  <text x="1542" y="679" text-anchor="middle" class="white-title">最终角色回复 → assistant 消息落库</text>
+  <path d="M 1387 622 L 1387 646" class="line"/>
+
+  <!-- Long-term update -->
+  <rect x="40" y="797" width="1820" height="258" rx="6" fill="#FFFDFC" stroke="#FDBA74" stroke-width="2"/>
+  <text x="64" y="837" class="lane-title">长期记忆更新：仅在阈值、跨对话尾批次、手动触发或显式快通道启动</text>
+  <rect x="64" y="865" width="236" height="150" rx="6" fill="#FFFFFF" stroke="#FED7AA"/>
+  <text x="182" y="899" text-anchor="middle" class="card-title">轮次判定</text>
+  <text x="182" y="929" text-anchor="middle" class="card-text">默认每 8 个完整轮次</text>
+  <text x="182" y="956" text-anchor="middle" class="small">场景可配 1-8</text>
+  <text x="182" y="982" text-anchor="middle" class="small">blocking_after_assistant</text>
+
+  <path d="M 300 940 L 324 940" class="loop"/>
+  <rect x="325" y="865" width="236" height="150" rx="6" fill="#FFFFFF" stroke="#FED7AA"/>
+  <text x="443" y="899" text-anchor="middle" class="card-title">抽取操作</text>
+  <text x="443" y="929" text-anchor="middle" class="card-text">结构化字段 / 关系增量</text>
+  <text x="443" y="956" text-anchor="middle" class="small">事件、实体、Claim、噪声</text>
+  <text x="443" y="982" text-anchor="middle" class="small">辅助窗口只做指代消歧</text>
+
+  <path d="M 561 940 L 585 940" class="loop"/>
+  <rect x="586" y="865" width="236" height="150" rx="6" fill="#FFFFFF" stroke="#FED7AA"/>
+  <text x="704" y="899" text-anchor="middle" class="card-title">服务端裁决</text>
+  <text x="704" y="929" text-anchor="middle" class="card-text">字段约束与派生重算</text>
+  <text x="704" y="956" text-anchor="middle" class="small">事件对齐与冲突消解</text>
+  <text x="704" y="982" text-anchor="middle" class="small">模型只提交候选操作</text>
+
+  <path d="M 822 940 L 846 940" class="loop"/>
+  <rect x="847" y="865" width="236" height="150" rx="6" fill="#FFFFFF" stroke="#FED7AA"/>
+  <text x="965" y="899" text-anchor="middle" class="card-title">双时态写入</text>
+  <text x="965" y="929" text-anchor="middle" class="card-text">valid time + transaction time</text>
+  <text x="965" y="956" text-anchor="middle" class="small">active / superseded / retracted</text>
+  <text x="965" y="982" text-anchor="middle" class="small">证据与版本历史同批落账</text>
+
+  <path d="M 1083 940 L 1107 940" class="loop"/>
+  <rect x="1108" y="865" width="236" height="150" rx="6" fill="#FFFFFF" stroke="#FED7AA"/>
+  <text x="1226" y="899" text-anchor="middle" class="card-title">Outbox 投影</text>
+  <text x="1226" y="929" text-anchor="middle" class="card-text">SQLite 提交后同步 scope</text>
+  <text x="1226" y="956" text-anchor="middle" class="small">失败保留任务，可重放</text>
+  <text x="1226" y="982" text-anchor="middle" class="small">召回降级到 SQLite 图关系</text>
+
+  <path d="M 1344 940 L 1368 940" class="loop"/>
+  <rect x="1369" y="865" width="236" height="150" rx="6" fill="#FFFFFF" stroke="#FED7AA"/>
+  <text x="1487" y="899" text-anchor="middle" class="card-title">后置触发</text>
+  <text x="1487" y="929" text-anchor="middle" class="card-text">读取新的 active 状态</text>
+  <text x="1487" y="956" text-anchor="middle" class="small">解锁剧情 / 道具 / 能力</text>
+  <text x="1487" y="982" text-anchor="middle" class="small">记录触发与执行回执</text>
+
+  <path d="M 1605 940 L 1629 940" class="loop"/>
+  <rect x="1630" y="865" width="206" height="150" rx="6" fill="#1D4ED8"/>
+  <text x="1733" y="899" text-anchor="middle" class="white-title">系统轮结束</text>
+  <text x="1733" y="932" text-anchor="middle" class="white-text">成功后推进水位</text>
+  <text x="1733" y="959" text-anchor="middle" class="white-text">释放会话锁</text>
+  <text x="1733" y="986" text-anchor="middle" class="white-text">下一轮读取新状态</text>
+
+  <!-- Data and model plane -->
+  <rect x="40" y="1085" width="1820" height="190" rx="6" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="2"/>
+  <text x="64" y="1124" class="lane-title">数据、图与模型平面</text>
+
+  <rect x="64" y="1148" width="480" height="99" rx="6" fill="#EFF6FF" stroke="#93C5FD" stroke-width="2"/>
+  <text x="304" y="1180" text-anchor="middle" class="card-title">SQLite 双时态主账本（当前唯一事实源）</text>
+  <text x="304" y="1207" text-anchor="middle" class="card-text">消息、字段、事件、Claim、版本、Embedding、Trace</text>
+  <text x="304" y="1233" text-anchor="middle" class="small">生产升级：PostgreSQL + pgvector；OpenSearch 仅作检索投影</text>
+
+  <rect x="566" y="1148" width="390" height="99" rx="6" fill="#F5F3FF" stroke="#C4B5FD" stroke-width="2"/>
+  <text x="761" y="1180" text-anchor="middle" class="card-title">Neo4j 当前图投影</text>
+  <text x="761" y="1207" text-anchor="middle" class="card-text">实体、事件、声明、证据与关系路径</text>
+  <text x="761" y="1233" text-anchor="middle" class="small">可重建、非版本裁决源、支持图召回</text>
+
+  <rect x="978" y="1148" width="416" height="99" rx="6" fill="#ECFEFF" stroke="#67E8F9" stroke-width="2"/>
+  <text x="1186" y="1180" text-anchor="middle" class="card-title">模型 Provider</text>
+  <text x="1186" y="1207" text-anchor="middle" class="card-text">文本：Ark / OpenAI / Anthropic / Mock</text>
+  <text x="1186" y="1233" text-anchor="middle" class="small">Embedding：Ark / OpenAI / 本地确定性降级</text>
+
+  <rect x="1416" y="1148" width="420" height="99" rx="6" fill="#FFF7ED" stroke="#FDBA74" stroke-width="2"/>
+  <text x="1626" y="1180" text-anchor="middle" class="card-title">可观测与质量门</text>
+  <text x="1626" y="1207" text-anchor="middle" class="card-text">Runtime / LLM / Tool / Memory Trace</text>
+  <text x="1626" y="1233" text-anchor="middle" class="small">离线评测、执行回执、图投影重放</text>
+
+  <path d="M 1542 722 L 1542 797" class="line"/>
+  <path d="M 965 1055 L 965 1085" class="loop"/>
+  <text x="48" y="1303" class="small">边界：Planner 与主模型只能发现/读取候选；服务端状态机裁决有效事实。系统记忆工具只读且锁定 scope，Skill/MCP 另需解锁与能力网关授权。</text>
+</svg>

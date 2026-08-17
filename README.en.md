@@ -4,17 +4,17 @@
 
 Open Character Memory is an open-source role-user memory runtime and visual studio for role-play companions and tutoring agents. It remembers user facts, character commitments, shared stories, corrections, relationship state, and narrative branches without treating every semantically similar memory as current truth.
 
-Version `0.4.4` runs main turns through a Pi Agent Core ReAct loop, stores bitemporal records in SQLite as the current source of truth, projects the current graph to Neo4j through a replayable outbox, and exposes only unlocked, server-approved Skill/MCP capabilities.
+Version `0.5.0` combines a Pi Agent Core ReAct loop with corrective and agentic memory retrieval, a bitemporal SQLite source of truth, a replayable Neo4j graph projection, and controlled Skill/MCP execution.
 
-![Open Character Memory architecture](docs/assets/overall-architecture-v0.4.1.png)
+![Open Character Memory architecture](docs/assets/overall-architecture-v0.5.0.png)
 
 ## Highlights
 
 - Bidirectional user, character, and shared-story memory with strict user/agent/story/branch isolation.
 - Event operations for `create`, additive `enrich`, real-world `update`, belief correction `supersede`, and `retract`, backed by valid and transaction time.
-- Event/entity/claim graph visualization and two-stage vector, keyword, graph, and planner retrieval.
+- Event/entity/claim graph visualization with pre-answer corrective retrieval and in-generation read-only memory tools.
 - Configurable structured fields, extraction cadence, prompts, retrieval policy, plots, and low-code triggers.
-- Controlled Skill/MCP tool exposure, execution receipts, and Pi `toolResult` continuation turns.
+- Scope-locked `memory_search` / `memory_expand`, controlled Skill/MCP exposure, execution receipts, and Pi `toolResult` continuation turns.
 - Inspectable Trace views for prompts, injected memory, retrieval evidence, model/tool calls, and post-turn writes.
 
 ## Market comparison
@@ -29,13 +29,13 @@ See the [2026 agent-memory comparison](docs/market-memory-comparison-2026.md) fo
 - Versioned claims with additive `enrich` plus `active`, `superseded`, and `retracted` states.
 - Bitemporal `valid_*` and `transaction_*` intervals with `valid_at` / `known_at` as-of queries.
 - Neo4j graph projection with tenant scope keys, idempotent replacement, outbox replay, and SQLite fallback.
-- Pi Agent Core state, lifecycle events, and a ReAct-style tool loop. Only unlocked scoped props are exposed; validated declarative Skill tools and allowlisted MCP tools execute through the server gateway and return `toolResult` before the model continues.
+- Pi Agent Core state, lifecycle events, and a ReAct-style tool loop. Read-only memory tools are routed only for memory-relevant turns and cannot accept client/model scope keys. Unlocked scoped props are exposed separately; validated declarative Skill tools and allowlisted MCP tools execute through the server gateway and return `toolResult` before the model continues.
 - User memory plus role/user shared-story events, entities, claims, and evidence-backed relations.
-- Two-stage retrieval: a lightweight safe catalog followed by planner-authorized detail, graph expansion, and optional follow-up queries. Confirmed user memories may be planner-authorized from the catalog; provisional shared-story memories still require direct evidence.
+- Three-layer retrieval: hybrid pre-retrieval builds a lightweight catalog and strict detail set; a Corrective Recall Planner can rewrite or decompose an insufficient query and search all active events in the server-locked scope, outside the initial intent pool; the main model can later call `memory_search` or `memory_expand` when it discovers an evidence gap. All results remain Active Only, and provisional shared-story memories still require direct evidence.
 - A hybrid graph ontology: six broad entity classes, controlled core relation families, preserved concrete predicates, and open traceable extensions. First-person relational queries resolve the current user identity before traversing family, ownership, and evidence edges.
 - Deterministic relationship retrieval emits a grounded answer contract containing the user anchor, requested relation family, resolved object, and active evidence edge. Conflicting historical assistant answers are excluded from that model turn, and the decision is visible in Trace.
 - Conditional story unlocking and auditable function calls driven by structured state.
-- Role prompt, memory injection, retrieval, model usage, and cache diagnostics in Trace.
+- Role prompt, memory injection, planner rewrites, cross-pool hits, scope-locked memory tool calls, model usage, and cache diagnostics in Trace.
 - Read-only "no short-term memory" Trace replay: rerun the original query in the same scope while giving both the retrieval planner and main model zero recent dialogue messages. The diagnostic run writes only a new Trace and cannot persist messages or memory, fire triggers, advance plots, or execute Skill/MCP tools.
 - Provider adapters for Ark, OpenAI, Anthropic, and an offline Mock mode.
 - Stable-prefix caching: role instructions and fixed attributes are cacheable; server time, user state, retrieved memory, plots, and recent dialogue stay dynamic. A zero provider-managed `cached_tokens` value means the upstream reported no hit or no cache usage, not that a local cache failed.

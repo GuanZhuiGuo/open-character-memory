@@ -6,7 +6,7 @@
 
 ## Input 分层
 
-稳定前缀包括角色人设、运行时通用硬规则和角色固定属性。动态部分包括当前用户/角色/故事/分支命名空间、常驻结构化记忆、已解锁剧情、两阶段召回结果和最近 16 条对话消息。
+稳定前缀包括角色人设、运行时通用硬规则和角色固定属性。动态部分包括当前用户/角色/故事/分支命名空间、常驻结构化记忆、已解锁剧情、纠正式召回结果和最近 16 条对话消息；生成中按需取得的记忆证据通过 Pi `toolResult` 追加，不进入稳定前缀。
 
 稳定前缀由 `lib/agent.js` 编译，Provider 只负责如何向上游表达缓存。默认 `provider_managed` 模式直接使用 Responses usage 返回的 cached tokens，不在本地保存 Context ID。只有可选 `common_prefix` 模式会在 SQLite `model_prefix_caches` 中保存 Ark Context ID、版本键、过期时间和命中统计，该表不保存业务状态。
 

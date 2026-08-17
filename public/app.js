@@ -849,6 +849,7 @@ async function loadArchitectureOverview() {
   } = state.architectureOverview;
   const main = thresholds.mainModel;
   const extraction = thresholds.extraction;
+  const retrieval = thresholds.retrieval || {};
   const extractionInterval = Math.max(1, Number(extraction.intervalTurns || 1));
   $('#pageMeta').textContent = `${scene.name} · runtime / memory / retrieval`;
   $('#architectureMainWindow').textContent = `最近 ${main.messageLimit} 条消息 · 约 ${main.approximateTurns} 轮`;
@@ -860,6 +861,9 @@ async function loadArchitectureOverview() {
   $('#architecturePiNodeMeta').textContent = runtime.name === 'pi-agent-core'
     ? `ReAct 工具循环已启用 · 最多 ${Number(runtime.maxToolCalls || 0)} 次工具 / ${Number(runtime.maxModelTurns || 0)} 次模型请求 · ${capabilities.mcpClient || 'MCP Client'}`
     : 'Legacy 模式 · 可通过 AGENT_RUNTIME=pi 启用';
+  $('#architectureMemoryToolMeta').textContent = retrieval.agentMemoryToolsEnabled
+    ? `按记忆意图/证据缺口路由 · 只读锁定作用域 · 最多 ${Number(retrieval.agentMemoryMaxCalls || 0)} 次 / 每次 ${Number(retrieval.agentMemoryMaxQueries || 0)} 个 Query`
+    : '当前场景已关闭主模型主动记忆工具';
   $('#architectureTemporalNodeMeta').textContent = temporal.model === 'bitemporal'
     ? `${(graphOntology.eventOperations || ['create', 'update', 'supersede', 'retract']).join(' / ')} → 双时态版本`
     : '抽取 → 结构化派生 → 事件图谱 → 触发';
@@ -1486,13 +1490,13 @@ function renderRetrievalResult(payload) {
         <div><span>意图过滤</span><strong>${pipeline.afterIntentFilter}</strong></div><i data-lucide="chevron-right"></i>
         <div><span>轻量目录</span><strong>${pipeline.afterCatalogThreshold}</strong></div><i data-lucide="chevron-right"></i>
         <div><span>确定性 / 规划可选</span><strong>${pipeline.expansionEligible} / ${pipeline.plannerEligible ?? pipeline.expansionEligible}</strong></div><i data-lucide="chevron-right"></i>
-        <div><span>二阶段合并</span><strong>${pipeline.afterRelevanceThreshold}</strong></div><i data-lucide="chevron-right"></i>
+        <div><span>最终证据合并</span><strong>${pipeline.afterRelevanceThreshold}</strong></div><i data-lucide="chevron-right"></i>
         <div class="selected"><span>最终 TopK</span><strong>${pipeline.selected}</strong></div>
       </div>
       <div class="retrieval-planner-result">
         <span class="strategy-icon"><i data-lucide="brain-circuit"></i></span>
-        <div><strong>LLM 二次召回规划器 · ${escapeHtml(planner.status || '未运行')}</strong><small>${escapeHtml(planner.reason || '当前没有候选需要展开')}</small></div>
-        <div class="planner-facts"><span>决策 <b>${escapeHtml(planner.decision || 'none')}</b></span><span>指定事件 <b>${(planner.expandEventIds || []).length}</b></span><span>二次 Query <b>${(planner.followUpQueries || []).length}</b></span></div>
+        <div><strong>回复前 Corrective Planner · ${escapeHtml(planner.status || '未运行')}</strong><small>${escapeHtml(planner.reason || '当前没有候选需要展开或纠正')}</small>${(planner.followUpQueries || []).length ? `<small>改写：${escapeHtml(planner.followUpQueries.join('；'))}</small>` : ''}</div>
+        <div class="planner-facts"><span>模式 <b>${escapeHtml(planner.mode || '—')}</b></span><span>决策 <b>${escapeHtml(planner.decision || 'none')}</b></span><span>首轮目录 <b>${Number(planner.initialCatalogCount || 0)}</b></span><span>跨池命中 <b>${(planner.followUpSelectedEventIds || []).length}</b></span></div>
       </div>
       <div class="retrieval-candidate-table data-surface">${candidates.length ? `
         <table class="data-table"><thead><tr><th style="width:21%">事件候选</th><th style="width:9%">向量相似度</th><th style="width:8%">关键词</th><th style="width:8%">重要度</th><th style="width:8%">时效性</th><th style="width:9%">综合分</th><th style="width:11%">召回阶段</th><th style="width:12%">向量状态</th><th style="width:14%">决策</th></tr></thead>
@@ -1529,7 +1533,7 @@ function renderRetrievalLab() {
       ['召回通道', retrievalChannelNames(profile)],
       ['目录 / 详情门槛', `${profile.catalog_min_similarity} / ${profile.vector_only_min_similarity}`],
       ['事件 TopK', profile.event_top_k],
-      ['二次规划', profile.planner_enabled ? '已启用' : '关闭']
+      ['回复前纠正', profile.planner_enabled && profile.corrective_planner_enabled ? '已启用' : '关闭']
     ]);
   }
   $('#memoryResultCount').textContent = result ? `${result.retrieval.events.length} 个事件召回` : '待测试';
@@ -1539,7 +1543,7 @@ function renderRetrievalLab() {
       <button id="runRetrievalButton" class="button primary" type="submit"><i data-lucide="play"></i><span>运行召回</span></button>
     </form>
     <div class="retrieval-strategy-bar">
-      <div><span class="strategy-icon"><i data-lucide="sliders-horizontal"></i></span><div><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(retrievalChannelNames(profile))} · 目录 ${profile.catalog_min_similarity} → 详情 ${profile.vector_only_min_similarity} · ${profile.planner_enabled ? 'LLM 二次规划' : '确定性召回'} · TopK ${profile.event_top_k}</small></div></div>
+      <div><span class="strategy-icon"><i data-lucide="sliders-horizontal"></i></span><div><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(retrievalChannelNames(profile))} · 目录 ${profile.catalog_min_similarity} → 详情 ${profile.vector_only_min_similarity} · ${profile.planner_enabled ? '回复前 Planner' : '确定性召回'} · ${profile.agent_memory_tools_enabled ? '生成中主动检索' : '主模型记忆工具关闭'} · TopK ${profile.event_top_k}</small></div></div>
       <button class="button secondary compact" data-open-retrieval-settings><i data-lucide="external-link"></i><span>${isAdmin() ? '召回策略' : '查看召回策略'}</span></button>
     </div>
     <div id="retrievalOutput">${result ? renderRetrievalResult(result) : '<div class="retrieval-empty"><i data-lucide="scan-search"></i><strong>尚未运行召回测试</strong></div>'}</div>
@@ -1917,18 +1921,23 @@ async function editRetrievalProfile() {
           <label class="strategy-toggle"><span><strong>关键词召回</strong><small>文本重叠候选</small></span><span class="toggle-control"><input name="keyword_enabled" type="checkbox" ${profile.keyword_enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>图谱扩展</strong><small>Claims + entity edges</small></span><span class="toggle-control"><input name="graph_enabled" type="checkbox" ${profile.graph_enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>意图硬过滤</strong><small>事件类型与 collection</small></span><span class="toggle-control"><input name="intent_filter_enabled" type="checkbox" ${profile.intent_filter_enabled ? 'checked' : ''}><i></i></span></label>
-          <label class="strategy-toggle"><span><strong>LLM 二次规划</strong><small>先看轻量目录，按需展开详情</small></span><span class="toggle-control"><input name="planner_enabled" type="checkbox" ${profile.planner_enabled ? 'checked' : ''}><i></i></span></label>
+          <label class="strategy-toggle"><span><strong>回复前 Recall Planner</strong><small>轻量目录后判断是否展开或改写</small></span><span class="toggle-control"><input name="planner_enabled" type="checkbox" ${profile.planner_enabled ? 'checked' : ''}><i></i></span></label>
+          <label class="strategy-toggle"><span><strong>零候选纠正式规划</strong><small>目录为空时仍可改写 Query 并跨池检索</small></span><span class="toggle-control"><input name="corrective_planner_enabled" type="checkbox" ${profile.corrective_planner_enabled ? 'checked' : ''}><i></i></span></label>
+          <label class="strategy-toggle"><span><strong>主模型主动记忆工具</strong><small>生成中按证据缺口调用只读检索</small></span><span class="toggle-control"><input name="agent_memory_tools_enabled" type="checkbox" ${profile.agent_memory_tools_enabled ? 'checked' : ''}><i></i></span></label>
         </div>
         <div class="strategy-locked-guard"><i data-lucide="lock-keyhole"></i><div><strong>仅当前有效版本</strong><span>已被新版本替代、已撤回的记录永不进入回答候选</span></div><span class="badge blue">强制开启</span></div>
       </section>
       <section class="strategy-modal-section">
-        <div class="strategy-section-title"><span>02</span><div><strong>两阶段门槛与 TopK</strong><small>进入目录不等于注入详情</small></div></div>
-        <div class="retrieval-stage-note"><span><b>阶段 1</b> 只给规划器事件名、实体和关系</span><i data-lucide="arrow-right"></i><span><b>阶段 2</b> 仅展开通过严格证据门槛的详情</span></div>
+        <div class="strategy-section-title"><span>02</span><div><strong>三层检索门槛与预算</strong><small>预召回、纠正式检索与生成中工具各自受限</small></div></div>
+        <div class="retrieval-stage-note"><span><b>预召回</b> 目录与严格详情门槛</span><i data-lucide="arrow-right"></i><span><b>Planner</b> 零候选可跨池改写</span><i data-lucide="arrow-right"></i><span><b>主模型</b> 证据不足才调用只读工具</span></div>
         <div class="form-grid strategy-number-grid">
           <label><span>轻量目录相似度</span><input name="catalog_min_similarity" type="number" min="0" max="1" step="0.01" value="${profile.catalog_min_similarity}" required><small>宽进，只暴露名称和关系</small></label>
           <label><span>纯向量详情相似度</span><input name="vector_only_min_similarity" type="number" min="0" max="1" step="0.01" value="${profile.vector_only_min_similarity}" required><small>无关键词或图谱证据时的硬门槛</small></label>
           <label><span>关键词详情阈值</span><input name="min_keyword_score" type="number" min="0" max="1" step="0.01" value="${profile.min_keyword_score}" required></label>
           <label><span>规划器候选上限</span><input name="planner_max_candidates" type="number" min="1" max="30" step="1" value="${profile.planner_max_candidates}" required></label>
+          <label><span>Planner 改写 Query 上限</span><input name="planner_max_follow_up_queries" type="number" min="0" max="5" step="1" value="${profile.planner_max_follow_up_queries}" required></label>
+          <label><span>主模型记忆工具调用上限</span><input name="agent_memory_max_calls" type="number" min="1" max="4" step="1" value="${profile.agent_memory_max_calls}" required></label>
+          <label><span>单次工具 Query 上限</span><input name="agent_memory_max_queries" type="number" min="1" max="5" step="1" value="${profile.agent_memory_max_queries}" required></label>
           <label><span>图谱扩展跳数</span><input name="graph_hops" type="number" min="0" max="2" step="1" value="${profile.graph_hops}" required></label>
           <label><span>事件 TopK</span><input name="event_top_k" type="number" min="1" max="50" step="1" value="${profile.event_top_k}" required></label>
           <label><span>声明 TopK</span><input name="claim_top_k" type="number" min="1" max="100" step="1" value="${profile.claim_top_k}" required></label>
@@ -1956,6 +1965,8 @@ async function editRetrievalProfile() {
         graph_enabled: formData.has('graph_enabled'),
         intent_filter_enabled: formData.has('intent_filter_enabled'),
         planner_enabled: formData.has('planner_enabled'),
+        corrective_planner_enabled: formData.has('corrective_planner_enabled'),
+        agent_memory_tools_enabled: formData.has('agent_memory_tools_enabled'),
         min_similarity: Number(formData.get('vector_only_min_similarity'))
       });
       state.retrievalProfile = await api(`/api/scenes/${encodeURIComponent(scene.id)}/retrieval-profile`, {
@@ -3163,7 +3174,9 @@ const TRACE_SPAN_LABELS = {
   pinned_memory_load: '常驻记忆载入',
   memory_retrieval_planner: '二次召回规划',
   hybrid_memory_retrieval: '混合记忆召回',
-  capability_resolution: '已解锁能力解析',
+  agent_memory_search: '主模型主动检索记忆',
+  agent_memory_expand: '主模型展开图谱证据',
+  capability_resolution: '当轮工具解析',
   prompt_compilation: '模型输入编译',
   debug_replay_policy: '无短期记忆调试策略',
   short_term_history_policy: '短期记忆冲突隔离',
@@ -3243,6 +3256,10 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
   const agentTurnEnabled = runtime.name === 'pi-agent-core';
   const toolLoopEnabled = runtime.toolLoopEnabled === true;
   const exposedTools = Array.isArray(capabilityOutput.exposedTools) ? capabilityOutput.exposedTools : [];
+  const systemMemoryTools = Array.isArray(capabilityOutput.systemMemory?.exposedTools)
+    ? capabilityOutput.systemMemory.exposedTools
+    : (Array.isArray(modelInput.systemMemoryTools) ? modelInput.systemMemoryTools : []);
+  const unlockedTools = exposedTools.filter((tool) => tool.sourceType !== 'system_memory');
   const toolExecutions = lifecycle.filter((event) => event.type === 'tool_execution_end');
   const callCount = Number(bridge.requestCount || providerCalls.length || (bridge.status ? 1 : 0));
   const reactLoopHtml = toolLoopEnabled ? providerCalls.map((call, index) => {
@@ -3276,8 +3293,8 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
       <div class="trace-sequence">
         <div><span class="trace-sequence-index">01</span><strong>Turn Pipeline 组装输入</strong><small>${escapeHtml(assemblyNote)}</small><time>${traceMs(promptSpan?.duration_ms)}</time></div>
         <div><span class="trace-sequence-index">02</span><strong>${escapeHtml(runtimeName)} 接管本轮</strong><small>${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[firstEvent.type] || firstEvent.type || '启动')} → ${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[lastEvent.type] || lastEvent.type || '收口')}，维护 Agent state 与消息生命周期。</small><time>${traceMs(firstEvent.atMs, '+')}</time></div>
-        <div><span class="trace-sequence-index">03</span><strong>暴露 ${exposedTools.length} 个当轮工具</strong><small>${exposedTools.length ? escapeHtml(exposedTools.map((tool) => tool.name).join('、')) : '没有已解锁且可连接的 Skill / MCP 工具，本轮直接生成文本。'}</small><time>${traceMs(capabilitySpan?.duration_ms)}</time></div>
-        <div><span class="trace-sequence-index">04</span><strong>Provider Bridge 发起 ${callCount} 次模型请求</strong><small>${toolLoopEnabled ? '模型可自主选择 tool call；能力网关执行后，Pi 把 toolResult 追加到上下文并继续请求模型。' : `Pi 将统一消息请求交给 ${escapeHtml(model)}，模型直接返回最终文本。`}</small><time>${traceMs(bridge.responseAtMs, '+')}</time></div>
+        <div><span class="trace-sequence-index">03</span><strong>暴露 ${exposedTools.length} 个当轮工具</strong><small>${exposedTools.length ? `系统只读记忆 ${systemMemoryTools.length} 个，已解锁 Skill / MCP ${unlockedTools.length} 个：${escapeHtml(exposedTools.map((tool) => tool.name).join('、'))}` : '本轮没有可调用工具，模型直接生成文本。'}</small><time>${traceMs(capabilitySpan?.duration_ms)}</time></div>
+        <div><span class="trace-sequence-index">04</span><strong>Provider Bridge 发起 ${callCount} 次模型请求</strong><small>${toolLoopEnabled ? '模型可按证据缺口调用 memory_search / memory_expand，或选择已解锁能力；执行结果作为 toolResult 回灌 Pi，再由模型继续推理。' : `Pi 将统一消息请求交给 ${escapeHtml(model)}，模型直接返回最终文本。`}</small><time>${traceMs(bridge.responseAtMs, '+')}</time></div>
         <div><span class="trace-sequence-index">05</span><strong>Turn Pipeline 完成轮后处理</strong><small>长期记忆更新：${noShortTermReplay ? '调试禁用' : escapeHtml(memoryOutput.status || '未触发')}；本轮召回 ${Number.isFinite(selectedMemories) ? selectedMemories : 0} 条候选记忆。</small><time>${traceMs(memorySpan?.duration_ms)}</time></div>
       </div>
       ${toolLoopEnabled ? `<div class="trace-react-loop"><span class="trace-lifecycle-label">ReAct 调用链</span><div>${reactLoopHtml || '<span>本轮暴露了工具，但模型没有调用。</span>'}</div></div>` : ''}

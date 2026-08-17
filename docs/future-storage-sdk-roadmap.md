@@ -7,7 +7,7 @@
 - 不接入 pgvector。
 - 不接入 OpenSearch。
 
-这些项目是明确 backlog，不是 `0.4.1` 的隐藏能力。当前事实源仍是单机 SQLite，向量仍以 JSON 保存并在 Node 进程中计算。
+这些项目是明确 backlog，不是 `0.5.0` 的隐藏能力。当前事实源仍是单机 SQLite，向量仍以 JSON 保存并在 Node 进程中计算。
 
 ## SDK 何时值得做
 

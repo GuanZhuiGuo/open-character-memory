@@ -2,7 +2,7 @@
 
 ## 结论
 
-当前系统的“角色陪聊记忆产品能力”明显强于“通用 SDK 与生产基础设施能力”。前者已有结构化控制、事件状态、图谱证据、两阶段召回、剧情触发和可观测界面；后者仍是一个单体应用的内部模块集合。因此，SDK 成熟度偏低不是说记忆逻辑差，而是说第三方还不能低成本、稳定地把它嵌进另一套 Agent Runtime。
+当前系统的“角色陪聊记忆产品能力”明显强于“通用 SDK 与生产基础设施能力”。前者已有结构化控制、事件状态、图谱证据、纠正式/Agentic 召回、剧情触发和可观测界面；后者仍是一个单体应用的内部模块集合。因此，SDK 成熟度偏低不是说记忆逻辑差，而是说第三方还不能低成本、稳定地把它嵌进另一套 Agent Runtime。
 
 ## 为什么还不是成熟 SDK
 
@@ -32,7 +32,7 @@
 
 当前并非“没有图谱”：`events / entities / event_entities / claims / entity_edges` 已经组成可视化证据图，声明也有版本、状态、剧情时间和分支。
 
-`0.4.1` 已经实现完整的应用级双时态合同：事件、声明、关系边和结构化历史统一使用 `valid_from / valid_to` 与 `transaction_from / transaction_to`，并支持通过 `valid_at + known_at` 回放“故事世界当时成立什么”以及“系统当时知道什么”。SQLite 是版本事实源，Neo4j 是通过 outbox 构建的当前有效图投影。
+`0.5.0` 已经实现完整的应用级双时态合同：事件、声明、关系边和结构化历史统一使用 `valid_from / valid_to` 与 `transaction_from / transaction_to`，并支持通过 `valid_at + known_at` 回放“故事世界当时成立什么”以及“系统当时知道什么”。SQLite 是版本事实源，Neo4j 是通过 outbox 构建的当前有效图投影。
 
 剩余边界主要是工程和通用图能力：
 
@@ -61,4 +61,4 @@ Graphiti 的 episode 溯源、可扩展 ontology、时序事实和混合图检�
 - 有 Trace，但还没有 OpenTelemetry、指标、告警、SLO、容量压测和成本预算。
 - 没有滚动升级、备份恢复演练、数据迁移校验与灾难恢复 Runbook。
 
-`0.4.1` 已补 Pi ReAct 工具循环、双时态版本、Neo4j 图投影和受控 Skill/MCP 能力网关；SDK、PostgreSQL/pgvector、持久化抽取队列和多副本执行仍是明确的生产扩展 backlog，不能把单机可运行等同于分布式生产就绪。
+`0.5.0` 已补 Pi ReAct 工具循环、纠正式/Agentic 记忆召回、双时态版本、Neo4j 图投影和受控 Skill/MCP 能力网关；SDK、PostgreSQL/pgvector、持久化抽取队列和多副本执行仍是明确的生产扩展 backlog，不能把单机可运行等同于分布式生产就绪。

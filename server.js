@@ -425,9 +425,10 @@ function createScene(body) {
        min_similarity, min_keyword_score, event_top_k, claim_top_k, edge_top_k,
        vector_weight, keyword_weight, importance_weight, recency_weight, recency_half_life_days,
        catalog_min_similarity, vector_only_min_similarity, planner_enabled, planner_max_candidates,
-       graph_hops, created_at, updated_at)
+       corrective_planner_enabled, planner_max_follow_up_queries, agent_memory_tools_enabled,
+       agent_memory_max_calls, agent_memory_max_queries, graph_hops, created_at, updated_at)
       VALUES (?, ?, ?, 1, 1, 1, 1, 0.42, 0.08, 4, 20, 20, 0.70, 0.16, 0.10, 0.04,
-        30, 0.28, 0.42, 1, 12, 1, ?, ?)`)
+        30, 0.28, 0.42, 1, 12, 1, 2, 1, 2, 3, 1, ?, ?)`)
       .run(uid('retrieval'), id, `${name}混合召回`, timestamp, timestamp);
     db.exec('COMMIT');
   } catch (error) {
@@ -693,8 +694,13 @@ function architectureOverview(sceneId) {
         minSimilarity: Number(retrieval.min_similarity),
         plannerEnabled: Boolean(retrieval.planner_enabled),
         plannerMaxCandidates: Number(retrieval.planner_max_candidates),
+        correctivePlannerEnabled: Boolean(retrieval.corrective_planner_enabled),
+        plannerMaxFollowUpQueries: Number(retrieval.planner_max_follow_up_queries),
+        agentMemoryToolsEnabled: Boolean(retrieval.agent_memory_tools_enabled),
+        agentMemoryMaxCalls: Number(retrieval.agent_memory_max_calls),
+        agentMemoryMaxQueries: Number(retrieval.agent_memory_max_queries),
         graphHops: Number(retrieval.graph_hops),
-        plannerAuthority: '规划器只能从轻量目录选择；已确认的用户记忆可由 Planner 授权展开，待承接的共享剧情仍需直接证据'
+        plannerAuthority: 'Planner 可在零候选时改写查询并搜索当前作用域全部 active 事件；主模型只可调用服务端锁定作用域的只读记忆工具'
       } : null
     },
     memoryOwnership: [
@@ -848,6 +854,21 @@ function updateRetrievalProfile(sceneId, body) {
     vectorOnlyMinSimilarity: numericSetting(body, 'vector_only_min_similarity', current.vector_only_min_similarity, 0, 1),
     plannerEnabled: booleanSetting(body.planner_enabled, current.planner_enabled),
     plannerMaxCandidates: numericSetting(body, 'planner_max_candidates', current.planner_max_candidates, 1, 30, true),
+    correctivePlannerEnabled: booleanSetting(
+      body.corrective_planner_enabled, current.corrective_planner_enabled
+    ),
+    plannerMaxFollowUpQueries: numericSetting(
+      body, 'planner_max_follow_up_queries', current.planner_max_follow_up_queries, 0, 5, true
+    ),
+    agentMemoryToolsEnabled: booleanSetting(
+      body.agent_memory_tools_enabled, current.agent_memory_tools_enabled
+    ),
+    agentMemoryMaxCalls: numericSetting(
+      body, 'agent_memory_max_calls', current.agent_memory_max_calls, 1, 4, true
+    ),
+    agentMemoryMaxQueries: numericSetting(
+      body, 'agent_memory_max_queries', current.agent_memory_max_queries, 1, 5, true
+    ),
     graphHops: numericSetting(body, 'graph_hops', current.graph_hops, 0, 2, true),
     minKeywordScore: numericSetting(body, 'min_keyword_score', current.min_keyword_score, 0, 1),
     eventTopK: numericSetting(body, 'event_top_k', current.event_top_k, 1, 50, true),
@@ -871,14 +892,18 @@ function updateRetrievalProfile(sceneId, body) {
     event_top_k = ?, claim_top_k = ?, edge_top_k = ?, vector_weight = ?, keyword_weight = ?,
     importance_weight = ?, recency_weight = ?, recency_half_life_days = ?,
     catalog_min_similarity = ?, vector_only_min_similarity = ?, planner_enabled = ?,
-    planner_max_candidates = ?, graph_hops = ?, updated_at = ?
+    planner_max_candidates = ?, corrective_planner_enabled = ?, planner_max_follow_up_queries = ?,
+    agent_memory_tools_enabled = ?, agent_memory_max_calls = ?, agent_memory_max_queries = ?,
+    graph_hops = ?, updated_at = ?
     WHERE scene_id = ?`).run(
     values.name, values.vectorEnabled, values.keywordEnabled, values.graphEnabled,
     values.intentFilterEnabled, values.minSimilarity, values.minKeywordScore, values.eventTopK,
     values.claimTopK, values.edgeTopK, values.vectorWeight, values.keywordWeight,
     values.importanceWeight, values.recencyWeight, values.recencyHalfLifeDays,
     values.catalogMinSimilarity, values.vectorOnlyMinSimilarity, values.plannerEnabled,
-    values.plannerMaxCandidates, values.graphHops, nowIso(), sceneId
+    values.plannerMaxCandidates, values.correctivePlannerEnabled, values.plannerMaxFollowUpQueries,
+    values.agentMemoryToolsEnabled, values.agentMemoryMaxCalls, values.agentMemoryMaxQueries,
+    values.graphHops, nowIso(), sceneId
   );
   return getRetrievalProfile(sceneId);
 }

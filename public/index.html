@@ -424,7 +424,8 @@
                     <div class="architecture-node" data-phase="pre generate write"><i data-lucide="route"></i><span><strong>会话锁与 Turn Pipeline</strong><small>同一会话串行，保留现有调度功能</small></span></div>
                     <div class="architecture-node" data-phase="pre generate input"><i data-lucide="layers-3"></i><span><strong>Prompt Compiler</strong><small>硬规则 + 角色属性 + 状态 + 最终召回</small></span></div>
                     <div class="architecture-node" data-phase="pre generate write"><i data-lucide="plug-zap"></i><span><strong>Capability Gateway</strong><small>解锁过滤、白名单、确认、Skill/MCP 执行回执</small></span></div>
-                    <div class="architecture-node" data-phase="pre"><i data-lucide="brain-circuit"></i><span><strong>Recall Planner</strong><small>轻量目录 → LLM 决策 → 详情展开</small></span></div>
+                    <div class="architecture-node" data-phase="pre"><i data-lucide="brain-circuit"></i><span><strong>Corrective Recall Planner</strong><small>轻量目录 → 证据判断 → 零候选 Query 改写与跨池检索</small></span></div>
+                    <div class="architecture-node" data-phase="generate"><i data-lucide="database-zap"></i><span><strong>System Memory Tools</strong><small id="architectureMemoryToolMeta">memory_search / memory_expand · 只读且作用域锁定</small></span></div>
                     <div class="architecture-node" data-phase="pre generate"><i data-lucide="shield-check"></i><span><strong>Grounding Guard</strong><small>确定性图谱答案优先，隔离冲突的历史助手旧答</small></span></div>
                     <div class="architecture-node" data-phase="input"><i data-lucide="scan-search"></i><span><strong>Architecture RAG</strong><small>代码切片 + 混合检索 + 证据约束</small></span></div>
                   </section>
@@ -495,8 +496,8 @@
                 </div>
                 <div class="flow-node grid-col-5 has-arrow" data-phase="pre">
                   <span class="step-number">04</span><i data-lucide="search"></i>
-                  <strong>两阶段召回</strong>
-                  <small>轻量目录 → 独立 LLM 规划 → 详情与图谱证据</small>
+                  <strong>回复前纠正式召回</strong>
+                  <small>轻量目录 → Planner 判断 → 必要时改写 Query 跨池重检</small>
                   <span class="timing demand">按需</span>
                 </div>
                 <div class="flow-node grid-col-6 has-arrow" data-phase="pre">
@@ -541,19 +542,20 @@
                 <div class="retrieval-architecture-step planner grid-col-9" data-phase="generate"><span>08 · MODEL</span><strong>模型续答</strong><small>结合结果二次推理；失败不得声称成功</small></div>
               </section>
 
-              <section class="timeline-grid swimlane retrieval-lane" aria-label="两阶段记忆召回机制">
+              <section class="timeline-grid swimlane retrieval-lane" aria-label="纠正式与主模型主动记忆召回机制">
                 <div class="lane-label">
                   <i data-lucide="scan-search"></i>
-                  <strong>召回展开</strong>
-                  <span>宽目录 · 严详情</span>
+                  <strong>记忆召回</strong>
+                  <span>回复前纠正 · 生成中补证据</span>
                 </div>
                 <div class="retrieval-architecture-step grid-col-2 has-arrow" data-phase="pre"><span>01</span><strong>混合候选</strong><small>向量、关键词、Neo4j 实体与图边</small></div>
                 <div class="retrieval-architecture-step grid-col-3 has-arrow" data-phase="pre"><span>02</span><strong>Current / Scope</strong><small>transaction_to 为空 + 四级隔离</small></div>
                 <div class="retrieval-architecture-step catalog grid-col-4 has-arrow" data-phase="pre"><span>03</span><strong>轻量目录</strong><small>只含事件名、实体、关系</small></div>
-                <div class="retrieval-architecture-step planner grid-col-5 has-arrow" data-phase="pre"><span>04 · MODEL</span><strong>LLM 召回规划</strong><small>决定 event id、实体或二次 Query</small></div>
-                <div class="retrieval-architecture-step gate grid-col-6 has-arrow" data-phase="pre"><span>05</span><strong>严格详情门</strong><small>关键词 / 实体 / 图证据，或高相似度</small></div>
-                <div class="retrieval-architecture-step graph grid-col-7 has-arrow" data-phase="pre"><span>06</span><strong>图谱证据事件</strong><small>关系边回指 event_id 并展开</small></div>
-                <div class="retrieval-architecture-step merge grid-col-8 span-2" data-phase="pre"><span>07</span><strong>去重合并后注入</strong><small>只有最终详情进入主回复模型；目录和被拒候选留在 Trace</small></div>
+                <div class="retrieval-architecture-step planner grid-col-5 has-arrow" data-phase="pre"><span>04 · PLANNER</span><strong>证据充分性判断</strong><small>展开目录；不足时改写 / 拆分 Query</small></div>
+                <div class="retrieval-architecture-step gate grid-col-6 has-arrow" data-phase="pre"><span>05</span><strong>全域纠正式检索</strong><small>跳出首轮意图池，再搜当前 scope 全部 active 事件</small></div>
+                <div class="retrieval-architecture-step merge grid-col-7 has-arrow" data-phase="pre"><span>06</span><strong>严格证据注入</strong><small>详情、有效 Claim 与证据图边去重后进入 Input</small></div>
+                <div class="retrieval-architecture-step planner grid-col-8 has-arrow" data-phase="generate"><span>07 · MODEL</span><strong>发现证据缺口</strong><small>主模型可改写检索词并调用 memory_search / memory_expand</small></div>
+                <div class="retrieval-architecture-step graph grid-col-9" data-phase="generate"><span>08</span><strong>toolResult 后续答</strong><small>只读结果回灌 Pi；模型基于补充证据再次推理</small></div>
               </section>
 
               <section class="timeline-grid swimlane turn-boundary-lane" aria-label="一轮对话的结束点与下一轮解锁点">
@@ -650,7 +652,7 @@
                   <div class="context-tiers">
                     <span><b>P0</b>安全边界 · 角色人设与固定属性 · 常驻控制</span>
                     <span><b>P1</b>当前关系 · 当前场景 · Active Claims</span>
-                    <span><b>P2</b>二阶段展开事件 · 图谱证据 · 已解锁剧情</span>
+                    <span><b>P2</b>纠正式展开事件 · 图谱证据 · 已解锁剧情</span>
                     <span><b>P3</b><i id="architectureRecentContext">最近 16 条原文</i> · 当前消息已包含</span>
                   </div>
                 </div>
@@ -787,7 +789,7 @@
                         <div><dt>temperature</dt><dd>0.7</dd></div>
                         <div><dt>max_output_tokens</dt><dd>1200</dd></div>
                         <div><dt>stream</dt><dd>有工具 true · 无工具沿用 Provider bridge</dd></div>
-                        <div><dt>tools</dt><dd>当轮已解锁白名单 · 0..16</dd></div>
+                        <div><dt>tools</dt><dd>按需系统记忆工具 + 已解锁 Skill/MCP · 0..16</dd></div>
                       </dl>
                       <div class="model-target"><i data-lucide="bot"></i><span><strong>Configured Text Provider</strong><small>返回文本或 tool call；toolResult 后继续推理</small></span></div>
                     </section>

@@ -2,6 +2,19 @@
 
 All notable changes are recorded here. The project follows semantic versioning while the public API remains pre-1.0.
 
+## 0.5.0 - 2026-08-17
+
+### Added
+
+- Corrective Recall Planner support for zero/insufficient candidates, bounded query rewriting, and full active-scope follow-up retrieval outside the initial intent pool.
+- Scope-locked, Active Only `memory_search` and `memory_expand` system tools that let the Pi main model repair evidence gaps and continue from `toolResult` without gaining write authority.
+- Scene-level configuration and Trace diagnostics for planner rewrites, cross-pool matches, memory-tool routing, call budgets, and per-call query budgets.
+
+### Changed
+
+- Memory tools are routed only for memory-relevant turns, existing evidence, or Planner follow-up so routine chat keeps the normal streaming/cache path.
+- Architecture views, code RAG, release docs, and bilingual READMEs now distinguish pre-answer corrective retrieval from in-generation agentic retrieval and from unlocked Skill/MCP execution.
+
 ## 0.4.1 - 2026-08-16
 
 ### Added

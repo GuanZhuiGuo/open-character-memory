@@ -17,6 +17,7 @@ const { db, initializeDatabase } = await import('../lib/db.js');
 const { extractConversationMemoryNow } = await import('../lib/agent.js');
 const { runAgentModel } = await import('../lib/pi-runtime.js');
 const { listEvents, listGraph, storeEvent } = await import('../lib/memory.js');
+const { resolveMemoryTools } = await import('../lib/memory-tools.js');
 const { closeCapabilityRuntime, resolveAgentCapabilities } = await import('../lib/capabilities.js');
 const { getActiveProps } = await import('../lib/triggers.js');
 const { createZip } = await import('../lib/zip.js');
@@ -61,6 +62,51 @@ test('Pi runtime executes an exposed tool and feeds toolResult into a second mod
   assert.equal(result.runtime.providerBridge.requestCount, 2);
   assert.ok(result.runtime.lifecycle.some((item) => item.type === 'tool_execution_start'));
   assert.ok(result.runtime.lifecycle.some((item) => item.type === 'tool_execution_end' && !item.isError));
+  assert.match(result.text, /执行完成/);
+});
+
+test('Pi exposes scope-locked read-only memory tools and reasons again after active recall', async () => {
+  const stored = await storeEvent({
+    event_key: 'runtime_memory_tool_keepsake', event_type: 'episode', title: '蓝色星星纪念物',
+    summary: '小雨把蓝色星星纪念物收在书桌抽屉里。', importance: 0.8,
+    entities: [{ name: '蓝色星星纪念物', type: 'item' }, { name: '书桌抽屉', type: 'place' }],
+    relations: [{
+      source: { name: '蓝色星星纪念物', type: 'item' }, predicate: '收在',
+      target: { name: '书桌抽屉', type: 'place' }
+    }]
+  }, scope, 'message_runtime_memory_tool');
+  const strategy = {
+    agentMemoryToolsEnabled: true,
+    agentMemoryMaxCalls: 2,
+    agentMemoryMaxQueries: 3,
+    eventTopK: 4,
+    claimTopK: 20,
+    edgeTopK: 20,
+    graphHops: 1
+  };
+  const directSet = resolveMemoryTools({ scope, originalQuery: '纪念物放在哪里？', strategy });
+  assert.deepEqual(directSet.tools.map((tool) => tool.name), ['memory_search', 'memory_expand']);
+  assert.equal(directSet.diagnostics.scopeLocked, true);
+  const direct = await directSet.tools[0].execute(
+    'direct_memory_search',
+    { query: '蓝色星星纪念物 书桌抽屉', alternative_queries: [] },
+    new AbortController().signal
+  );
+  assert.equal(direct.details.readOnly, true);
+  assert.ok(direct.details.structuredContent.evidence.events.some((item) => item.id === stored.id));
+
+  const runtimeSet = resolveMemoryTools({ scope, originalQuery: '纪念物放在哪里？', strategy });
+  const result = await runAgentModel({
+    systemPrompt: '你是测试角色，证据不足时调用长期记忆工具。',
+    messages: [{ role: 'user', content: '请调用 memory_search 搜索蓝色星星纪念物放在哪里' }],
+    tools: runtimeSet.tools,
+    sessionId: 'runtime_memory_tool_loop_test'
+  });
+  assert.equal(result.runtime.toolCallCount, 1);
+  assert.equal(result.runtime.providerBridge.requestCount, 2);
+  assert.ok(result.runtime.exposedTools.includes('memory_search'));
+  assert.ok(result.runtime.lifecycle.some((item) => item.type === 'tool_execution_end'
+    && item.toolName === 'memory_search' && !item.isError));
   assert.match(result.text, /执行完成/);
 });
 
