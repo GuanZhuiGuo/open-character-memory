@@ -4,7 +4,7 @@
 
 Open Character Memory is an open-source role-user memory runtime and visual studio for role-play companions and tutoring agents. It remembers user facts, character commitments, shared stories, corrections, relationship state, and narrative branches without treating every semantically similar memory as current truth.
 
-Version `0.4.3` runs main turns through a Pi Agent Core ReAct loop, stores bitemporal records in SQLite as the current source of truth, projects the current graph to Neo4j through a replayable outbox, and exposes only unlocked, server-approved Skill/MCP capabilities.
+Version `0.4.4` runs main turns through a Pi Agent Core ReAct loop, stores bitemporal records in SQLite as the current source of truth, projects the current graph to Neo4j through a replayable outbox, and exposes only unlocked, server-approved Skill/MCP capabilities.
 
 ![Open Character Memory architecture](docs/assets/overall-architecture-v0.4.1.png)
 
@@ -36,6 +36,7 @@ See the [2026 agent-memory comparison](docs/market-memory-comparison-2026.md) fo
 - Deterministic relationship retrieval emits a grounded answer contract containing the user anchor, requested relation family, resolved object, and active evidence edge. Conflicting historical assistant answers are excluded from that model turn, and the decision is visible in Trace.
 - Conditional story unlocking and auditable function calls driven by structured state.
 - Role prompt, memory injection, retrieval, model usage, and cache diagnostics in Trace.
+- Read-only "no short-term memory" Trace replay: rerun the original query in the same scope while giving both the retrieval planner and main model zero recent dialogue messages. The diagnostic run writes only a new Trace and cannot persist messages or memory, fire triggers, advance plots, or execute Skill/MCP tools.
 - Provider adapters for Ark, OpenAI, Anthropic, and an offline Mock mode.
 - Stable-prefix caching: role instructions and fixed attributes are cacheable; server time, user state, retrieved memory, plots, and recent dialogue stay dynamic. A zero provider-managed `cached_tokens` value means the upstream reported no hit or no cache usage, not that a local cache failed.
 - NDJSON chat streaming with turn resets for multi-step tool loops, plus sanitized GFM Markdown rendering. Routine memory-extraction start/completion stays silent and the completion event refreshes the progress ring directly.

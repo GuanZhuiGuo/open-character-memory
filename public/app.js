@@ -3055,12 +3055,78 @@ async function loadAdminFeedback() {
   refreshIcons();
 }
 
+function traceListItemMarkup(trace, { active = false, badgeLabel = '', subtitle = '' } = {}) {
+  const request = parseJson(trace.request_json, {}) || {};
+  const debugReplay = request.debugReplay?.mode === 'no_short_term_memory';
+  const query = String(request.message || '').trim();
+  const status = trace.status || 'success';
+  const statusClass = status === 'success' ? 'blue' : 'red';
+  const secondary = subtitle || [
+    trace.started_at ? formatDate(trace.started_at) : '',
+    Number.isFinite(Number(trace.total_ms)) ? String(trace.total_ms) + 'ms' : ''
+  ].filter(Boolean).join(' · ');
+  return [
+    '<div class="trace-list-row">',
+    '<button class="trace-item ' + (active ? 'active' : '') + '" data-trace-id="' + escapeHtml(trace.id) + '">',
+    '<strong><span>' + escapeHtml(trace.id.slice(-8)) + '</span>',
+    '<span class="trace-item-badges">',
+    badgeLabel ? '<span class="badge blue">' + escapeHtml(badgeLabel) + '</span>' : '',
+    debugReplay ? '<span class="badge blue">无短期重跑</span>' : '',
+    '<span class="badge ' + statusClass + '">' + escapeHtml(status) + '</span>',
+    '</span></strong>',
+    query ? '<em title="' + escapeHtml(query) + '">' + escapeHtml(query) + '</em>' : '',
+    '<span>' + escapeHtml(secondary || '服务端调度记录') + '</span>',
+    '</button>',
+    '<button class="trace-replay-button" data-replay-trace="' + escapeHtml(trace.id) + '"' + (query ? '' : ' disabled'),
+    ' title="' + (query ? '无短期记忆重跑：仅保留当前 query，不附带最近 8 轮；不会写入消息或长期记忆，也不会执行工具' : '该 Trace 列表项未加载原 query') + '"',
+    ' aria-label="无短期记忆重跑"><i data-lucide="history"></i><span>无短期</span></button>',
+    '</div>'
+  ].join('');
+}
+
+function bindTraceListActions() {
+  $$('[data-trace-id]').forEach((button) => {
+    button.addEventListener('click', () => loadTraceDetail(button.dataset.traceId));
+  });
+  $$('[data-replay-trace]').forEach((button) => {
+    button.addEventListener('click', () => replayTraceWithoutShortTerm(button.dataset.replayTrace, button));
+  });
+}
+
+async function replayTraceWithoutShortTerm(traceId, button) {
+  if (!traceId || button.disabled) return;
+  const originalMarkup = button.innerHTML;
+  button.disabled = true;
+  button.classList.add('loading');
+  button.innerHTML = '<i data-lucide="loader-circle"></i><span>重跑中</span>';
+  refreshIcons();
+  try {
+    const result = await api('/api/traces/' + encodeURIComponent(traceId) + '/replay-no-short-term', {
+      method: 'POST'
+    });
+    await loadTraces(result.traceId);
+    toast('无短期记忆重跑完成，已打开新 Trace');
+  } catch (error) {
+    if (button.isConnected) {
+      button.disabled = false;
+      button.classList.remove('loading');
+      button.innerHTML = originalMarkup;
+      refreshIcons();
+    }
+    toast(error.message, 'error');
+  }
+}
+
 async function openTraceById(traceId) {
   if (!traceId) return;
   closeArchitectureAssistant();
   showTraceDrawer();
-  $('#traceDrawerMeta').textContent = `反馈证据 · ${traceId.slice(-8)}`;
-  $('#traceList').innerHTML = `<button class="trace-item active" data-trace-id="${escapeHtml(traceId)}"><strong><span>${escapeHtml(traceId.slice(-8))}</span><span class="badge blue">反馈关联</span></strong><span>服务端自动抓取</span></button>`;
+  $('#traceDrawerMeta').textContent = '反馈证据 · ' + traceId.slice(-8);
+  $('#traceList').innerHTML = traceListItemMarkup(
+    { id: traceId, status: 'success' },
+    { active: true, badgeLabel: '反馈关联', subtitle: '服务端自动抓取' }
+  );
+  bindTraceListActions();
   await loadTraceDetail(traceId);
 }
 
@@ -3071,17 +3137,22 @@ async function openTraceDrawer() {
   refreshIcons();
 }
 
-async function loadTraces() {
+async function loadTraces(selectedTraceId = '') {
   if (!state.currentConversationId) {
     $('#traceList').innerHTML = emptyState('scan-search', '当前无对话');
     return;
   }
-  const traces = await api(`/api/traces?conversation_id=${encodeURIComponent(state.currentConversationId)}`);
-  $('#traceDrawerMeta').textContent = `${traces.length} 次调度`;
-  $('#traceList').innerHTML = traces.length ? traces.map((trace, index) => `
-    <button class="trace-item ${index === 0 ? 'active' : ''}" data-trace-id="${trace.id}"><strong><span>${escapeHtml(trace.id.slice(-8))}</span><span class="badge ${trace.status === 'success' ? 'blue' : 'red'}">${escapeHtml(trace.status)}</span></strong><span>${formatDate(trace.started_at)} · ${trace.total_ms}ms</span></button>`).join('') : emptyState('scan-search', '尚无 Trace');
-  $$('[data-trace-id]').forEach((button) => button.addEventListener('click', () => loadTraceDetail(button.dataset.traceId)));
-  if (traces[0]) await loadTraceDetail(traces[0].id);
+  const traces = await api('/api/traces?conversation_id=' + encodeURIComponent(state.currentConversationId));
+  $('#traceDrawerMeta').textContent = String(traces.length) + ' 次调度';
+  const activeId = selectedTraceId && traces.some((trace) => trace.id === selectedTraceId)
+    ? selectedTraceId
+    : traces[0]?.id || '';
+  $('#traceList').innerHTML = traces.length
+    ? traces.map((trace) => traceListItemMarkup(trace, { active: trace.id === activeId })).join('')
+    : emptyState('scan-search', '尚无 Trace');
+  bindTraceListActions();
+  refreshIcons();
+  if (activeId) await loadTraceDetail(activeId);
 }
 
 const TRACE_SPAN_LABELS = {
@@ -3094,6 +3165,7 @@ const TRACE_SPAN_LABELS = {
   hybrid_memory_retrieval: '混合记忆召回',
   capability_resolution: '已解锁能力解析',
   prompt_compilation: '模型输入编译',
+  debug_replay_policy: '无短期记忆调试策略',
   short_term_history_policy: '短期记忆冲突隔离',
   model_response: 'Pi Runtime 与 LLM 协作',
   post_turn_memory_commit: '长期记忆更新',
@@ -3129,6 +3201,9 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
   const providerCalls = Array.isArray(bridge.calls) ? bridge.calls : [];
   const lifecycle = Array.isArray(runtime.lifecycle) ? runtime.lifecycle : [];
   const modelInput = parseJson(modelSpan?.input_json, {});
+  const traceRequest = parseJson(trace.request_json, {}) || {};
+  const noShortTermReplay = traceRequest.debugReplay?.mode === 'no_short_term_memory'
+    || modelInput.shortTermHistory?.mode === 'forced_no_short_term_memory';
   const promptSpan = trace.spans.find((span) => span.name === 'prompt_compilation');
   const promptOutput = parseJson(promptSpan?.output_json, {});
   const promptComposition = promptOutput.promptComposition || modelInput.promptComposition || {};
@@ -3152,7 +3227,16 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
   const selectedMemories = Array.isArray(retrievalOutput.events) ? retrievalOutput.events.length
     : (Array.isArray(retrievalOutput.selected) ? retrievalOutput.selected.length
       : Number(retrievalOutput.selectedCount || retrievalOutput.selected_count || 0));
-  const isolatedHistory = historyPolicyOutput.mode === 'authoritative_memory_current_turn';
+  const isolatedHistory = noShortTermReplay
+    || historyPolicyOutput.mode === 'authoritative_memory_current_turn';
+  const pipelineHistoryLabel = noShortTermReplay
+    ? '0 条短期记忆 · 1 条当前 query'
+    : String(messageCount) + ' 条模型消息';
+  const assemblyNote = noShortTermReplay
+    ? '调试模式强制移除最近 8 轮，召回规划器与主模型都只使用原 query。'
+    : (isolatedHistory
+      ? '检测到确定性长期记忆证据，隔离可能冲突的历史消息，只保留当前问题。'
+      : '常驻记忆、召回结果、角色人设与短期记忆被编译为模型输入。');
   const firstEvent = lifecycle[0] || {};
   const lastEvent = lifecycle.at(-1) || {};
   const bridgeStatus = bridge.status || (modelSpan?.status === 'success' ? 'success' : modelSpan?.status || '未知');
@@ -3178,10 +3262,10 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
     <section class="trace-collaboration" aria-label="Runtime 与模型协作视图">
       <header class="trace-collaboration-header">
         <div><span class="eyebrow">RUNTIME × MODEL</span><h4>本次回复的真实协作链</h4></div>
-        <div class="trace-mode-badges"><span class="badge ${agentTurnEnabled ? 'blue' : 'amber'}">${agentTurnEnabled ? 'Agent Turn 已启用' : 'Legacy 调用链'}</span><span class="badge ${toolLoopEnabled ? 'blue' : 'amber'}">${toolLoopEnabled ? 'ReAct 工具循环' : '本轮无工具'}</span>${isolatedHistory ? '<span class="badge blue">长期证据优先</span>' : ''}</div>
+        <div class="trace-mode-badges"><span class="badge ${agentTurnEnabled ? 'blue' : 'amber'}">${agentTurnEnabled ? 'Agent Turn 已启用' : 'Legacy 调用链'}</span><span class="badge ${toolLoopEnabled ? 'blue' : 'amber'}">${toolLoopEnabled ? 'ReAct 工具循环' : '本轮无工具'}</span>${noShortTermReplay ? '<span class="badge blue">无短期记忆测试</span>' : (isolatedHistory ? '<span class="badge blue">长期证据优先</span>' : '')}</div>
       </header>
       <div class="trace-collaboration-flow">
-        <div class="trace-actor pipeline"><i data-lucide="route"></i><span><small>会话编排</small><strong>Memory Agent Turn Pipeline</strong><em>${messageCount} 条短期记忆 · ${promptChars.toLocaleString()} 字符系统输入</em></span></div>
+        <div class="trace-actor pipeline"><i data-lucide="route"></i><span><small>会话编排</small><strong>Memory Agent Turn Pipeline</strong><em>${pipelineHistoryLabel} · ${promptChars.toLocaleString()} 字符系统输入</em></span></div>
         <i class="trace-flow-arrow" data-lucide="arrow-right"></i>
         <div class="trace-actor runtime"><i data-lucide="orbit"></i><span><small>具体 Runtime</small><strong>${escapeHtml(runtimeName + runtimeVersion)}</strong><em>${escapeHtml(runtime.loopPattern || 'single turn')} · ${lifecycle.length} 个事件</em></span></div>
         <i class="trace-flow-arrow" data-lucide="arrow-right"></i>
@@ -3190,11 +3274,11 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
         <div class="trace-actor llm"><i data-lucide="sparkles"></i><span><small>具体 LLM</small><strong>${escapeHtml(provider)} / ${escapeHtml(model)}</strong><em>${Number(usage.inputTokens || 0).toLocaleString()} in · ${Number(usage.outputTokens || 0).toLocaleString()} out</em></span></div>
       </div>
       <div class="trace-sequence">
-        <div><span class="trace-sequence-index">01</span><strong>Turn Pipeline 组装输入</strong><small>${isolatedHistory ? `检测到确定性长期记忆证据，省略 ${Number(historyPolicyOutput.omittedMessages || 0)} 条可能冲突的历史消息，只保留当前问题。` : '常驻记忆、召回结果、角色人设与短期记忆被编译为模型输入。'}</small><time>${traceMs(promptSpan?.duration_ms)}</time></div>
+        <div><span class="trace-sequence-index">01</span><strong>Turn Pipeline 组装输入</strong><small>${escapeHtml(assemblyNote)}</small><time>${traceMs(promptSpan?.duration_ms)}</time></div>
         <div><span class="trace-sequence-index">02</span><strong>${escapeHtml(runtimeName)} 接管本轮</strong><small>${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[firstEvent.type] || firstEvent.type || '启动')} → ${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[lastEvent.type] || lastEvent.type || '收口')}，维护 Agent state 与消息生命周期。</small><time>${traceMs(firstEvent.atMs, '+')}</time></div>
         <div><span class="trace-sequence-index">03</span><strong>暴露 ${exposedTools.length} 个当轮工具</strong><small>${exposedTools.length ? escapeHtml(exposedTools.map((tool) => tool.name).join('、')) : '没有已解锁且可连接的 Skill / MCP 工具，本轮直接生成文本。'}</small><time>${traceMs(capabilitySpan?.duration_ms)}</time></div>
         <div><span class="trace-sequence-index">04</span><strong>Provider Bridge 发起 ${callCount} 次模型请求</strong><small>${toolLoopEnabled ? '模型可自主选择 tool call；能力网关执行后，Pi 把 toolResult 追加到上下文并继续请求模型。' : `Pi 将统一消息请求交给 ${escapeHtml(model)}，模型直接返回最终文本。`}</small><time>${traceMs(bridge.responseAtMs, '+')}</time></div>
-        <div><span class="trace-sequence-index">05</span><strong>Turn Pipeline 完成轮后处理</strong><small>长期记忆更新：${escapeHtml(memoryOutput.status || '未触发')}；本轮召回 ${Number.isFinite(selectedMemories) ? selectedMemories : 0} 条候选记忆。</small><time>${traceMs(memorySpan?.duration_ms)}</time></div>
+        <div><span class="trace-sequence-index">05</span><strong>Turn Pipeline 完成轮后处理</strong><small>长期记忆更新：${noShortTermReplay ? '调试禁用' : escapeHtml(memoryOutput.status || '未触发')}；本轮召回 ${Number.isFinite(selectedMemories) ? selectedMemories : 0} 条候选记忆。</small><time>${traceMs(memorySpan?.duration_ms)}</time></div>
       </div>
       ${toolLoopEnabled ? `<div class="trace-react-loop"><span class="trace-lifecycle-label">ReAct 调用链</span><div>${reactLoopHtml || '<span>本轮暴露了工具，但模型没有调用。</span>'}</div></div>` : ''}
       <div class="trace-lifecycle"><span class="trace-lifecycle-label">Pi 生命周期</span><div>${lifecycleHtml}</div></div>
@@ -3204,6 +3288,14 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
 async function loadTraceDetail(id) {
   $$('[data-trace-id]').forEach((button) => button.classList.toggle('active', button.dataset.traceId === id));
   const trace = await api(`/api/traces/${encodeURIComponent(id)}`);
+  const traceRequest = parseJson(trace.request_json, {}) || {};
+  const debugReplay = traceRequest.debugReplay?.mode === 'no_short_term_memory'
+    ? traceRequest.debugReplay
+    : null;
+  const debugReplayBanner = debugReplay
+    ? '<div class="trace-debug-banner"><i data-lucide="history"></i><span><strong>无短期记忆测试</strong><small>原 query 已重新召回；最近 8 轮、记忆写入、触发器和工具执行均未参与。来源 Trace：'
+      + escapeHtml(String(debugReplay.sourceTraceId || '').slice(-8)) + '</small></span></div>'
+    : '';
   const modelSpan = trace.spans.find((span) => span.name === 'model_response');
   const modelOutput = parseJson(modelSpan?.output_json, {});
   const usage = modelOutput.usage || {};
@@ -3218,6 +3310,7 @@ async function loadTraceDetail(id) {
   })[cacheStatus] || cacheStatus;
   $('#traceDetail').innerHTML = `
     <div class="trace-overview"><div><span>状态</span><strong>${escapeHtml(trace.status)}</strong></div><div><span>总耗时</span><strong>${trace.total_ms} ms</strong></div><div><span>Provider</span><strong>${escapeHtml(modelOutput.provider || '—')}</strong></div><div><span>输入 Token</span><strong>${inputTokens || '—'}</strong></div><div><span>缓存 Token</span><strong>${cachedTokens || '—'}</strong></div><div><span>缓存状态 / 命中率</span><strong title="provider_managed 模式只展示模型服务返回的 cached_tokens，0 不代表本地缓存异常。">${escapeHtml(cacheStatusLabel)} · ${(hitRate * 100).toFixed(1)}%</strong></div></div>
+    ${debugReplayBanner}
     ${traceCollaborationHtml(trace, modelSpan, modelOutput)}
     <details class="trace-raw-panel"><summary><span><i data-lucide="braces"></i><strong>原始 Span</strong></span><small>${trace.spans.length} 个节点 · 完整 Input / Output</small><i data-lucide="chevron-down"></i></summary><div class="trace-raw-spans">${trace.spans.map((span, index) => {
       const input = parseJson(span.input_json, {});

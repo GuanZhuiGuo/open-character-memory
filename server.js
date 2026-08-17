@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import {
   chat, createConversation, DEFAULT_LONG_TERM_MEMORY_UPDATE_INTERVAL_TURNS,
   extractConversationMemoryNow, getConversationMemoryExtractionStatus,
-  getConversationMessages, listConversations, MAIN_MODEL_MESSAGE_LIMIT
+  getConversationMessages, listConversations, MAIN_MODEL_MESSAGE_LIMIT,
+  replayTraceWithoutShortTermMemory
 } from './lib/agent.js';
 import {
   answerArchitectureQuestion, getArchitectureIndexStatus, SYSTEM_VERSION
@@ -232,6 +233,7 @@ function userMayAccessRoute(pathname, method) {
   if (/^\/api\/conversations\/[^/]+\/memory-extraction$/.test(pathname)
     && ['GET', 'POST'].includes(method)) return true;
   if (pathname === '/api/feedback' && method === 'POST') return true;
+  if (/^\/api\/traces\/[^/]+\/replay-no-short-term$/.test(pathname) && method === 'POST') return true;
   if (['/api/memory/retrieval-test', '/api/architecture/ask', '/api/admin/health/models', '/api/admin/health/ark'].includes(pathname)
     && method === 'POST') return true;
   if (method !== 'GET') return false;
@@ -1726,6 +1728,16 @@ async function handleApi(request, response, url) {
     if (!conversation) throw new HttpError(404, '会话不存在', 'CONVERSATION_NOT_FOUND');
     assertUserAccess(principal, conversation.user_id);
     sendJson(response, 200, listTraces(conversationId, url.searchParams.get('limit') || 50));
+    return;
+  }
+  const traceReplayMatch = pathname.match(/^\/api\/traces\/([^/]+)\/replay-no-short-term$/);
+  if (traceReplayMatch && method === 'POST') {
+    const sourceTrace = getTrace(traceReplayMatch[1]);
+    if (!sourceTrace) throw new HttpError(404, 'Trace 不存在', 'TRACE_NOT_FOUND');
+    assertUserAccess(principal, sourceTrace.user_id);
+    sendJson(response, 201, await replayTraceWithoutShortTermMemory({
+      sourceTraceId: sourceTrace.id
+    }));
     return;
   }
   const traceMatch = pathname.match(/^\/api\/traces\/([^/]+)$/);

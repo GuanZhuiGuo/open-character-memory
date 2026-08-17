@@ -215,6 +215,67 @@ test('registered users get read-only configuration, isolated data, own traces, a
     const crossUserTrace = await request(baseUrl, `/api/traces/${chat.payload.traceId}`, { cookie: bobCookie });
     assert.equal(crossUserTrace.status, 403);
 
+    const conversationBeforeReplay = await request(baseUrl,
+      `/api/conversations/${chat.payload.conversation.id}?user_id=${alice.id}`, { cookie: aliceCookie });
+    assert.equal(conversationBeforeReplay.status, 200);
+    const extractionBeforeReplay = await request(baseUrl,
+      `/api/conversations/${chat.payload.conversation.id}/memory-extraction`, { cookie: aliceCookie });
+    assert.equal(extractionBeforeReplay.payload.pendingTurns, 0);
+    const replay = await request(baseUrl,
+      `/api/traces/${chat.payload.traceId}/replay-no-short-term`, {
+        method: 'POST', cookie: aliceCookie
+      });
+    assert.equal(replay.status, 201);
+    assert.notEqual(replay.payload.traceId, chat.payload.traceId);
+    assert.equal(replay.payload.sourceTraceId, chat.payload.traceId);
+    assert.equal(replay.payload.query, '我今天想去看展览。');
+    assert.equal(replay.payload.diagnostics.shortTermHistoryMessages, 0);
+    assert.equal(replay.payload.diagnostics.currentQueryMessages, 1);
+    assert.equal(replay.payload.diagnostics.businessStateMutated, false);
+    assert.equal(replay.payload.diagnostics.toolCallCount, 0);
+
+    const replayTrace = await request(baseUrl, `/api/traces/${replay.payload.traceId}`, { cookie: aliceCookie });
+    assert.equal(replayTrace.status, 200);
+    const replayRequest = JSON.parse(replayTrace.payload.request_json);
+    assert.equal(replayRequest.debugReplay.mode, 'no_short_term_memory');
+    assert.equal(replayRequest.debugReplay.sourceTraceId, chat.payload.traceId);
+    assert.equal(replayRequest.debugReplay.businessStateReadOnly, true);
+    const replaySpanNames = replayTrace.payload.spans.map((span) => span.name);
+    assert.ok(replaySpanNames.includes('debug_replay_policy'));
+    assert.ok(replaySpanNames.includes('short_term_history_policy'));
+    assert.equal(replaySpanNames.includes('control_memory_fast_path'), false);
+    assert.equal(replaySpanNames.includes('trigger_evaluation_pre_response'), false);
+    assert.equal(replaySpanNames.includes('post_turn_memory_commit'), false);
+    assert.equal(replaySpanNames.includes('trigger_evaluation_post_commit'), false);
+    const replayRetrievalSpan = replayTrace.payload.spans.find((span) => span.name === 'hybrid_memory_retrieval');
+    assert.equal(JSON.parse(replayRetrievalSpan.input_json).retrievalPlannerContextMessages, 0);
+    const replayHistorySpan = replayTrace.payload.spans.find((span) => span.name === 'short_term_history_policy');
+    const replayHistoryOutput = JSON.parse(replayHistorySpan.output_json);
+    assert.equal(replayHistoryOutput.mode, 'forced_no_short_term_memory');
+    assert.equal(replayHistoryOutput.recentDialogueMessages, 0);
+    const replayModelSpan = replayTrace.payload.spans.find((span) => span.name === 'model_response');
+    const replayModelInput = JSON.parse(replayModelSpan.input_json);
+    assert.deepEqual(replayModelInput.capabilityTools, []);
+    assert.equal(replayModelInput.shortTermHistory.mode, 'forced_no_short_term_memory');
+    assert.deepEqual(replayModelInput.messages, [{ role: 'user', content: '我今天想去看展览。' }]);
+
+    const conversationAfterReplay = await request(baseUrl,
+      `/api/conversations/${chat.payload.conversation.id}?user_id=${alice.id}`, { cookie: aliceCookie });
+    assert.equal(conversationAfterReplay.status, 200);
+    assert.equal(conversationAfterReplay.payload.messages.length, conversationBeforeReplay.payload.messages.length);
+    const extractionAfterReplay = await request(baseUrl,
+      `/api/conversations/${chat.payload.conversation.id}/memory-extraction`, { cookie: aliceCookie });
+    assert.equal(extractionAfterReplay.payload.pendingTurns, extractionBeforeReplay.payload.pendingTurns);
+    const crossUserReplay = await request(baseUrl,
+      `/api/traces/${chat.payload.traceId}/replay-no-short-term`, {
+        method: 'POST', cookie: bobCookie
+      });
+    assert.equal(crossUserReplay.status, 403);
+    const traceListAfterReplay = await request(baseUrl,
+      `/api/traces?conversation_id=${chat.payload.conversation.id}`, { cookie: aliceCookie });
+    assert.equal(traceListAfterReplay.status, 200);
+    assert.ok(traceListAfterReplay.payload.some((traceItem) => traceItem.id === replay.payload.traceId));
+
     const ruleChat = await request(baseUrl, '/api/chat', {
       method: 'POST',
       cookie: aliceCookie,
