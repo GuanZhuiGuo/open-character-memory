@@ -16,6 +16,7 @@ Version `0.5.0` combines a Pi Agent Core ReAct loop with corrective and agentic 
 - Configurable structured fields, extraction cadence, prompts, retrieval policy, plots, and low-code triggers.
 - Scope-locked `memory_search` / `memory_expand`, controlled Skill/MCP exposure, execution receipts, and Pi `toolResult` continuation turns.
 - Inspectable Trace views for prompts, injected memory, retrieval evidence, model/tool calls, and post-turn writes.
+- A headless `memory-runtime/v1` contract with `observe / recall / expand / mutate / forget`, a persistent extraction queue, a typed JavaScript/TypeScript SDK, Pi and generic adapters, and a read-only MCP server.
 
 ## Market comparison
 
@@ -68,6 +69,38 @@ NEO4J_PASSWORD='replace-with-a-different-strong-secret' \
 docker compose up --build
 ```
 
+## Headless Memory Runtime
+
+Existing Studio routes remain unchanged. Other agents can integrate through the versioned HTTP contract or the repository SDK:
+
+```js
+import { MemoryClient } from '@open-character-memory/sdk';
+
+const memory = new MemoryClient({
+  baseUrl: 'http://127.0.0.1:4173',
+  apiKey: process.env.MEMORY_SERVICE_API_KEY
+}).scope({
+  tenantId: 'default',
+  subjectId: userId,
+  agentId,
+  spaceId: storyId,
+  branchId: 'main'
+});
+
+const contextPack = await memory.recall({ query: userText });
+await memory.observe({
+  idempotencyKey: turnId,
+  threadId,
+  extractionMode: 'async',
+  messages: [
+    { role: 'user', content: userText },
+    { role: 'assistant', content: assistantText }
+  ]
+});
+```
+
+The service key is restricted to `/v1/memory/*`. Model-facing tools are read-only and receive no scope arguments; the application injects and locks scope on the server side. See [the headless runtime and SDK contract](docs/headless-memory-runtime.md) and [the OpenAPI document](openapi/memory-v1.yaml).
+
 ## Verification
 
 ```bash
@@ -87,11 +120,11 @@ Ark defaults to provider-managed caching reported by Responses usage. Explicit `
 
 ## Storage boundary
 
-SQLite is the current single-node source of truth. Neo4j is a rebuildable read projection for graph traversal, not a second authority. Embeddings remain JSON vectors scored in the application process. The SDK and PostgreSQL plus pgvector migration are deliberately deferred and documented as future work.
+SQLite is the current single-node source of truth. Neo4j is a rebuildable read projection for graph traversal, not a second authority. Embeddings remain JSON vectors scored in the application process. The JavaScript/TypeScript SDK and persistent single-node extraction jobs are implemented as an alpha workspace package; independent npm/PyPI publication, a Python SDK, PostgreSQL plus pgvector, and a distributed worker remain future work.
 
 OpenSearch may become useful later as a hybrid lexical/vector retrieval index for large corpora, but it should not replace the transactional record or Neo4j path projection.
 
-See [the runtime and graph design](docs/bitemporal-neo4j-pi-runtime.md), [the future storage roadmap](docs/future-storage-sdk-roadmap.md), and [the release checklist](docs/open-source-release-checklist.md).
+See [the runtime and graph design](docs/bitemporal-neo4j-pi-runtime.md), [the headless memory contract](docs/headless-memory-runtime.md), [the future storage roadmap](docs/future-storage-sdk-roadmap.md), and [the release checklist](docs/open-source-release-checklist.md).
 
 ## License
 

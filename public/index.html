@@ -52,7 +52,7 @@
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-mark small">M</span>
-        <span class="brand-copy"><span>记忆 Agent</span><small id="appVersion">v—</small></span>
+        <span class="brand-copy"><span>记忆 Agent</span></span>
       </div>
       <nav id="managementNav" class="nav-list" data-portal-nav="management" aria-label="管理端导航">
         <button class="nav-item active" data-page="chat" aria-label="角色对话"><i data-lucide="messages-square"></i><span>角色对话</span></button>
@@ -86,6 +86,9 @@
           <div id="pageMeta" class="page-meta">main_story / main</div>
         </div>
         <div class="topbar-actions">
+          <button id="releaseNotesButton" class="version-button" type="button" title="查看 Release Notes" aria-label="查看版本发布说明">
+            <i data-lucide="history"></i><span id="appVersion">v—</span>
+          </button>
           <button id="modelHealth" class="connection-status" data-admin-only title="检查模型连接" aria-label="检查模型连接">
             <i data-lucide="plug-zap"></i><span class="status-dot"></span>
           </button>
@@ -422,6 +425,7 @@
                     <header><span>02</span><strong>Agent Runtime</strong><small id="architectureRuntimeName">Pi Agent Core</small></header>
                     <div class="architecture-node" data-phase="generate"><i data-lucide="orbit"></i><span><strong>Pi ReAct Runtime</strong><small id="architecturePiNodeMeta">模型 → 工具 → toolResult → 模型续答</small></span></div>
                     <div class="architecture-node" data-phase="pre generate write"><i data-lucide="route"></i><span><strong>会话锁与 Turn Pipeline</strong><small>同一会话串行，保留现有调度功能</small></span></div>
+                    <div class="architecture-node" data-phase="pre generate write input"><i data-lucide="braces"></i><span><strong>Headless Memory Runtime</strong><small id="architectureHeadlessNodeMeta">v1 原子 API · SDK / Pi / MCP</small></span></div>
                     <div class="architecture-node" data-phase="pre generate input"><i data-lucide="layers-3"></i><span><strong>Prompt Compiler</strong><small>硬规则 + 角色属性 + 状态 + 最终召回</small></span></div>
                     <div class="architecture-node" data-phase="pre generate write"><i data-lucide="plug-zap"></i><span><strong>Capability Gateway</strong><small>解锁过滤、白名单、确认、Skill/MCP 执行回执</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="brain-circuit"></i><span><strong>Corrective Recall Planner</strong><small>轻量目录 → 证据判断 → 零候选 Query 改写与跨池检索</small></span></div>
@@ -448,7 +452,7 @@
                     <div class="architecture-node" data-phase="generate write input"><i data-lucide="sparkles"></i><span><strong>Text Provider</strong><small>Ark / OpenAI / Anthropic / Mock</small></span></div>
                     <div class="architecture-node" data-phase="pre write input"><i data-lucide="binary"></i><span><strong>Embedding Provider</strong><small>Ark / OpenAI / Local Mock</small></span></div>
                     <div class="architecture-node" data-phase="generate input"><i data-lucide="gauge"></i><span><strong>稳定前缀缓存</strong><small>只缓存人设与固定属性；失败回退完整请求</small></span></div>
-                    <div class="architecture-node" data-phase="pre write input"><i data-lucide="database"></i><span><strong>SQLite · 主记录库（生产升级：PostgreSQL + pgvector）</strong><small id="architectureSqliteNodeMeta">双时态账本、向量、Trace、outbox；大规模混合检索可增 OpenSearch</small></span></div>
+                    <div class="architecture-node" data-phase="pre write input"><i data-lucide="database"></i><span><strong>SQLite · 主记录库（生产升级：PostgreSQL + pgvector）</strong><small id="architectureSqliteNodeMeta">双时态账本、证据、向量、持久化任务与 outbox</small></span></div>
                     <div class="architecture-node" data-phase="pre write"><i data-lucide="share-2"></i><span><strong>Neo4j · 图投影</strong><small id="architectureNeo4jNodeMeta">实体、事件、声明、关系；失败回退 SQLite</small></span></div>
                   </section>
                 </div>

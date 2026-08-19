@@ -40,6 +40,10 @@ services:
       NEO4J_DATABASE: neo4j
       NEO4J_REQUIRED: "false"
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD before starting Docker Compose}
+      MEMORY_TENANT_ID: ${MEMORY_TENANT_ID:-default}
+      MEMORY_SERVICE_API_KEY: ${MEMORY_SERVICE_API_KEY:-}
+      MEMORY_WORKER_POLL_MS: ${MEMORY_WORKER_POLL_MS:-750}
+      MEMORY_JOB_MAX_ATTEMPTS: ${MEMORY_JOB_MAX_ATTEMPTS:-3}
       DATABASE_PATH: /app/data/memory-agent.db
     volumes:
       - memory_agent_data:/app/data

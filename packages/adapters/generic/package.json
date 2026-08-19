@@ -1,0 +1,10 @@
+{
+  "name": "@open-character-memory/adapter-generic",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./index.js",
+  "dependencies": {
+    "@open-character-memory/sdk": "0.1.0"
+  }
+}

@@ -18,6 +18,26 @@ Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的�
 - **可配置记忆契约**：管理员可定义结构化字段、抽取节奏、提示词、召回策略和基于状态的剧情/道具触发。
 - **受控 Agent 能力**：已解锁的 Skill/MCP 才会当轮暴露，工具结果回传 Pi 后再由主模型续答，并保留确认、白名单和执行回执。
 - **可观测与可评测**：Trace 展示完整 Prompt、记忆注入、召回证据、模型/工具循环与轮后写入，仓库附带离线回归评测。
+- **Headless 记忆契约**：新增 `observe / recall / expand / mutate / forget` 原子 API、持久化抽取队列、TypeScript SDK、Pi/通用适配器和只读 MCP Server，现有 Studio 功能保持兼容。
+
+## Headless Memory Runtime
+
+新接入方使用 [`openapi/memory-v1.yaml`](openapi/memory-v1.yaml) 和 [`packages/sdk`](packages/sdk)；现有角色聊天、剧情、Trace 和每 X 轮抽取仍使用原 API，不需要迁移历史数据。
+
+```js
+import { MemoryClient } from '@open-character-memory/sdk';
+
+const memory = new MemoryClient({ baseUrl, apiKey }).scope({
+  tenantId: 'default', subjectId: userId, agentId, spaceId: storyId, branchId: 'main'
+});
+const pack = await memory.recall({ query: userText });
+await memory.observe({
+  idempotencyKey: turnId,
+  messages: [{ role: 'user', content: userText }, { role: 'assistant', content: answer }]
+});
+```
+
+完整边界、任务语义、MCP 启动方式和已知限制见 [`docs/headless-memory-runtime.md`](docs/headless-memory-runtime.md)。
 
 ## 方案对比
 
@@ -155,6 +175,7 @@ docker compose up --build
 - 场景配置：`scenes` / `memory_profiles` / `retrieval_profiles` / `event_extraction_profiles`
 - 图谱：`entities` / `entity_edges` / `events` / `event_entities` / `claims`；事件通过 `memory_space` 区分 `user_memory` 与 `shared_story`，关系边通过 `event_id` 指向证据事件
 - 图投影：`graph_projection_outbox` 合并同一 `user + agent + story + branch` 的待投影任务；Neo4j 使用 `MemoryScope / MemoryEntity / MemoryEvent / MemoryClaim` 节点以及 `INVOLVES / SUBJECT / EVIDENCE / RELATED` 关系
+- Headless 契约：`memory_observations` / `memory_observation_messages` 保存外部 Agent 证据，`memory_jobs` 保存可重试抽取任务，`memory_operation_receipts` 保存幂等写回执
 - 角色记忆：`agents.fixed_attributes_json` / `agents.profile_version` / `agent_profile_history`
 - 向量：`embeddings`
 - 架构问答：`architecture_knowledge_chunks` / `architecture_qa_logs`
@@ -162,7 +183,7 @@ docker compose up --build
 - 剧情、道具与调度：`plots` 通过 `parent_plot_id / branch_label / node_type` 表达故事树；`capability_props` / `user_prop_states` 保存 Skill/MCP 道具及用户解锁状态；`capability_tool_catalog` 保存发现并暴露的工具，`capability_runs` 保存参数脱敏后的成功、阻断或失败回执；原有低代码调度记录使用 `user_plot_states` / `triggers` / `trigger_runs` / `tools` / `tool_runs`
 - 可观测与反馈：`traces` / `trace_spans` / `feedback`
 
-SDK 与 PostgreSQL + pgvector 本次明确暂缓。SQLite 适合当前单机体验与低写并发，但尚不具备多副本并发写、服务端 ANN 向量索引、在线迁移和完整生产运维能力；未来触发迁移条件和分阶段方案记录在 [`docs/future-storage-sdk-roadmap.md`](docs/future-storage-sdk-roadmap.md)。
+TypeScript SDK 和持久化单机抽取队列已以 alpha 形式落地，但尚未独立发布 npm/PyPI。SQLite 适合当前单机体验与低写并发，仍不具备多副本并发写、服务端 ANN 向量索引、在线迁移和完整生产运维能力；PostgreSQL + pgvector、Python SDK 和分布式 worker 的触发条件见 [`docs/future-storage-sdk-roadmap.md`](docs/future-storage-sdk-roadmap.md)。
 
 OpenSearch 不应替换当前主记录库或 Neo4j。它更适合作为未来的大规模混合检索索引：当事件/文档达到十万级以上，并强依赖 BM25、向量、过滤、聚合和多模态检索时，可以由主库异步投影到 OpenSearch；当前阶段再加入第三套投影会增加一致性、重建与运维成本，记忆正确性不会自动提升。详细取舍见 [`docs/bitemporal-neo4j-pi-runtime.md`](docs/bitemporal-neo4j-pi-runtime.md)。
 
@@ -174,12 +195,13 @@ OpenSearch 不应替换当前主记录库或 Neo4j。它更适合作为未来的
 - 每条已持久化消息都可提交快捷反馈。客户端只上传消息 ID 和建议；服务端校验所有权后，自动封存完整轮次快照及 Trace ID。
 - 所有业务记录必须带 `user_id`，故事记忆额外带 `agent_id / story_id / branch_id`。服务端不信任客户端传入的用户范围。
 - `.env.local` 和 SQLite 数据库均不进入 Git。Trace 会自动脱敏 Ark Key 和 Bearer Token。
+- `MEMORY_SERVICE_API_KEY` 仅能访问 `/v1/memory/*`；作用域中的 subject 仍由服务端校验，用户会话不能写入其他用户。
 - MCP HTTP 与 Skill HTTP 只允许 `CAPABILITY_HTTP_ALLOWED_HOSTS` 中的主机；MCP stdio 默认关闭，启用后仍必须配置 `MCP_STDIO_ALLOWED_COMMANDS`。清单中的密钥只能写成 `${secret:ENV_NAME}`，stdio 子进程不会继承服务端全部环境变量。
 - 线上应将当前本地管理员密码替换为企业 SSO/RBAC，并使用 KMS 或 Secret Manager 注入 API Key。
 
 ## 当前取舍
 
-达到 X 轮阈值时，记忆抽取当前同步执行，会增加该阈值轮的回包延迟，但能保证下一轮一定看到已提交的批次记忆。若改为生产级异步模式，需使用带幂等键、会话序号、重试和死信处理的持久化队列，并明确下一轮是等待前批次提交还是携带“记忆延迟”状态继续。用户明确的称呼、风格和戏外更正仍保持同步通道，不等待 X 轮。
+现有 Studio 达到 X 轮阈值时仍同步抽取，保证下一轮一定看到已提交批次。Headless `observe` 另外支持 `none / sync / async`；`async` 使用 SQLite 持久化任务、幂等键、指数退避和 dead 状态，但仍是单机 worker，不冒充分布式队列。用户明确的称呼、风格和戏外更正在两条链路都保持同步通道。
 
 Neo4j 投影的失败策略与主记忆抽取不同：主 SQLite 写入不会回滚，outbox 保留待重放 scope，当前请求可降级使用 SQLite 图关系继续回答。Compose 默认启动 Neo4j；直接运行 `npm start` 时可设置 `GRAPH_STORE=sqlite`，或提供 Neo4j 配置后设置 `GRAPH_STORE=neo4j`。
 
@@ -189,4 +211,4 @@ Neo4j 投影的失败策略与主记忆抽取不同：主 SQLite 写入不会回
 
 需要增量发布时，应先绑定远程 Git 仓库，然后让服务器按已验证 commit 执行 `git fetch` + `git checkout`；或使用带发布目录与健康检查的 `rsync` 方案。不建议直接在正在运行的目录里逐文件覆盖。
 
-首次公开到 GitHub 前，按 [`docs/open-source-release-checklist.md`](docs/open-source-release-checklist.md) 完成密钥扫描、离线测试、五类记忆评测、Docker 构建和安全设置；本次运行时/双时态/图投影设计见 [`docs/bitemporal-neo4j-pi-runtime.md`](docs/bitemporal-neo4j-pi-runtime.md)，延期的 SDK、PostgreSQL + pgvector 与 OpenSearch 决策点见 [`docs/future-storage-sdk-roadmap.md`](docs/future-storage-sdk-roadmap.md)。
+首次公开到 GitHub 前，按 [`docs/open-source-release-checklist.md`](docs/open-source-release-checklist.md) 完成密钥扫描、离线测试、五类记忆评测、Docker 构建和安全设置；Headless 契约见 [`docs/headless-memory-runtime.md`](docs/headless-memory-runtime.md)，未完成的 PostgreSQL + pgvector、Python SDK、分布式 worker 与 OpenSearch 决策点见 [`docs/future-storage-sdk-roadmap.md`](docs/future-storage-sdk-roadmap.md)。

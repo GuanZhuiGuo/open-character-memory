@@ -2,19 +2,21 @@
 
 ## 结论
 
-当前系统的“角色陪聊记忆产品能力”明显强于“通用 SDK 与生产基础设施能力”。前者已有结构化控制、事件状态、图谱证据、纠正式/Agentic 召回、剧情触发和可观测界面；后者仍是一个单体应用的内部模块集合。因此，SDK 成熟度偏低不是说记忆逻辑差，而是说第三方还不能低成本、稳定地把它嵌进另一套 Agent Runtime。
+当前系统的“角色陪聊记忆产品能力”仍强于“生产级通用基础设施能力”。现在已有 `memory-runtime/v1` OpenAPI、JavaScript/TypeScript alpha SDK、Pi/通用适配器和只读 MCP Server，第三方可以不依赖 Studio UI 完成接入。但它还没有独立包发布、多语言 SDK、可替换存储、多租户密钥体系与分布式 worker，因此应定位为“可接入的 alpha Memory Service”，不是已成熟的生产 SDK。
 
 ## 为什么还不是成熟 SDK
 
 成熟 SDK 至少需要稳定的公开接口，例如 `MemoryStore`、`Extractor`、`Retriever`、`PromptCompiler` 和 `Provider`；还需要类型声明、错误码、生命周期、取消/超时、版本兼容、迁移钩子、扩展点、示例工程和契约测试。
 
-当前代码仍有这些应用级耦合：
+当前公共契约已有 DTO、类型声明、错误码、超时、幂等语义和契约测试，但仍有这些成熟度缺口：
 
 - `lib/db.js` 在模块加载时创建 SQLite 单例，调用方不能注入自己的连接池或事务。
 - 配置从进程环境全局读取，不能为同一进程中的多个租户或 Agent 分别初始化实例。
-- 领域函数直接返回内部数据库行，尚未形成版本化的公共 DTO 与错误协议。
-- 抽取、召回、剧情和 Trace 是完整产品链路，但还没有发布成可独立安装的包，也没有跨版本兼容矩阵。
-- 本次新增 Provider Adapter 解决了模型耦合，但数据库、队列、鉴权和观测仍没有 Adapter 合同。
+- `lib/memory-service.js` 的当前 Store Adapter 仍直连 SQLite 单例和现有 Studio 的用户/角色记录。
+- SDK 仍是 workspace alpha 包，没有 npm/PyPI 独立发布、多版本兼容矩阵和完整升级指南。
+- 只有 JavaScript/TypeScript 客户端，尚无 Python SDK，也没有多语言一致性测试。
+- 数据库、向量、图、任务队列和观测还没有可替换 Adapter 合同。
+- `MEMORY_SERVICE_API_KEY` 是服务级单密钥，已限定只访问 `/v1/memory/*`，但还不是租户级 key 管理、轮换、配额和审计体系。
 
 ## 什么是持久化生态
 
@@ -26,7 +28,7 @@
 
 分布式执行是同一任务可以由多个进程或机器安全协作，并在任一 Worker 崩溃后继续。它通常要求持久化任务队列、租约或分布式锁、幂等键、会话序号、检查点、重试退避、死信队列、超时取消和结果去重。
 
-当前 `conversationTurnQueues` 是进程内 `Map`：它只能串行同一个 Node 进程里的用户-角色请求。启动第二个副本后，两个副本彼此不知道对方的锁；阈值轮抽取也仍在 HTTP 请求内等待完成。因此它适合单机演示，不是可横向扩容的 Durable Execution。
+当前 Headless `async observe` 已把任务保存到 `memory_jobs`，支持幂等、重试退避和 dead 状态，解决了“进程重启后任务必然丢失”的基础问题。但 worker 仍在单个 Node 进程内，没有租约、分布式锁或多 worker 抢占协议；原 Studio 的 `conversationTurnQueues` 也仍是进程内 `Map`，X 轮抽取保持 HTTP 内阻塞语义。因此它是单机 durable queue，不是可横向扩容的 Durable Execution。
 
 ## 为什么时序图谱与图数据库能力仍有边界
 
@@ -54,11 +56,11 @@ Graphiti 的 episode 溯源、可扩展 ontology、时序事实和混合图检�
 ## 为什么生产级扩展仍弱
 
 - 单进程锁，不能协调多副本。
-- 轮后抽取阻塞 HTTP，没有持久化任务与失败重放。
+- 原 Studio 的 X 轮抽取仍阻塞 HTTP；Headless 虽有持久化任务与失败重试，但尚无多副本租约和独立 worker 部署。
 - 多步记忆写入尚未统一放入一个数据库事务，后续步骤失败时早先写入不会自动回滚。
 - SQLite 本地文件限制水平扩容，向量检索仍是应用层扫描。
 - 认证是产品演示级账号与单管理员密码，不是企业 SSO、RBAC 或租户密钥管理。
 - 有 Trace，但还没有 OpenTelemetry、指标、告警、SLO、容量压测和成本预算。
 - 没有滚动升级、备份恢复演练、数据迁移校验与灾难恢复 Runbook。
 
-`0.5.0` 已补 Pi ReAct 工具循环、纠正式/Agentic 记忆召回、双时态版本、Neo4j 图投影和受控 Skill/MCP 能力网关；SDK、PostgreSQL/pgvector、持久化抽取队列和多副本执行仍是明确的生产扩展 backlog，不能把单机可运行等同于分布式生产就绪。
+`0.5.0` 之后的当前开发版已补 Pi ReAct 工具循环、纠正式/Agentic 召回、双时态版本、Neo4j 图投影、受控 Skill/MCP 能力网关、Headless Memory API、TypeScript alpha SDK 和单机持久化抽取队列。独立包发布、Python SDK、PostgreSQL/pgvector、可替换存储适配器和多副本执行仍是明确的生产扩展 backlog，不能把单机可运行等同于分布式生产就绪。

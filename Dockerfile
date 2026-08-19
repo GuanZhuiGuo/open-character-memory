@@ -8,12 +8,14 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 COPY --chown=node:node package.json package-lock.json ./
+COPY --chown=node:node packages ./packages
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --chown=node:node server.js ./
 COPY --chown=node:node lib ./lib
 COPY --chown=node:node public ./public
 COPY --chown=node:node scripts ./scripts
 COPY --chown=node:node evals ./evals
+COPY --chown=node:node openapi ./openapi
 
 RUN mkdir -p /app/data && chown node:node /app/data
 

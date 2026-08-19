@@ -1,0 +1,392 @@
+openapi: 3.1.0
+info:
+  title: Open Character Memory API
+  version: 0.1.0
+  description: >-
+    Headless, scope-locked long-term memory contract. Model-generated proposals are not
+    accepted as direct writes; extraction and policy validation remain server-side.
+servers:
+  - url: http://127.0.0.1:4173
+security:
+  - ServiceBearer: []
+  - SessionCookie: []
+tags:
+  - name: Memory
+paths:
+  /v1/memory/capabilities:
+    get:
+      tags: [Memory]
+      operationId: getMemoryCapabilities
+      responses:
+        '200':
+          description: Runtime contract and feature flags
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Capabilities'
+  /v1/memory/observe:
+    post:
+      tags: [Memory]
+      operationId: observeMemory
+      description: >-
+        Append immutable evidence. Explicit persistent controls are evaluated synchronously;
+        ordinary extraction can run asynchronously through the persistent job queue.
+      parameters:
+        - $ref: '#/components/parameters/TraceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ObservationRequest'
+      responses:
+        '200':
+          description: Observation completed or extraction was disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservationReceipt'
+        '202':
+          description: Evidence accepted and extraction queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservationReceipt'
+        '409':
+          description: Idempotency or state conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/memory/recall:
+    post:
+      tags: [Memory]
+      operationId: recallMemory
+      description: Retrieve only current active memory in the locked scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecallRequest'
+      responses:
+        '200':
+          description: Structured memory context pack
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextPack'
+        '422':
+          description: Unsupported historical semantic recall request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/memory/expand:
+    post:
+      tags: [Memory]
+      operationId: expandMemory
+      description: Expand known active event IDs or entity names into graph evidence.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpandRequest'
+      responses:
+        '200':
+          description: Active graph evidence
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /v1/memory/mutate:
+    post:
+      tags: [Memory]
+      operationId: mutateMemory
+      description: >-
+        Deterministic application or administrator write. User sessions cannot call this API;
+        model proposals must go through observe and the extraction policy pipeline.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MutationRequest'
+      responses:
+        '200':
+          description: Idempotent mutation receipt
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationReceipt'
+        '403':
+          description: Trusted writer required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Idempotency key was reused with another scope or payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/memory:
+    delete:
+      tags: [Memory]
+      operationId: forgetMemory
+      description: Retract or erase one structured value or event within the locked scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgetRequest'
+      responses:
+        '200':
+          description: Idempotent forget receipt
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationReceipt'
+        '409':
+          description: Idempotency key was reused with another scope or payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/memory/jobs/{jobId}:
+    get:
+      tags: [Memory]
+      operationId: getMemoryJob
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: tenant_id
+          in: query
+          schema: { type: string, default: default }
+        - name: subject_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: agent_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: space_id
+          in: query
+          schema: { type: string, default: main_story }
+        - name: branch_id
+          in: query
+          schema: { type: string, default: main }
+      responses:
+        '200':
+          description: Extraction job state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobReceipt'
+        '404':
+          description: Job does not exist in the supplied scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    ServiceBearer:
+      type: http
+      scheme: bearer
+      description: MEMORY_SERVICE_API_KEY configured by the self-hosted service.
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: memory_user_session
+  parameters:
+    TraceId:
+      name: X-Trace-Id
+      in: header
+      required: false
+      schema: { type: string, maxLength: 160 }
+  schemas:
+    MemoryScope:
+      type: object
+      additionalProperties: false
+      required: [subjectId, agentId]
+      properties:
+        tenantId: { type: string, default: default, maxLength: 100 }
+        subjectId: { type: string, maxLength: 128 }
+        agentId: { type: string, maxLength: 128 }
+        spaceId: { type: string, default: main_story, maxLength: 128 }
+        branchId: { type: string, default: main, maxLength: 128 }
+    MemoryMessage:
+      type: object
+      additionalProperties: false
+      required: [role, content]
+      properties:
+        id: { type: string, maxLength: 160 }
+        role: { type: string, enum: [user, assistant, system, tool] }
+        content: { type: string, minLength: 1, maxLength: 50000 }
+        createdAt: { type: string, format: date-time }
+        metadata: { type: object, additionalProperties: true }
+    ObservationRequest:
+      type: object
+      additionalProperties: false
+      required: [scope, idempotencyKey, messages]
+      properties:
+        scope: { $ref: '#/components/schemas/MemoryScope' }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        threadId: { type: string, default: default, maxLength: 160 }
+        extractionMode: { type: string, enum: [async, sync, none], default: async }
+        messages:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/MemoryMessage' }
+        metadata: { type: object, additionalProperties: true }
+    RecallRequest:
+      type: object
+      additionalProperties: false
+      required: [scope, query]
+      properties:
+        scope: { $ref: '#/components/schemas/MemoryScope' }
+        query: { type: string, minLength: 1, maxLength: 12000 }
+        options:
+          type: object
+          additionalProperties: false
+          properties:
+            includePinned: { type: boolean, default: true }
+            includePromptText: { type: boolean, default: true }
+            validAt: { type: string, format: date-time }
+            knownAt: { type: string, format: date-time }
+            retrieval: { type: object, additionalProperties: true }
+    ExpandRequest:
+      type: object
+      additionalProperties: false
+      required: [scope]
+      anyOf:
+        - required: [eventIds]
+        - required: [entityNames]
+      properties:
+        scope: { $ref: '#/components/schemas/MemoryScope' }
+        eventIds:
+          type: array
+          maxItems: 8
+          items: { type: string }
+        entityNames:
+          type: array
+          maxItems: 8
+          items: { type: string }
+        graphHops: { type: integer, minimum: 0, maximum: 2, default: 1 }
+    MutationRequest:
+      type: object
+      additionalProperties: false
+      required: [scope, idempotencyKey, recordType, operation, payload]
+      properties:
+        scope: { $ref: '#/components/schemas/MemoryScope' }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        recordType: { type: string, enum: [structured, event] }
+        operation:
+          type: string
+          enum: [set, merge, delta, create, enrich, update, supersede, retract]
+        payload: { type: object, additionalProperties: true }
+        reason: { type: string, maxLength: 1000 }
+        sourceEvidenceId: { type: string, maxLength: 160 }
+    ForgetRequest:
+      type: object
+      additionalProperties: false
+      required: [scope, idempotencyKey, recordType]
+      properties:
+        scope: { $ref: '#/components/schemas/MemoryScope' }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        recordType: { type: string, enum: [structured, event] }
+        recordId: { type: string, maxLength: 160 }
+        key: { type: string, maxLength: 160 }
+        mode: { type: string, enum: [retract, erase], default: retract }
+        reason: { type: string, maxLength: 1000 }
+    ContextBlock:
+      type: object
+      required: [kind, content, priority]
+      properties:
+        kind: { type: string }
+        content: { type: string }
+        priority: { type: integer }
+    ContextPack:
+      type: object
+      required: [contractVersion, query, scope, blocks, facts, events, relations, provenance, diagnostics]
+      properties:
+        contractVersion: { type: string, const: memory-runtime/v1 }
+        query: { type: string }
+        scope: { $ref: '#/components/schemas/MemoryScope' }
+        generatedAt: { type: string, format: date-time }
+        blocks:
+          type: array
+          items: { $ref: '#/components/schemas/ContextBlock' }
+        facts: { type: array, items: { type: object, additionalProperties: true } }
+        events: { type: array, items: { type: object, additionalProperties: true } }
+        relations: { type: array, items: { type: object, additionalProperties: true } }
+        provenance: { type: object, additionalProperties: true }
+        diagnostics: { type: object, additionalProperties: true }
+    JobReceipt:
+      type: object
+      required: [id, status, attempts]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [pending, running, succeeded, dead] }
+        attempts: { type: integer }
+        availableAt: { type: string, format: date-time }
+        startedAt: { type: string }
+        completedAt: { type: string }
+        result: { type: object, additionalProperties: true }
+        error: { type: string }
+    ObservationReceipt:
+      type: object
+      required: [contractVersion, id, idempotencyKey, status, duplicate, scope, evidenceIds]
+      properties:
+        contractVersion: { type: string, const: memory-runtime/v1 }
+        id: { type: string }
+        idempotencyKey: { type: string }
+        status: { type: string, enum: [accepted, queued, completed, failed] }
+        duplicate: { type: boolean }
+        scope: { $ref: '#/components/schemas/MemoryScope' }
+        threadId: { type: string }
+        extractionMode: { type: string, enum: [async, sync, none] }
+        evidenceIds: { type: array, items: { type: string } }
+        result: { type: object, additionalProperties: true }
+        error: { type: string }
+        job:
+          oneOf:
+            - $ref: '#/components/schemas/JobReceipt'
+            - type: 'null'
+    OperationReceipt:
+      type: object
+      required: [contractVersion, id, idempotencyKey, operationType, status, duplicate, result]
+      properties:
+        contractVersion: { type: string, const: memory-runtime/v1 }
+        id: { type: string }
+        idempotencyKey: { type: string }
+        operationType: { type: string, enum: [mutate, forget] }
+        status: { type: string, enum: [succeeded] }
+        duplicate: { type: boolean }
+        result: { type: object, additionalProperties: true }
+    Capabilities:
+      type: object
+      required: [contractVersion, service, operations, features, scope]
+      properties:
+        contractVersion: { type: string, const: memory-runtime/v1 }
+        service: { type: string }
+        mode: { type: string }
+        operations: { type: array, items: { type: string } }
+        extractionModes: { type: array, items: { type: string } }
+        features: { type: object, additionalProperties: { type: boolean } }
+        scope: { type: object, additionalProperties: true }
+    Error:
+      type: object
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string }
+        details: {}

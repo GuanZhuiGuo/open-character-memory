@@ -1,23 +1,21 @@
 # 未来 SDK 与存储路线
 
-## 本次明确不做
+## 当前已落地
 
-- 不发布独立 Memory SDK。
-- 不迁移 PostgreSQL。
-- 不接入 pgvector。
-- 不接入 OpenSearch。
+- `memory-runtime/v1` HTTP/OpenAPI 合同，包含 `observe / recall / expand / mutate / forget`。
+- JavaScript/TypeScript alpha SDK 与类型声明。
+- Pi Agent 和通用 `beforeModel / afterModel` 适配器。
+- 只读、服务端锁定作用域的 Memory MCP Server。
+- SQLite 持久化 observation、幂等回执与单机抽取任务，支持重试、退避和 dead 状态。
 
-这些项目是明确 backlog，不是 `0.5.0` 的隐藏能力。当前事实源仍是单机 SQLite，向量仍以 JSON 保存并在 Node 进程中计算。
+这些能力已在仓库内可用，但仍属 alpha：包尚未独立发布到 npm/PyPI，也没有完成多版本兼容矩阵。当前事实源仍是单机 SQLite，向量仍以 JSON 保存并在 Node 进程中计算。
 
-## SDK 何时值得做
+## 下一阶段 SDK
 
-满足任一条件时启动 SDK：
-
-- 第二个业务应用需要复用记忆写入、as-of 查询或召回。
-- 需要稳定的 TypeScript/Python 客户端、版本兼容和租户鉴权合同。
-- 需要把当前领域函数与 SQLite 方言解耦，支持远程 Memory Service。
-
-建议顺序：先定义 HTTP/OpenAPI 合同和兼容策略，再抽 Store/Graph/Retrieval 接口，最后发布 TypeScript SDK；不要直接把当前数据库函数包装成公共 API。
+- 将 `memory-core` 和 TypeScript SDK 发布为独立包，建立 semver 兼容策略、升级指南和契约测试矩阵。
+- 提供 Python SDK，保持与 OpenAPI DTO、错误码和幂等语义一致。
+- 抽象 Store / Vector / Graph / Job 适配器，使 Memory Service 不再直接依赖 SQLite 单例与 Studio 预置用户/角色记录。
+- 补齐多租户 API key、配额、审计、限流和轮换机制。
 
 ## PostgreSQL + pgvector 何时迁移
 
@@ -49,9 +47,9 @@ OpenSearch 对以下检索工作可能比当前 SQLite + 应用层向量扫描�
 
 ## 推荐演进顺序
 
-1. 先建立双时态与 Neo4j 投影的评测、延迟和失败指标。
-2. 将图投影 outbox 处理移到独立 worker，补死信与重放控制台。
-3. 抽象 Store/Graph/Retrieval 接口并冻结 API 合同。
-4. 数据量或并发命中阈值后迁移 PostgreSQL + pgvector。
-5. 只有搜索语料规模和混合检索指标证明需要时，再增加 OpenSearch 投影。
-6. 合同稳定后发布 SDK。
+1. 用第二个独立 Agent 完成接入验证，冻结 `memory-runtime/v1` 的兼容边界。
+2. 建立双时态、召回、任务和 Neo4j 投影的评测、延迟与失败指标。
+3. 抽象 Store / Vector / Graph / Job 适配器，发布 TypeScript SDK，再补 Python SDK。
+4. 将抽取和图投影任务移到带租约、死信与可观测性的独立 worker。
+5. 数据量或并发命中阈值后迁移 PostgreSQL + pgvector。
+6. 只有搜索语料规模和混合检索指标证明需要时，再增加 OpenSearch 投影。

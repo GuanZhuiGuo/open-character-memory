@@ -20,6 +20,7 @@ import {
 } from './lib/graph-store.js';
 import { getAgentRuntimeStatus } from './lib/pi-runtime.js';
 import { checkModelHealth, configuredModels } from './lib/providers/index.js';
+import { getReleaseNotes } from './lib/releases.js';
 import {
   CORE_RELATION_FAMILIES, ENTITY_TYPE_ONTOLOGY, EVENT_OPERATIONS,
   EXTRACTION_CONTEXT_MAX_MESSAGES, EXTRACTION_CONTEXT_MAX_TURNS, EXTRACTION_INTERVAL_MAX_TURNS,
@@ -28,6 +29,10 @@ import {
   listGraph, listMemoryForAdmin, listMemorySchemas, RELATIONSHIP_STAGE_THRESHOLDS,
   retrieveMemory, setMemoryValue
 } from './lib/memory.js';
+import {
+  expandMemory, forgetMemory, getMemoryJob, getMemoryServiceCapabilities, mutateMemory,
+  observeMemory, recallMemory, startMemoryJobWorker, stopMemoryJobWorker
+} from './lib/memory-service.js';
 import { getTrace, listTraces } from './lib/trace.js';
 import { parseSkillPackage } from './lib/skill-package.js';
 import { listPlots, listProps, listTools, listTriggers } from './lib/triggers.js';
@@ -179,7 +184,24 @@ function publicUser(row) {
   } : null;
 }
 
+function getMemoryServicePrincipal(request) {
+  const configuredKey = config.memoryService?.apiKey || '';
+  const authorization = String(request.headers.authorization || '');
+  if (!configuredKey || !authorization.startsWith('Bearer ')) return null;
+  const supplied = crypto.createHash('sha256').update(authorization.slice(7).trim()).digest();
+  const expected = crypto.createHash('sha256').update(configuredKey).digest();
+  if (!crypto.timingSafeEqual(supplied, expected)) return null;
+  return {
+    role: 'service',
+    userId: null,
+    tenantId: config.memoryService.tenantId,
+    displayName: 'Memory Service'
+  };
+}
+
 function getPrincipal(request) {
+  const servicePrincipal = getMemoryServicePrincipal(request);
+  if (servicePrincipal) return servicePrincipal;
   const cookies = parseCookies(request);
   const adminToken = cookies[ADMIN_SESSION_COOKIE];
   if (adminToken) {
@@ -218,6 +240,12 @@ function requireAdminPrincipal(principal, response) {
   return false;
 }
 
+function requireMemoryWriterPrincipal(principal, response) {
+  if (['admin', 'service'].includes(principal.role)) return true;
+  sendJson(response, 403, { error: '记忆确定性写入仅允许管理员或受信服务', code: 'MEMORY_WRITER_REQUIRED' });
+  return false;
+}
+
 function assertUserAccess(principal, requestedUserId) {
   const userId = safeText(requestedUserId, 100).trim();
   if (!userId) throw new HttpError(400, '缺少用户作用域', 'USER_SCOPE_REQUIRED');
@@ -228,6 +256,10 @@ function assertUserAccess(principal, requestedUserId) {
 }
 
 function userMayAccessRoute(pathname, method) {
+  if (pathname === '/v1/memory/capabilities' && method === 'GET') return true;
+  if (['/v1/memory/observe', '/v1/memory/recall', '/v1/memory/expand'].includes(pathname)
+    && method === 'POST') return true;
+  if (/^\/v1\/memory\/jobs\/[^/]+$/.test(pathname) && method === 'GET') return true;
   if (pathname === '/api/conversations' && ['GET', 'POST'].includes(method)) return true;
   if (pathname === '/api/chat' && method === 'POST') return true;
   if (/^\/api\/conversations\/[^/]+\/memory-extraction$/.test(pathname)
@@ -271,6 +303,28 @@ function queryScope(url) {
     storyId: url.searchParams.get('story_id') || 'main_story',
     branchId: url.searchParams.get('branch_id') || 'main'
   };
+}
+
+function memoryScopeWithAccess(principal, scope = {}) {
+  const subjectId = scope.subjectId ?? scope.subject_id ?? scope.userId ?? scope.user_id;
+  return {
+    ...scope,
+    tenantId: scope.tenantId ?? scope.tenant_id ?? config.memoryService.tenantId,
+    subjectId: assertUserAccess(principal, subjectId),
+    agentId: scope.agentId ?? scope.agent_id ?? '',
+    spaceId: scope.spaceId ?? scope.space_id ?? scope.storyId ?? scope.story_id ?? 'main_story',
+    branchId: scope.branchId ?? scope.branch_id ?? 'main'
+  };
+}
+
+function memoryScopeFromQuery(principal, searchParams) {
+  return memoryScopeWithAccess(principal, {
+    tenantId: searchParams.get('tenant_id') || config.memoryService.tenantId,
+    subjectId: searchParams.get('subject_id') || searchParams.get('user_id') || '',
+    agentId: searchParams.get('agent_id') || '',
+    spaceId: searchParams.get('space_id') || searchParams.get('story_id') || 'main_story',
+    branchId: searchParams.get('branch_id') || 'main'
+  });
 }
 
 function decodeRows(rows, fields) {
@@ -729,6 +783,18 @@ function architectureOverview(sceneId) {
       queryResolution: ['直接实体指代', '当前用户身份锚点', '关系意图', '图边方向解析', '证据事件展开'],
       sourceOfTruth: 'SQLite',
       projection: 'Neo4j'
+    },
+    headlessMemory: {
+      ...getMemoryServiceCapabilities(),
+      apiPrefix: '/v1/memory',
+      packages: ['memory-core', 'sdk', 'adapters/generic', 'adapters/pi', 'mcp-server'],
+      worker: {
+        persistence: 'SQLite memory_jobs',
+        delivery: 'at_least_once_attempts',
+        exactlyOnce: false,
+        distributed: false
+      },
+      compatibility: '原有 /api/chat、X 轮抽取、剧情、Trace 与历史数据路径保持不变'
     },
     runtime: getAgentRuntimeStatus(),
     capabilities: getCapabilityRuntimeStatus(),
@@ -1191,6 +1257,10 @@ function listAdminFeedback() {
 async function handleApi(request, response, url) {
   const method = request.method || 'GET';
   const pathname = url.pathname;
+  if (getMemoryServicePrincipal(request) && !pathname.startsWith('/v1/memory')) {
+    sendJson(response, 403, { error: 'Memory Service Key 仅可访问 v1 记忆契约', code: 'MEMORY_SERVICE_SCOPE_ONLY' });
+    return;
+  }
 
   if (pathname === '/api/auth/register' && method === 'POST') {
     const body = await readBody(request);
@@ -1325,10 +1395,60 @@ async function handleApi(request, response, url) {
     return;
   }
 
+  if (pathname === '/api/releases' && method === 'GET') {
+    sendJson(response, 200, getReleaseNotes(SYSTEM_VERSION));
+    return;
+  }
+
   const principal = requirePrincipal(request, response);
   if (!principal) return;
   if (principal.role === 'user' && !userMayAccessRoute(pathname, method)) {
     requireAdminPrincipal(principal, response);
+    return;
+  }
+
+  if (pathname === '/v1/memory/capabilities' && method === 'GET') {
+    sendJson(response, 200, getMemoryServiceCapabilities());
+    return;
+  }
+  if (pathname === '/v1/memory/observe' && method === 'POST') {
+    const body = await readBody(request);
+    body.scope = memoryScopeWithAccess(principal, body.scope);
+    const result = await observeMemory(body, {
+      traceId: request.headers['x-trace-id'] || request.headers.traceparent || ''
+    });
+    sendJson(response, result.status === 'queued' ? 202 : 200, result);
+    return;
+  }
+  if (pathname === '/v1/memory/recall' && method === 'POST') {
+    const body = await readBody(request);
+    body.scope = memoryScopeWithAccess(principal, body.scope);
+    sendJson(response, 200, await recallMemory(body));
+    return;
+  }
+  if (pathname === '/v1/memory/expand' && method === 'POST') {
+    const body = await readBody(request);
+    body.scope = memoryScopeWithAccess(principal, body.scope);
+    sendJson(response, 200, await expandMemory(body));
+    return;
+  }
+  if (pathname === '/v1/memory/mutate' && method === 'POST') {
+    if (!requireMemoryWriterPrincipal(principal, response)) return;
+    const body = await readBody(request);
+    body.scope = memoryScopeWithAccess(principal, body.scope);
+    sendJson(response, 200, await mutateMemory(body, { actorType: principal.role }));
+    return;
+  }
+  if (pathname === '/v1/memory' && method === 'DELETE') {
+    if (!requireMemoryWriterPrincipal(principal, response)) return;
+    const body = await readBody(request);
+    body.scope = memoryScopeWithAccess(principal, body.scope);
+    sendJson(response, 200, await forgetMemory(body));
+    return;
+  }
+  const memoryJobMatch = pathname.match(/^\/v1\/memory\/jobs\/([^/]+)$/);
+  if (memoryJobMatch && method === 'GET') {
+    sendJson(response, 200, getMemoryJob(memoryJobMatch[1], memoryScopeFromQuery(principal, url.searchParams)));
     return;
   }
 
@@ -1351,8 +1471,9 @@ async function handleApi(request, response, url) {
         scenes: listScenes(),
         database: {
           sourceOfTruth: 'SQLite', graphProjection: getGraphStoreStatus(),
-          temporalModel: '双时态', deferred: ['SDK', 'PostgreSQL + pgvector']
+          temporalModel: '双时态', deferred: ['Python SDK', 'PostgreSQL + pgvector', '分布式 worker']
         },
+        memoryService: getMemoryServiceCapabilities(),
         runtime: getAgentRuntimeStatus(),
         capabilities: getCapabilityRuntimeStatus(),
         models: configuredModels()
@@ -1367,8 +1488,9 @@ async function handleApi(request, response, url) {
       scenes: listScenes(),
       database: {
         sourceOfTruth: 'SQLite', graphProjection: getGraphStoreStatus(),
-        temporalModel: '双时态', deferred: ['SDK', 'PostgreSQL + pgvector']
+        temporalModel: '双时态', deferred: ['Python SDK', 'PostgreSQL + pgvector', '分布式 worker']
       },
+      memoryService: getMemoryServiceCapabilities(),
       runtime: getAgentRuntimeStatus(),
       capabilities: getCapabilityRuntimeStatus(),
       models: configuredModels()
@@ -1816,7 +1938,9 @@ export const server = http.createServer(async (request, response) => {
     if (config.basePath && url.pathname.startsWith(`${config.basePath}/`)) {
       routedUrl.pathname = url.pathname.slice(config.basePath.length) || '/';
     }
-    if (routedUrl.pathname.startsWith('/api/')) await handleApi(request, response, routedUrl);
+    if (routedUrl.pathname.startsWith('/api/') || routedUrl.pathname.startsWith('/v1/')) {
+      await handleApi(request, response, routedUrl);
+    }
     else serveStatic(response, routedUrl.pathname);
   } catch (error) {
     if (response.headersSent) {
@@ -1830,6 +1954,9 @@ export const server = http.createServer(async (request, response) => {
     });
   }
 });
+
+server.on('listening', startMemoryJobWorker);
+server.on('close', stopMemoryJobWorker);
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   server.listen(config.port, config.host, () => {

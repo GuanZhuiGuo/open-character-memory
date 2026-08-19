@@ -1,0 +1,15 @@
+{
+  "name": "@open-character-memory/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./index.js",
+  "bin": {
+    "open-character-memory-mcp": "./index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "@open-character-memory/sdk": "0.1.0",
+    "zod": "^4.2.0"
+  }
+}

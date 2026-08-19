@@ -45,6 +45,7 @@ const state = {
   architectureOverview: null,
   architectureSources: new Map(),
   architectureAsking: false,
+  releaseNotes: null,
   adminUsers: [],
   feedback: [],
   sending: false,
@@ -98,6 +99,14 @@ function renderMarkdown(value) {
   return window.DOMPurify.sanitize(markup, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ['style', 'iframe', 'form', 'input', 'button', 'textarea', 'select', 'option']
+  });
+}
+
+function renderInlineMarkdown(value) {
+  if (!window.marked?.parseInline || !window.DOMPurify?.sanitize) return escapeHtml(value);
+  return window.DOMPurify.sanitize(window.marked.parseInline(String(value ?? ''), { gfm: true }), {
+    ALLOWED_TAGS: ['code', 'strong', 'em'],
+    ALLOWED_ATTR: []
   });
 }
 
@@ -421,6 +430,10 @@ async function initialize() {
 async function loadBootstrap() {
   state.bootstrap = await api('/api/bootstrap');
   $('#appVersion').textContent = `v${state.bootstrap.systemVersion || '—'}`;
+  $('#releaseNotesButton').setAttribute(
+    'aria-label',
+    `查看 v${state.bootstrap.systemVersion || '—'} 版本发布说明`
+  );
   state.role = state.bootstrap.role || state.role || 'user';
   if (!['management', 'user'].includes(state.portalMode)) {
     state.portalMode = state.role === 'admin' ? 'management' : 'user';
@@ -446,6 +459,99 @@ async function loadBootstrap() {
   applyPortalUi();
   await loadConversations();
   refreshIcons();
+}
+
+const RELEASE_SECTION_ICONS = {
+  added: 'circle-plus',
+  changed: 'replace',
+  fixed: 'badge-check',
+  removed: 'circle-minus',
+  security: 'shield-check',
+  validation: 'flask-conical'
+};
+
+function releaseDateLabel(value) {
+  if (!value) return '下一版本';
+  const date = new Date(`${value}T00:00:00+08:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric', month: 'long', day: 'numeric'
+  }).format(date);
+}
+
+function releaseDetailHtml(release, notes) {
+  if (!release) return emptyState('history', '暂无版本记录');
+  const statusLabel = release.isUnreleased ? '开发中' : (release.isCurrent ? '当前正式版本' : '历史版本');
+  const sectionHtml = release.sections.map((section) => `
+    <section class="release-section release-section-${escapeHtml(section.key)}">
+      <header>
+        <i data-lucide="${RELEASE_SECTION_ICONS[section.key] || 'list-checks'}"></i>
+        <div><h5>${escapeHtml(section.title)}</h5><small>${section.items.length} 项</small></div>
+      </header>
+      <ul>${section.items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</ul>
+    </section>`).join('');
+  const externalLink = release.githubUrl
+    ? `<a class="button secondary compact" href="${escapeHtml(release.githubUrl)}" target="_blank" rel="noopener noreferrer"><i data-lucide="github"></i>GitHub Release<i data-lucide="external-link"></i></a>`
+    : `<a class="button secondary compact" href="${escapeHtml(notes.releasesUrl)}" target="_blank" rel="noopener noreferrer"><i data-lucide="github"></i>发布记录<i data-lucide="external-link"></i></a>`;
+  return `
+    <header class="release-detail-header">
+      <div class="release-status-line"><span class="badge ${release.isCurrent ? 'blue' : (release.isUnreleased ? 'amber' : '')}">${statusLabel}</span><time>${escapeHtml(releaseDateLabel(release.date))}</time></div>
+      <div class="release-title-row">
+        <div><span class="eyebrow">OPEN CHARACTER MEMORY</span><h4>${release.isUnreleased ? '待发布更新' : `v${escapeHtml(release.version)}`}</h4></div>
+        <strong>${release.itemCount} 项变更</strong>
+      </div>
+      <p>${renderInlineMarkdown(release.summary || '该版本暂无摘要。')}</p>
+      <div class="release-detail-actions"><span><i data-lucide="file-text"></i>页面内容来自仓库 ${escapeHtml(notes.source)}</span>${externalLink}</div>
+    </header>
+    <div class="release-sections">${sectionHtml || emptyState('list-checks', '该版本暂无明细')}</div>`;
+}
+
+async function openReleaseNotes() {
+  const trigger = $('#releaseNotesButton');
+  trigger.disabled = true;
+  trigger.setAttribute('aria-busy', 'true');
+  try {
+    state.releaseNotes ||= await api('/api/releases');
+    const notes = state.releaseNotes;
+    const current = notes.releases.find((release) => release.isCurrent)
+      || notes.releases.find((release) => !release.isUnreleased)
+      || notes.releases[0];
+    const unreleasedCount = notes.releases.find((release) => release.isUnreleased)?.itemCount || 0;
+    const body = `
+      <div class="release-center">
+        <nav class="release-version-nav" aria-label="版本列表">
+          <header><span class="eyebrow">RELEASE HISTORY</span><strong>发布历史</strong><small>${notes.releases.filter((item) => !item.isUnreleased).length} 个正式版本</small></header>
+          <div class="release-version-list">${notes.releases.map((release) => `
+            <button type="button" class="release-version-button ${release.version === current?.version ? 'active' : ''}" data-release-version="${escapeHtml(release.version)}" aria-pressed="${release.version === current?.version}">
+              <span>${release.isUnreleased ? '待发布' : `v${escapeHtml(release.version)}`}${release.isCurrent ? '<b>当前</b>' : ''}</span>
+              <small>${release.isUnreleased ? `${release.itemCount} 项开发中` : escapeHtml(release.date)}</small>
+            </button>`).join('')}</div>
+          <footer><i data-lucide="git-branch"></i><span>${unreleasedCount ? `${unreleasedCount} 项更新尚未进入正式版本` : '当前工作区与正式版本一致'}</span></footer>
+        </nav>
+        <article id="releaseDetail" class="release-detail" aria-live="polite">${releaseDetailHtml(current, notes)}</article>
+      </div>`;
+    openModal({ title: 'Release Notes', body, width: 940, readOnly: true });
+    const modal = $('.modal', $('#modalRoot'));
+    modal?.classList.add('release-notes-modal');
+    $$('[data-release-version]', $('#modalRoot')).forEach((button) => button.addEventListener('click', () => {
+      const selected = notes.releases.find((release) => release.version === button.dataset.releaseVersion);
+      $('#releaseDetail').innerHTML = releaseDetailHtml(selected, notes);
+      $$('[data-release-version]', $('#modalRoot')).forEach((item) => {
+        const active = item === button;
+        item.classList.toggle('active', active);
+        item.setAttribute('aria-pressed', String(active));
+      });
+      $('#releaseDetail').scrollTop = 0;
+      refreshIcons();
+    }));
+    secureRenderedLinks($('#modalRoot'));
+    refreshIcons();
+  } catch (error) {
+    toast(`发布说明加载失败：${error.message}`, 'error');
+  } finally {
+    trigger.disabled = false;
+    trigger.removeAttribute('aria-busy');
+  }
 }
 
 function renderSelectors() {
@@ -845,7 +951,7 @@ async function loadArchitectureOverview() {
   state.architectureOverview = await api(`/api/architecture/overview?scene_id=${encodeURIComponent(sceneId)}`);
   const {
     thresholds, compression, timing, index, scene, runtime = {}, capabilities = {}, graphStore = {}, temporal = {},
-    graphOntology = {}
+    graphOntology = {}, headlessMemory = {}
   } = state.architectureOverview;
   const main = thresholds.mainModel;
   const extraction = thresholds.extraction;
@@ -861,13 +967,17 @@ async function loadArchitectureOverview() {
   $('#architecturePiNodeMeta').textContent = runtime.name === 'pi-agent-core'
     ? `ReAct 工具循环已启用 · 最多 ${Number(runtime.maxToolCalls || 0)} 次工具 / ${Number(runtime.maxModelTurns || 0)} 次模型请求 · ${capabilities.mcpClient || 'MCP Client'}`
     : 'Legacy 模式 · 可通过 AGENT_RUNTIME=pi 启用';
+  const memoryModeCount = Array.isArray(headlessMemory.extractionModes)
+    ? headlessMemory.extractionModes.length
+    : 3;
+  $('#architectureHeadlessNodeMeta').textContent = `v1 原子 API · SDK / Pi / MCP · ${memoryModeCount} 种抽取模式`;
   $('#architectureMemoryToolMeta').textContent = retrieval.agentMemoryToolsEnabled
     ? `按记忆意图/证据缺口路由 · 只读锁定作用域 · 最多 ${Number(retrieval.agentMemoryMaxCalls || 0)} 次 / 每次 ${Number(retrieval.agentMemoryMaxQueries || 0)} 个 Query`
     : '当前场景已关闭主模型主动记忆工具';
   $('#architectureTemporalNodeMeta').textContent = temporal.model === 'bitemporal'
     ? `${(graphOntology.eventOperations || ['create', 'update', 'supersede', 'retract']).join(' / ')} → 双时态版本`
     : '抽取 → 结构化派生 → 事件图谱 → 触发';
-  $('#architectureSqliteNodeMeta').textContent = '双时态账本、向量、Trace、outbox；大规模混合检索可增 OpenSearch';
+  $('#architectureSqliteNodeMeta').textContent = '双时态账本、证据、向量、持久化任务与 outbox；生产升级 PostgreSQL + pgvector';
   const graphReady = graphStore.mode === 'neo4j' && graphStore.connected;
   $('#architectureNeo4jNodeMeta').textContent = graphStore.mode === 'neo4j'
     ? `${graphReady ? '已连接' : '降级回退'} · ${graphOntology.relationModel === 'controlled_core_with_open_extension' ? '受控关系族 + 开放扩展' : '关系投影'} · 待投影 ${Number(graphStore.pendingProjections || 0)} 个 scope`
@@ -3431,6 +3541,8 @@ $('#logoutButton').addEventListener('click', async () => {
   setAuthMode('user');
   showLogin();
 });
+
+$('#releaseNotesButton').addEventListener('click', openReleaseNotes);
 
 $$('.nav-item').forEach((button) => button.addEventListener('click', () => navigate(button.dataset.page)));
 $$('[data-portal-mode]').forEach((button) => button.addEventListener('click', () => switchPortalMode(button.dataset.portalMode)));
