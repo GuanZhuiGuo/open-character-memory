@@ -6,15 +6,15 @@
 
 Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的开源记忆 Agent 参考实现和可视化工作台。它不只“记得用户”，也会管理角色说过的话、双方共同经历、事件更正、关系状态与剧情分支。系统将管理员定义的结构化字段、用户明确偏好、事件图谱、当前有效状态和混合召回分层管理。
 
-当前 `0.5.0` 采用 **Pi Agent Core ReAct runtime + 纠正式/Agentic 记忆召回 + SQLite 双时态主账本 + Neo4j 图查询投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
+当前 `0.6.0` 采用 **Pi Agent Core ReAct runtime + 多粒度/纠正式/Agentic 记忆召回 + SQLite 双时态主账本 + Neo4j 可重建事实图与语义关联图投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
 
-![Open Character Memory 总体架构](docs/assets/overall-architecture-v0.5.0.png)
+![Open Character Memory 总体架构](docs/assets/overall-architecture-v0.6.0.png)
 
 ## 项目特点
 
 - **双向记忆**：分开用户事实、角色固定属性和按用户-角色隔离的“我们的故事”。
 - **有效状态优先**：使用 `create / enrich / update / supersede / retract` 操作和双时态区间区分补充、现实变化、旧认知纠正、撤回与历史回放。
-- **图谱与 Agentic 召回**：事件、实体、声明和证据关系可视化；回复前 Corrective Planner 可改写漏召回 Query，生成中主模型可按证据缺口调用只读记忆工具。
+- **多粒度与 Agentic 召回**：同一规范事件生成六类可重建检索视图；动态 Router、语义关联图和有界 PPR 发现候选，回复前 Corrective Planner 与生成中只读记忆工具继续补齐证据。
 - **可配置记忆契约**：管理员可定义结构化字段、抽取节奏、提示词、召回策略和基于状态的剧情/道具触发。
 - **受控 Agent 能力**：已解锁的 Skill/MCP 才会当轮暴露，工具结果回传 Pi 后再由主模型续答，并保留确认、白名单和执行回执。
 - **可观测与可评测**：Trace 展示完整 Prompt、记忆注入、召回证据、模型/工具循环与轮后写入，仓库附带离线回归评测。
@@ -38,6 +38,7 @@ await memory.observe({
 ```
 
 完整边界、任务语义、MCP 启动方式和已知限制见 [`docs/headless-memory-runtime.md`](docs/headless-memory-runtime.md)。
+六视图、动态 Router、语义关联图、PPR、证据保护过滤与上线顺序见 [`docs/multigranularity-memory-retrieval.md`](docs/multigranularity-memory-retrieval.md)。
 
 ## 方案对比
 
@@ -57,11 +58,13 @@ await memory.observe({
 - `active / superseded / retracted` 状态和完整版本历史。`enrich` 会保留原有有效声明并增加新细节；`superseded` 表示旧结论已被新版本替代，`retracted` 表示结论被明确撤回或取消。
 - 事件、声明、关系边和结构化历史采用双时态模型：`valid_from / valid_to` 回答“故事世界中何时成立”，`transaction_from / transaction_to` 回答“系统何时知道并采用”；事件/图查询支持 `valid_at + known_at` 历史回放。
 - 事件对齐器会在模型生成不同 event key 时，仍然将地点/时间更新到原事件槽位。
-- 三层记忆召回：首轮使用向量、关键词和图关系形成轻量目录及严格详情候选；回复前 Corrective Planner 可展开目录，也可在目录为空/不足时改写 Query，并跳出首轮意图池搜索当前作用域全部 active 事件；生成中主模型若仍发现证据缺口，可调用 `memory_search / memory_expand`，取得 `toolResult` 后再次推理。
+- 五阶段记忆召回：规范事件投影为 `turn / event / claim / episode / summary / entity_keyword` 六类视图；Router 按候选熵、置信度、间隔和覆盖度动态配权；语义关联图通过 GMM 自适应建边并以有界 PPR 扩散候选；Corrective Planner 可在目录为空/不足时改写 Query；生成中主模型仍可调用 `memory_search / memory_expand` 补齐证据。
+- 多粒度视图不是事实副本。事件、声明、关系和双时态状态仍由规范记录裁决；视图与语义边可从 SQLite 主账本完整重建，默认 `Shadow` 观测，支持稳定作用域 A/B 后再切换动态排序。
+- Planner 之后可启用 LLM 长期记忆上下文过滤。模型只能在已选事件中提议删除重复或无关详情，不能新增/改写事件；服务端强制恢复直接证据、关系证据和有序时间线成员，模型异常或证据不足时保留全部候选。
 - 图谱本体采用“高度抽象实体类型 + 受控核心关系族 + 可追溯开放谓词”：具体关系文本用于解释，`child_of / parent_of / spouse_of / sibling_of / owns / located_at / participates_in / related_to` 关系族用于通用遍历。查询会先解析当前用户身份锚点和“我的女儿/父亲/配偶/物品”等关系意图，再扩展证据事件。
 - 确定性关系召回会生成“当前用户锚点 + 关系族 + 关系对象 + 有效证据边”的回答契约。若最近对话中的历史 assistant 旧答与当前有效图谱冲突，本轮隔离旧答并以长期记忆为准；该策略覆盖亲属、配偶、所属物和后续可扩展的关系族，并在 Trace 中显示采用原因与省略消息数。
-- 场景级召回策略：可分别配置候选目录阈值、纯向量详情阈值、Corrective Planner、零候选纠正、Planner 改写数、主模型记忆工具及其调用/Query 预算、向量/关键词/图谱通道、TopK、排序权重、图谱跳数和时效半衰期；`Active Only` 与四级作用域是不可关闭的硬保护。
-- 召回测试工作台：展示实时 Embedding 模型/维度/向量预览、候选目录、详情资格、Planner 决策、图谱证据事件、过滤原因和最终 Prompt 注入片段。
+- 场景级召回策略：除原有阈值、Planner、主动记忆工具、通道和 TopK 外，可配置 Router 的 `fixed / shadow / dynamic / ab`、A/B 比例、关联边阈值/最大度、PPR 阻尼/迭代/权重，以及上下文过滤的 `off / shadow / active`；`Active Only` 与四级作用域是不可关闭的硬保护。
+- 召回测试工作台：展示实时 Embedding、六粒度熵与权重、候选目录、关联图来源、PPR 节点/边预算、Planner 决策、过滤提议与服务端恢复证据，以及最终 Prompt 注入片段。管理员可按当前作用域重建原生视图 Embedding、语义关联边和 Neo4j 投影。
 - 角色固定属性按角色全局常驻注入；用户事实写入 `user_memory`；角色和用户共同发生的承诺、物件、对话进展写入按用户-角色-故事-分支隔离的 `shared_story`，不会串到该角色与其他用户的会话。
 - 修改已投入使用的角色人设或固定属性时，系统展示影响范围并要求二次确认，同时保留角色版本历史。
 - “剧情与道具”工作台：剧情节点按前置节点组成故事树；低代码触发器通过下拉选择结构化记忆、剧情/道具状态、判断条件和后续动作，并实时生成可读规则预览。预设“雨夜来信”包含男、女、非二元/不透露三条无刻板印象支线及各自后续章节，性别只接受用户明确自述。
@@ -76,7 +79,7 @@ await memory.observe({
 - 单条聊天消息最多 1000 个 Unicode 字符，客户端即时拦截且服务端再次校验；用户总数达到 15 后关闭自助注册并提示联系韩康获取体验账户。
 - 文本 Provider 支持 Ark、OpenAI、Anthropic 和离线 Mock；Embedding 支持 Ark、OpenAI 和本地确定性降级，可独立选择。
 - 主回复由 `@earendil-works/pi-agent-core` 承担 ReAct 式 turn 状态、生命周期与工具循环。服务端按记忆意图/已有证据路由只读 `memory_search / memory_expand`，并按解锁资格、工具白名单、确认策略、主机/命令白名单和次数上限额外暴露 Skill/MCP；两类结果都以标准 `toolResult` 返回 Pi 后触发模型二次推理。记忆工具不能写状态，也不能接受模型传入 user/agent/story/branch。
-- Neo4j 保存当前实体、事件、声明和证据关系的只读图投影；SQLite 提交成功后按 scope 合并 outbox，投影失败不丢主记录，可由 `POST /api/admin/graph/replay` 重放。
+- Neo4j 保存当前实体、事件、声明、证据关系、六类 MemoryView 和 `ASSOCIATED_WITH` 语义边的只读投影；SQLite 提交成功后按 scope 合并 outbox，投影失败不丢主记录，可由 `POST /api/admin/graph/replay` 重放。
 - 主模型 Input 分为稳定前缀与动态上下文：角色人设、通用硬规则和角色固定属性可缓存；服务器当前时间、结构化记忆、剧情、召回结果与短期对话逐轮重新编译。Ark 默认只展示 Responses usage 中的 Provider 托管缓存；`cached_tokens=0` 表示上游未报告命中或本次未命中，不能推断为本地缓存故障。只有配置兼容的 Endpoint ID 并显式设置 `ARK_PREFIX_CACHE_MODE=common_prefix` 时才使用 Context API。
 
 ## 运行
@@ -135,12 +138,16 @@ docker compose up --build
   -> 显式控制记忆快速更新
   -> 常驻结构化记忆加载
   -> 条件触发器 / function call
+  -> Active Only + user/agent/story/branch 作用域硬过滤
+  -> 六粒度视图检索 -> 低熵 Router（Shadow / Dynamic / A-B）
+  -> GMM 语义关联图 -> 有界 PPR 候选扩散（最多 2 跳 / 240 节点）
   -> 事件/实体/关系轻量候选目录（不进入主模型 Input）
   -> Corrective Recall Planner 判断证据充分性
      -> 目录可用：请求事件详情或图谱证据
      -> 目录为空/不足：改写 Query，跨首轮候选池检索当前 scope 全部 active 事件
   -> 严格详情门槛 + Active Only + 命名空间硬过滤
   -> 合并有效 Claim、相关事件和有证据的图关系
+  -> LLM 上下文过滤提议 -> 服务端恢复直接证据、关系证据和时间线成员
   -> Prompt 编译
   -> 当轮工具路由：记忆问题按需暴露只读 memory_search / memory_expand
                   + 已解锁 Skill 清单 / MCP tools/list -> 当轮能力白名单
@@ -174,7 +181,8 @@ docker compose up --build
 - 固定记忆：`memory_schemas` / `memory_values` / `memory_history`
 - 场景配置：`scenes` / `memory_profiles` / `retrieval_profiles` / `event_extraction_profiles`
 - 图谱：`entities` / `entity_edges` / `events` / `event_entities` / `claims`；事件通过 `memory_space` 区分 `user_memory` 与 `shared_story`，关系边通过 `event_id` 指向证据事件
-- 图投影：`graph_projection_outbox` 合并同一 `user + agent + story + branch` 的待投影任务；Neo4j 使用 `MemoryScope / MemoryEntity / MemoryEvent / MemoryClaim` 节点以及 `INVOLVES / SUBJECT / EVIDENCE / RELATED` 关系
+- 多粒度检索：`memory_views` 保存六类可重建视图及各自 Embedding；`memory_associations` 保存同一作用域内的语义关联边。两者都不能替代规范事件或裁决 active 版本。
+- 图投影：`graph_projection_outbox` 合并同一 `user + agent + story + branch` 的待投影任务；Neo4j 使用 `MemoryScope / MemoryEntity / MemoryEvent / MemoryClaim / MemoryView` 节点，以及事实关系和 `ASSOCIATED_WITH` 语义关系
 - Headless 契约：`memory_observations` / `memory_observation_messages` 保存外部 Agent 证据，`memory_jobs` 保存可重试抽取任务，`memory_operation_receipts` 保存幂等写回执
 - 角色记忆：`agents.fixed_attributes_json` / `agents.profile_version` / `agent_profile_history`
 - 向量：`embeddings`

@@ -24,16 +24,16 @@ test('release notes parse linked, historical, and unreleased changelog entries',
 });
 
 test('repository release notes expose the current version and detailed published history', () => {
-  const notes = getReleaseNotes('0.5.0');
+  const notes = getReleaseNotes('0.6.0');
   const current = notes.releases.find((release) => release.isCurrent);
   const diagnosticRelease = notes.releases.find((release) => release.version === '0.4.4');
   const temporalGraphRelease = notes.releases.find((release) => release.version === '0.4.3');
   const baselineRelease = notes.releases.find((release) => release.version === '0.2.4');
 
-  assert.equal(notes.currentVersion, '0.5.0');
+  assert.equal(notes.currentVersion, '0.6.0');
   assert.ok(current);
   assert.ok(current.itemCount >= 10);
-  assert.match(current.githubUrl, /releases\/tag\/v0\.5\.0$/);
+  assert.match(current.githubUrl, /releases\/tag\/v0\.6\.0$/);
   assert.ok(diagnosticRelease);
   assert.ok(diagnosticRelease.sections.some((section) => section.key === 'validation'));
   assert.match(temporalGraphRelease.githubUrl, /releases\/tag\/v0\.4\.3$/);

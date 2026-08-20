@@ -11,7 +11,7 @@
 
 ## 代码与接口
 
-- [ ] 固定版本为 `v0.5.0`，创建 annotated tag，不把工作区未提交内容混入发布。
+- [ ] 固定版本为 `v0.6.0`，创建 annotated tag，不把工作区未提交内容混入发布。
 - [ ] Ark、OpenAI、Anthropic 和 Mock 的配置项均有说明；无密钥测试不会发起真实请求。
 - [ ] 缓存失败可回退完整请求；缓存键随角色版本、场景版本、模型和 Prompt 变化。
 - [ ] Trace 能看到 Provider、输入 Token、缓存 Token、状态与命中率，但不泄露凭据。
@@ -34,12 +34,12 @@ git diff --check
 npm test
 npm run eval
 npm run check:open-source
-docker build -t open-character-memory:0.5.0 .
+docker build -t open-character-memory:0.6.0 .
 git add <reviewed-files>
-git commit -m "Release v0.5.0 Open Character Memory"
-git tag -a v0.5.0 -m "Open Character Memory v0.5.0"
+git commit -m "Release v0.6.0 Open Character Memory"
+git tag -a v0.6.0 -m "Open Character Memory v0.6.0"
 git push origin <branch>
-git push origin v0.5.0
+git push origin v0.6.0
 ```
 
 首次发布前先创建空远程仓库并配置分支保护、私密漏洞报告和 Actions 权限。不要在运行中的服务器目录直接逐文件覆盖；部署应拉取已验证 commit 或镜像 digest，健康检查成功后再切换流量。

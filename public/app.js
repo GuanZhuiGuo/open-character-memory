@@ -974,15 +974,22 @@ async function loadArchitectureOverview() {
   $('#architectureMemoryToolMeta').textContent = retrieval.agentMemoryToolsEnabled
     ? `按记忆意图/证据缺口路由 · 只读锁定作用域 · 最多 ${Number(retrieval.agentMemoryMaxCalls || 0)} 次 / 每次 ${Number(retrieval.agentMemoryMaxQueries || 0)} 个 Query`
     : '当前场景已关闭主模型主动记忆工具';
+  $('#architectureRouterNodeMeta').textContent = retrieval.granularity?.enabled
+    ? `六视图 · ${retrieval.granularity.routerMode || 'shadow'} · 融合权重 ${Number(retrieval.granularity.scoreWeight || 0).toFixed(2)}`
+    : '当前场景已关闭多粒度视图';
+  $('#architectureAssociationNodeMeta').textContent = retrieval.associationGraph?.enabled
+    ? `${retrieval.associationGraph.method || 'gmm_adaptive'} · 最大度 ${Number(retrieval.associationGraph.maximumDegree || 0)} · PPR ${retrieval.personalizedPageRank?.enabled ? '启用' : '关闭'}`
+    : '当前场景已关闭语义关联图';
+  $('#architectureFilterNodeMeta').textContent = `${retrieval.contextFilter?.mode || 'shadow'} · 至少 ${Number(retrieval.contextFilter?.minimumCandidates || 2)} 条时评估 · 最少保留 ${Number(retrieval.contextFilter?.minimumKeep || 1)} 条`;
   $('#architectureTemporalNodeMeta').textContent = temporal.model === 'bitemporal'
     ? `${(graphOntology.eventOperations || ['create', 'update', 'supersede', 'retract']).join(' / ')} → 双时态版本`
     : '抽取 → 结构化派生 → 事件图谱 → 触发';
-  $('#architectureSqliteNodeMeta').textContent = '双时态账本、证据、向量、持久化任务与 outbox；生产升级 PostgreSQL + pgvector';
+  $('#architectureSqliteNodeMeta').textContent = '双时态账本、六视图、语义关联边、持久化任务与 outbox；生产升级 PostgreSQL + pgvector';
   const graphReady = graphStore.mode === 'neo4j' && graphStore.connected;
   $('#architectureNeo4jNodeMeta').textContent = graphStore.mode === 'neo4j'
-    ? `${graphReady ? '已连接' : '降级回退'} · ${graphOntology.relationModel === 'controlled_core_with_open_extension' ? '受控关系族 + 开放扩展' : '关系投影'} · 待投影 ${Number(graphStore.pendingProjections || 0)} 个 scope`
+    ? `${graphReady ? '已连接' : '降级回退'} · 事实关系 + 语义关联投影 · 待投影 ${Number(graphStore.pendingProjections || 0)} 个 scope`
     : (graphStore.mode === 'sqlite'
-      ? 'SQLite 降级模式 · 设置 GRAPH_STORE=neo4j 后启用投影'
+      ? 'SQLite 降级模式 · 设置 GRAPH_STORE=neo4j 后投影事实图与语义关联图'
       : '运行态未连接 · Compose/生产环境默认启用 Neo4j');
   $('#architectureExtractionNodeTitle').textContent = `长期记忆更新（每 ${extractionInterval} 轮）`;
   $('#architectureExtractionStepTitle').textContent = '长期记忆更新';
@@ -1573,6 +1580,47 @@ function scoreText(value) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(4) : '-';
 }
 
+function granularityRouterHtml(router, candidates = [], { compact = false } = {}) {
+  if (!router?.stats?.length) return '';
+  const titles = new Map(candidates.map((candidate) => [candidate.id, candidate.title]));
+  const modeLabel = router.affectsRanking
+    ? '动态路由已生效'
+    : (router.requestedMode === 'shadow' ? 'Shadow 观测' : '固定排序组');
+  return `<section class="granularity-router ${compact ? 'compact' : ''}" aria-label="多粒度记忆路由">
+    <header><div><i data-lucide="waypoints"></i><span><strong>多粒度 Router</strong><small>${escapeHtml(router.viewCount)} 个视图候选 · 低熵粒度获得更高权重</small></span></div><span class="badge ${router.affectsRanking ? 'blue' : 'amber'}">${escapeHtml(modeLabel)}</span></header>
+    <div class="granularity-router-grid">${router.stats.map((item) => {
+      const hits = (item.topHits || []).map((hit) => titles.get(hit.eventId) || hit.eventId.slice(-8)).join('、');
+      return `<article class="granularity-router-card ${item.selectedHitCount ? 'hit' : ''}">
+        <div><strong>${escapeHtml(item.label || item.viewType)}</strong><span>${(Number(item.weight || 0) * 100).toFixed(1)}%</span></div>
+        <dl><div><dt>熵</dt><dd>${scoreText(item.entropy)}</dd></div><div><dt>候选</dt><dd>${Number(item.candidateCount || 0)}</dd></div><div><dt>命中</dt><dd>${Number(item.selectedHitCount || 0)}</dd></div></dl>
+        <small title="${escapeHtml(hits)}">${escapeHtml(hits || '本粒度无候选')}</small>
+      </article>`;
+    }).join('')}</div>
+    ${router.requestedMode === 'ab' ? `<footer>A/B bucket ${Number(router.ab?.bucket || 0)} · 动态组 ${Number(router.ab?.dynamicPercent || 0)}%</footer>` : ''}
+  </section>`;
+}
+
+function retrievalExpansionHtml(diagnostics = {}, candidates = [], { compact = false } = {}) {
+  const association = diagnostics.associationGraph;
+  const ppr = diagnostics.personalizedPageRank;
+  const filter = diagnostics.contextFilter;
+  if (!association && !ppr && !filter) return '';
+  const titles = new Map(candidates.map((candidate) => [candidate.id, candidate.title]));
+  const eventNames = (ids = []) => ids.map((id) => titles.get(id) || String(id).slice(-8)).join('、');
+  const pprEvents = (ppr?.events || []).filter((item) => !item.seed).map((item) => item.eventId);
+  const proposedDrops = filter?.proposedDropEventIds || [];
+  const filterState = filter?.applied ? '已生效'
+    : (filter?.mode === 'shadow' ? 'Shadow' : (filter?.status === 'disabled' ? '已关闭' : '未过滤'));
+  return `<section class="retrieval-guardrail ${compact ? 'compact' : ''}" aria-label="关联扩散与上下文过滤">
+    <header><div><i data-lucide="git-branch"></i><span><strong>关联扩散与证据护栏</strong><small>语义边只用于发现候选，不能覆盖规范事实</small></span></div></header>
+    <div class="retrieval-guardrail-grid">
+      <article><span class="guardrail-icon"><i data-lucide="share-2"></i></span><div><small>语义关联图</small><strong>${Number(association?.edges || 0)} 条边</strong><p>${escapeHtml(association?.source || 'disabled')} · ${escapeHtml(association?.method || '—')}</p></div></article>
+      <article><span class="guardrail-icon"><i data-lucide="route"></i></span><div><small>有界 PPR</small><strong>${Number(ppr?.nodesVisited || 0)} 节点 · ${Number(ppr?.edgesUsed || 0)} 边</strong><p title="${escapeHtml(eventNames(pprEvents))}">${ppr?.status === 'success' ? `扩展 ${pprEvents.length} 个事件 · ${Number(ppr.iterations || 0)} 次迭代` : escapeHtml(ppr?.reason || ppr?.status || '未运行')}</p></div></article>
+      <article><span class="guardrail-icon"><i data-lucide="list-filter"></i></span><div><small>LLM 上下文过滤</small><strong>${escapeHtml(filterState)} · 保留 ${Number(filter?.proposalKeepEventIds?.length || 0)}</strong><p title="${escapeHtml(eventNames(proposedDrops))}">${escapeHtml(filter?.reason || (proposedDrops.length ? `拟移除 ${proposedDrops.length} 条` : '未移除候选'))}</p></div></article>
+    </div>
+  </section>`;
+}
+
 function renderRetrievalResult(payload) {
   const retrieval = payload.retrieval;
   const embedding = retrieval.queryEmbedding;
@@ -1600,7 +1648,8 @@ function renderRetrievalResult(payload) {
         <div><span>意图过滤</span><strong>${pipeline.afterIntentFilter}</strong></div><i data-lucide="chevron-right"></i>
         <div><span>轻量目录</span><strong>${pipeline.afterCatalogThreshold}</strong></div><i data-lucide="chevron-right"></i>
         <div><span>确定性 / 规划可选</span><strong>${pipeline.expansionEligible} / ${pipeline.plannerEligible ?? pipeline.expansionEligible}</strong></div><i data-lucide="chevron-right"></i>
-        <div><span>最终证据合并</span><strong>${pipeline.afterRelevanceThreshold}</strong></div><i data-lucide="chevron-right"></i>
+        <div><span>召回证据合并</span><strong>${pipeline.afterRelevanceThreshold}</strong></div><i data-lucide="chevron-right"></i>
+        <div><span>上下文过滤</span><strong>${pipeline.afterContextFilter ?? pipeline.afterRelevanceThreshold}</strong></div><i data-lucide="chevron-right"></i>
         <div class="selected"><span>最终 TopK</span><strong>${pipeline.selected}</strong></div>
       </div>
       <div class="retrieval-planner-result">
@@ -1608,6 +1657,8 @@ function renderRetrievalResult(payload) {
         <div><strong>回复前 Corrective Planner · ${escapeHtml(planner.status || '未运行')}</strong><small>${escapeHtml(planner.reason || '当前没有候选需要展开或纠正')}</small>${(planner.followUpQueries || []).length ? `<small>改写：${escapeHtml(planner.followUpQueries.join('；'))}</small>` : ''}</div>
         <div class="planner-facts"><span>模式 <b>${escapeHtml(planner.mode || '—')}</b></span><span>决策 <b>${escapeHtml(planner.decision || 'none')}</b></span><span>首轮目录 <b>${Number(planner.initialCatalogCount || 0)}</b></span><span>跨池命中 <b>${(planner.followUpSelectedEventIds || []).length}</b></span></div>
       </div>
+      ${granularityRouterHtml(retrieval.diagnostics.granularityRouter, candidates)}
+      ${retrievalExpansionHtml(retrieval.diagnostics, candidates)}
       <div class="retrieval-candidate-table data-surface">${candidates.length ? `
         <table class="data-table"><thead><tr><th style="width:21%">事件候选</th><th style="width:9%">向量相似度</th><th style="width:8%">关键词</th><th style="width:8%">重要度</th><th style="width:8%">时效性</th><th style="width:9%">综合分</th><th style="width:11%">召回阶段</th><th style="width:12%">向量状态</th><th style="width:14%">决策</th></tr></thead>
         <tbody>${candidates.map((item) => `<tr class="${item.selected ? 'selected-row' : ''}">
@@ -1653,8 +1704,11 @@ function renderRetrievalLab() {
       <button id="runRetrievalButton" class="button primary" type="submit"><i data-lucide="play"></i><span>运行召回</span></button>
     </form>
     <div class="retrieval-strategy-bar">
-      <div><span class="strategy-icon"><i data-lucide="sliders-horizontal"></i></span><div><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(retrievalChannelNames(profile))} · 目录 ${profile.catalog_min_similarity} → 详情 ${profile.vector_only_min_similarity} · ${profile.planner_enabled ? '回复前 Planner' : '确定性召回'} · ${profile.agent_memory_tools_enabled ? '生成中主动检索' : '主模型记忆工具关闭'} · TopK ${profile.event_top_k}</small></div></div>
-      <button class="button secondary compact" data-open-retrieval-settings><i data-lucide="external-link"></i><span>${isAdmin() ? '召回策略' : '查看召回策略'}</span></button>
+      <div><span class="strategy-icon"><i data-lucide="sliders-horizontal"></i></span><div><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(retrievalChannelNames(profile))} · ${profile.granularity_router_mode || 'shadow'} Router · ${profile.ppr_enabled ? 'PPR' : 'PPR 关闭'} · ${profile.context_filter_mode || 'shadow'} Filter · TopK ${profile.event_top_k}</small></div></div>
+      <div class="retrieval-strategy-actions">
+        ${isAdmin() ? '<button class="button ghost compact" data-rebuild-memory-index><i data-lucide="refresh-cw"></i><span>重建多粒度索引</span></button>' : ''}
+        <button class="button secondary compact" data-open-retrieval-settings><i data-lucide="external-link"></i><span>${isAdmin() ? '召回策略' : '查看召回策略'}</span></button>
+      </div>
     </div>
     <div id="retrievalOutput">${result ? renderRetrievalResult(result) : '<div class="retrieval-empty"><i data-lucide="scan-search"></i><strong>尚未运行召回测试</strong></div>'}</div>
   </section>`;
@@ -1662,7 +1716,39 @@ function renderRetrievalLab() {
   $$('[data-open-retrieval-settings]').forEach((button) => button.addEventListener('click', () => {
     jumpToRetrievalSettings().catch((error) => toast(error.message, 'error'));
   }));
+  $('[data-rebuild-memory-index]')?.addEventListener('click', rebuildCurrentMemoryIndex);
   refreshIcons();
+}
+
+async function rebuildCurrentMemoryIndex(event) {
+  if (!isAdmin()) return;
+  if (!window.confirm('将为当前用户与角色重算六类 Embedding、语义关联边并刷新图投影。继续吗？')) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.innerHTML = '<i data-lucide="loader-circle"></i><span>重建中</span>';
+  button.classList.add('loading');
+  refreshIcons();
+  try {
+    const result = await api('/api/admin/memory-index/rebuild', {
+      method: 'POST',
+      body: {
+        user_id: state.currentUserId,
+        agent_id: state.currentAgentId,
+        story_id: 'main_story',
+        branch_id: 'main',
+        native_embeddings: true
+      }
+    });
+    state.retrievalTest = null;
+    renderRetrievalLab();
+    toast(`已重建 ${result.views} 个视图、${result.associations} 条关联边`);
+  } catch (error) {
+    button.disabled = false;
+    button.classList.remove('loading');
+    button.innerHTML = '<i data-lucide="refresh-cw"></i><span>重建多粒度索引</span>';
+    refreshIcons();
+    toast(error.message, 'error');
+  }
 }
 
 async function runRetrievalTest(event) {
@@ -2034,6 +2120,9 @@ async function editRetrievalProfile() {
           <label class="strategy-toggle"><span><strong>回复前 Recall Planner</strong><small>轻量目录后判断是否展开或改写</small></span><span class="toggle-control"><input name="planner_enabled" type="checkbox" ${profile.planner_enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>零候选纠正式规划</strong><small>目录为空时仍可改写 Query 并跨池检索</small></span><span class="toggle-control"><input name="corrective_planner_enabled" type="checkbox" ${profile.corrective_planner_enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>主模型主动记忆工具</strong><small>生成中按证据缺口调用只读检索</small></span><span class="toggle-control"><input name="agent_memory_tools_enabled" type="checkbox" ${profile.agent_memory_tools_enabled ? 'checked' : ''}><i></i></span></label>
+          <label class="strategy-toggle"><span><strong>多粒度记忆视图</strong><small>原话、事件、声明、片段、摘要与实体</small></span><span class="toggle-control"><input name="granularity_enabled" type="checkbox" ${profile.granularity_enabled ? 'checked' : ''}><i></i></span></label>
+          <label class="strategy-toggle"><span><strong>语义关联图</strong><small>独立于事实关系边的可重建投影</small></span><span class="toggle-control"><input name="association_enabled" type="checkbox" ${profile.association_enabled ? 'checked' : ''}><i></i></span></label>
+          <label class="strategy-toggle"><span><strong>有界 PPR</strong><small>从多粒度种子扩散相关事件</small></span><span class="toggle-control"><input name="ppr_enabled" type="checkbox" ${profile.ppr_enabled ? 'checked' : ''}><i></i></span></label>
         </div>
         <div class="strategy-locked-guard"><i data-lucide="lock-keyhole"></i><div><strong>仅当前有效版本</strong><span>已被新版本替代、已撤回的记录永不进入回答候选</span></div><span class="badge blue">强制开启</span></div>
       </section>
@@ -2056,7 +2145,46 @@ async function editRetrievalProfile() {
         </div>
       </section>
       <section class="strategy-modal-section">
-        <div class="strategy-section-title"><span>03</span><div><strong>排序权重</strong><small>final score 组成</small></div></div>
+        <div class="strategy-section-title"><span>03</span><div><strong>多粒度 Router</strong><small>低熵粒度优先，可先 Shadow 观测再切换</small></div></div>
+        <div class="form-grid strategy-number-grid">
+          <label><span>路由模式</span><select name="granularity_router_mode">
+            <option value="fixed" ${profile.granularity_router_mode === 'fixed' ? 'selected' : ''}>固定权重</option>
+            <option value="shadow" ${profile.granularity_router_mode === 'shadow' ? 'selected' : ''}>Shadow 只观测</option>
+            <option value="dynamic" ${profile.granularity_router_mode === 'dynamic' ? 'selected' : ''}>动态生效</option>
+            <option value="ab" ${profile.granularity_router_mode === 'ab' ? 'selected' : ''}>A/B 稳定分流</option>
+          </select><small>Shadow 记录熵和权重，不修改结果</small></label>
+          <label><span>A/B 动态组比例</span><input name="granularity_ab_percent" type="number" min="0" max="100" step="1" value="${profile.granularity_ab_percent ?? 50}" required><small>按 user + agent + story + branch 稳定分桶</small></label>
+          <label><span>动态分融合权重</span><input name="granularity_score_weight" type="number" min="0" max="1" step="0.05" value="${profile.granularity_score_weight ?? 0.35}" required><small>剩余权重保留现有混合分</small></label>
+        </div>
+        <code class="strategy-formula">effective score = legacy score × (1 - α) + multi-view score × α</code>
+      </section>
+      <section class="strategy-modal-section">
+        <div class="strategy-section-title"><span>04</span><div><strong>语义关联图与 PPR</strong><small>GMM 自适应建边，扩散结果受作用域与预算约束</small></div></div>
+        <div class="form-grid strategy-number-grid">
+          <label><span>建边最低相似度</span><input name="association_min_similarity" type="number" min="0" max="1" step="0.01" value="${profile.association_min_similarity ?? 0.5}" required><small>低于此值不进入 GMM 高相关簇</small></label>
+          <label><span>单视图最大关联数</span><input name="association_max_degree" type="number" min="1" max="20" step="1" value="${profile.association_max_degree ?? 6}" required><small>阻止高频节点无限扩张</small></label>
+          <label><span>PPR 阻尼系数</span><input name="ppr_damping" type="number" min="0.5" max="0.99" step="0.01" value="${profile.ppr_damping ?? 0.85}" required></label>
+          <label><span>PPR 迭代次数</span><input name="ppr_iterations" type="number" min="1" max="50" step="1" value="${profile.ppr_iterations ?? 12}" required></label>
+          <label><span>PPR 事件 TopK</span><input name="ppr_top_k" type="number" min="1" max="30" step="1" value="${profile.ppr_top_k ?? 8}" required></label>
+          <label><span>PPR 融合权重</span><input name="ppr_score_weight" type="number" min="0" max="1" step="0.05" value="${profile.ppr_score_weight ?? 0.15}" required><small>仅动态 Router 生效时参与排序</small></label>
+        </div>
+        <div class="strategy-locked-guard"><i data-lucide="shield-check"></i><div><strong>作用域锁定</strong><span>只在当前 user + agent + story + branch 内建边与扩散，最多 2 跳、240 节点</span></div><span class="badge blue">服务端强制</span></div>
+      </section>
+      <section class="strategy-modal-section">
+        <div class="strategy-section-title"><span>05</span><div><strong>长期记忆上下文过滤</strong><small>Planner 选完后，只移除重复或无关详情</small></div></div>
+        <div class="form-grid strategy-number-grid">
+          <label><span>过滤模式</span><select name="context_filter_mode">
+            <option value="off" ${profile.context_filter_mode === 'off' ? 'selected' : ''}>关闭</option>
+            <option value="shadow" ${profile.context_filter_mode === 'shadow' ? 'selected' : ''}>Shadow 只观测</option>
+            <option value="active" ${profile.context_filter_mode === 'active' ? 'selected' : ''}>正式生效</option>
+          </select><small>建议先查看 Trace 中的拟删除结果</small></label>
+          <label><span>启动过滤的候选数</span><input name="context_filter_min_candidates" type="number" min="2" max="20" step="1" value="${profile.context_filter_min_candidates ?? 2}" required></label>
+          <label><span>最少保留事件数</span><input name="context_filter_min_keep" type="number" min="1" max="20" step="1" value="${profile.context_filter_min_keep ?? 1}" required></label>
+        </div>
+        <div class="strategy-locked-guard"><i data-lucide="shield-check"></i><div><strong>证据保护</strong><span>模型不能新增或改写事件；直接证据、关系证据、时间线成员会被服务端强制恢复</span></div><span class="badge blue">不可覆盖</span></div>
+      </section>
+      <section class="strategy-modal-section">
+        <div class="strategy-section-title"><span>06</span><div><strong>排序权重</strong><small>legacy score 组成</small></div></div>
         <div class="form-grid strategy-weight-grid">
           <label><span>向量权重</span><input name="vector_weight" type="number" min="0" max="2" step="0.01" value="${profile.vector_weight}" required></label>
           <label><span>关键词权重</span><input name="keyword_weight" type="number" min="0" max="2" step="0.01" value="${profile.keyword_weight}" required></label>
@@ -2077,6 +2205,9 @@ async function editRetrievalProfile() {
         planner_enabled: formData.has('planner_enabled'),
         corrective_planner_enabled: formData.has('corrective_planner_enabled'),
         agent_memory_tools_enabled: formData.has('agent_memory_tools_enabled'),
+        granularity_enabled: formData.has('granularity_enabled'),
+        association_enabled: formData.has('association_enabled'),
+        ppr_enabled: formData.has('ppr_enabled'),
         min_similarity: Number(formData.get('vector_only_min_similarity'))
       });
       state.retrievalProfile = await api(`/api/scenes/${encodeURIComponent(scene.id)}/retrieval-profile`, {
@@ -3283,6 +3414,7 @@ const TRACE_SPAN_LABELS = {
   trigger_evaluation_pre_response: '回复前条件触发',
   pinned_memory_load: '常驻记忆载入',
   memory_retrieval_planner: '二次召回规划',
+  memory_context_filter: '长期记忆上下文过滤',
   hybrid_memory_retrieval: '混合记忆召回',
   agent_memory_search: '主模型主动检索记忆',
   agent_memory_expand: '主模型展开图谱证据',
@@ -3425,6 +3557,8 @@ async function loadTraceDetail(id) {
     : '';
   const modelSpan = trace.spans.find((span) => span.name === 'model_response');
   const modelOutput = parseJson(modelSpan?.output_json, {});
+  const retrievalSpan = trace.spans.find((span) => span.name === 'hybrid_memory_retrieval');
+  const retrievalOutput = parseJson(retrievalSpan?.output_json, {});
   const usage = modelOutput.usage || {};
   const cache = modelOutput.cache || {};
   const inputTokens = Number(usage.inputTokens || cache.inputTokens || 0);
@@ -3439,6 +3573,16 @@ async function loadTraceDetail(id) {
     <div class="trace-overview"><div><span>状态</span><strong>${escapeHtml(trace.status)}</strong></div><div><span>总耗时</span><strong>${trace.total_ms} ms</strong></div><div><span>Provider</span><strong>${escapeHtml(modelOutput.provider || '—')}</strong></div><div><span>输入 Token</span><strong>${inputTokens || '—'}</strong></div><div><span>缓存 Token</span><strong>${cachedTokens || '—'}</strong></div><div><span>缓存状态 / 命中率</span><strong title="provider_managed 模式只展示模型服务返回的 cached_tokens，0 不代表本地缓存异常。">${escapeHtml(cacheStatusLabel)} · ${(hitRate * 100).toFixed(1)}%</strong></div></div>
     ${debugReplayBanner}
     ${traceCollaborationHtml(trace, modelSpan, modelOutput)}
+    ${granularityRouterHtml(
+      retrievalOutput.diagnostics?.granularityRouter,
+      retrievalOutput.diagnostics?.candidates || [],
+      { compact: true }
+    )}
+    ${retrievalExpansionHtml(
+      retrievalOutput.diagnostics || {},
+      retrievalOutput.diagnostics?.candidates || [],
+      { compact: true }
+    )}
     <details class="trace-raw-panel"><summary><span><i data-lucide="braces"></i><strong>原始 Span</strong></span><small>${trace.spans.length} 个节点 · 完整 Input / Output</small><i data-lucide="chevron-down"></i></summary><div class="trace-raw-spans">${trace.spans.map((span, index) => {
       const input = parseJson(span.input_json, {});
       const output = parseJson(span.output_json, {});

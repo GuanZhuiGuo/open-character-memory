@@ -325,6 +325,30 @@ test('registered users get read-only configuration, isolated data, own traces, a
     assert.ok(customScene.payload.memory_profile_id);
     assert.ok(customScene.payload.retrieval_profile_id);
     assert.ok(customScene.payload.event_extraction_profile_id);
+    const updatedRetrieval = await request(baseUrl,
+      `/api/scenes/${customScene.payload.id}/retrieval-profile`, {
+        method: 'PUT', cookie: adminLogin.cookie,
+        body: {
+          granularity_router_mode: 'ab', granularity_ab_percent: 25,
+          association_enabled: true, association_min_similarity: 0.55,
+          ppr_enabled: true, ppr_score_weight: 0.2,
+          context_filter_mode: 'shadow', context_filter_min_candidates: 3,
+          context_filter_min_keep: 1
+        }
+      });
+    assert.equal(updatedRetrieval.status, 200);
+    assert.equal(updatedRetrieval.payload.granularity_router_mode, 'ab');
+    assert.equal(updatedRetrieval.payload.context_filter_min_candidates, 3);
+
+    const rebuiltIndex = await request(baseUrl, '/api/admin/memory-index/rebuild', {
+      method: 'POST', cookie: adminLogin.cookie,
+      body: {
+        user_id: alice.id, agent_id: 'agent_linwan', story_id: 'main_story',
+        branch_id: 'main', native_embeddings: false
+      }
+    });
+    assert.equal(rebuiltIndex.status, 200);
+    assert.equal(rebuiltIndex.payload.status, 'success');
 
     const customAgent = await request(baseUrl, '/api/agents', {
       method: 'POST', cookie: adminLogin.cookie,

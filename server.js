@@ -16,8 +16,9 @@ import { getCapabilityRuntimeStatus } from './lib/capabilities.js';
 import { config } from './lib/config.js';
 import { db, initializeDatabase } from './lib/db.js';
 import {
-  flushGraphProjectionOutbox, getGraphStoreStatus, initializeGraphStore
+  flushGraphProjectionOutbox, getGraphStoreStatus, initializeGraphStore, projectGraphScope
 } from './lib/graph-store.js';
+import { rebuildMemoryViews } from './lib/memory-views.js';
 import { getAgentRuntimeStatus } from './lib/pi-runtime.js';
 import { checkModelHealth, configuredModels } from './lib/providers/index.js';
 import { getReleaseNotes } from './lib/releases.js';
@@ -480,9 +481,15 @@ function createScene(body) {
        vector_weight, keyword_weight, importance_weight, recency_weight, recency_half_life_days,
        catalog_min_similarity, vector_only_min_similarity, planner_enabled, planner_max_candidates,
        corrective_planner_enabled, planner_max_follow_up_queries, agent_memory_tools_enabled,
-       agent_memory_max_calls, agent_memory_max_queries, graph_hops, created_at, updated_at)
+       agent_memory_max_calls, agent_memory_max_queries, graph_hops, granularity_enabled,
+       granularity_router_mode, granularity_ab_percent, granularity_score_weight,
+       association_enabled, association_min_similarity, association_max_degree, ppr_enabled,
+       ppr_damping, ppr_iterations, ppr_top_k, ppr_score_weight,
+       context_filter_mode, context_filter_min_candidates, context_filter_min_keep,
+       created_at, updated_at)
       VALUES (?, ?, ?, 1, 1, 1, 1, 0.42, 0.08, 4, 20, 20, 0.70, 0.16, 0.10, 0.04,
-        30, 0.28, 0.42, 1, 12, 1, 2, 1, 2, 3, 1, ?, ?)`)
+        30, 0.28, 0.42, 1, 12, 1, 2, 1, 2, 3, 1, 1, 'shadow', 50, 0.35,
+        1, 0.50, 6, 1, 0.85, 12, 8, 0.15, 'shadow', 2, 1, ?, ?)`)
       .run(uid('retrieval'), id, `${name}混合召回`, timestamp, timestamp);
     db.exec('COMMIT');
   } catch (error) {
@@ -754,6 +761,33 @@ function architectureOverview(sceneId) {
         agentMemoryMaxCalls: Number(retrieval.agent_memory_max_calls),
         agentMemoryMaxQueries: Number(retrieval.agent_memory_max_queries),
         graphHops: Number(retrieval.graph_hops),
+        granularity: {
+          enabled: Boolean(retrieval.granularity_enabled),
+          viewTypes: ['turn', 'event', 'claim', 'episode', 'summary', 'entity_keyword'],
+          routerMode: retrieval.granularity_router_mode,
+          abPercent: Number(retrieval.granularity_ab_percent),
+          scoreWeight: Number(retrieval.granularity_score_weight)
+        },
+        associationGraph: {
+          enabled: Boolean(retrieval.association_enabled),
+          minimumSimilarity: Number(retrieval.association_min_similarity),
+          maximumDegree: Number(retrieval.association_max_degree),
+          method: 'gmm_adaptive'
+        },
+        personalizedPageRank: {
+          enabled: Boolean(retrieval.ppr_enabled),
+          damping: Number(retrieval.ppr_damping),
+          iterations: Number(retrieval.ppr_iterations),
+          topK: Number(retrieval.ppr_top_k),
+          scoreWeight: Number(retrieval.ppr_score_weight),
+          hardBounds: { maxHops: 2, maxNodes: 240 }
+        },
+        contextFilter: {
+          mode: retrieval.context_filter_mode,
+          minimumCandidates: Number(retrieval.context_filter_min_candidates),
+          minimumKeep: Number(retrieval.context_filter_min_keep),
+          authority: 'LLM 只能从已选事件中提议删除；服务端恢复直接证据、关系证据和时间线成员'
+        },
         plannerAuthority: 'Planner 可在零候选时改写查询并搜索当前作用域全部 active 事件；主模型只可调用服务端锁定作用域的只读记忆工具'
       } : null
     },
@@ -815,8 +849,8 @@ function architectureOverview(sceneId) {
         { order: 1, key: 'extract', label: `累计 ${extractionIntervalTurns} 个完整轮次，或跨对话发送前，记忆抽取模型返回结构化操作` },
         { order: 2, key: 'structured', label: '写入 structured_updates 和 relationship_deltas' },
         { order: 3, key: 'derived', label: '亲密度写入时同步重算 relationship.stage' },
-        { order: 4, key: 'events', label: '以双时态版本写入事件、声明、图边和向量' },
-        { order: 5, key: 'projection', label: 'SQLite 提交后通过 outbox 投影 Neo4j；失败可重放并回退 SQLite' },
+        { order: 4, key: 'events', label: '以双时态版本写入事件、声明和事实图边，并生成六类检索视图与语义关联边' },
+        { order: 5, key: 'projection', label: 'SQLite 提交后通过 outbox 投影 Neo4j 事实图与语义图；失败可重放并回退 SQLite' },
         { order: 6, key: 'triggers', label: '达到阈值的轮次完成记忆写入后执行条件触发器' }
       ]
     },
@@ -847,6 +881,12 @@ function numericSetting(body, key, fallback, minimum, maximum, integer = false) 
     throw new Error(`${key} 必须在 ${minimum} - ${maximum} 之间`);
   }
   return integer ? Math.round(value) : value;
+}
+
+function enumSetting(value, fallback, allowed, label) {
+  const normalized = safeText(value ?? fallback, 40).trim().toLowerCase();
+  if (!allowed.includes(normalized)) throw new Error(`${label}不在允许范围内`);
+  return normalized;
 }
 
 function stringListSetting(value, label, { maximumItems = 20, maximumLength = 80 } = {}) {
@@ -936,6 +976,43 @@ function updateRetrievalProfile(sceneId, body) {
       body, 'agent_memory_max_queries', current.agent_memory_max_queries, 1, 5, true
     ),
     graphHops: numericSetting(body, 'graph_hops', current.graph_hops, 0, 2, true),
+    granularityEnabled: booleanSetting(body.granularity_enabled, current.granularity_enabled),
+    granularityRouterMode: enumSetting(
+      body.granularity_router_mode,
+      current.granularity_router_mode,
+      ['fixed', 'shadow', 'dynamic', 'ab'],
+      '多粒度路由模式'
+    ),
+    granularityAbPercent: numericSetting(
+      body, 'granularity_ab_percent', current.granularity_ab_percent, 0, 100, true
+    ),
+    granularityScoreWeight: numericSetting(
+      body, 'granularity_score_weight', current.granularity_score_weight, 0, 1
+    ),
+    associationEnabled: booleanSetting(body.association_enabled, current.association_enabled),
+    associationMinSimilarity: numericSetting(
+      body, 'association_min_similarity', current.association_min_similarity, 0, 1
+    ),
+    associationMaxDegree: numericSetting(
+      body, 'association_max_degree', current.association_max_degree, 1, 20, true
+    ),
+    pprEnabled: booleanSetting(body.ppr_enabled, current.ppr_enabled),
+    pprDamping: numericSetting(body, 'ppr_damping', current.ppr_damping, 0.5, 0.99),
+    pprIterations: numericSetting(body, 'ppr_iterations', current.ppr_iterations, 1, 50, true),
+    pprTopK: numericSetting(body, 'ppr_top_k', current.ppr_top_k, 1, 30, true),
+    pprScoreWeight: numericSetting(body, 'ppr_score_weight', current.ppr_score_weight, 0, 1),
+    contextFilterMode: enumSetting(
+      body.context_filter_mode,
+      current.context_filter_mode,
+      ['off', 'shadow', 'active'],
+      '长期记忆上下文过滤模式'
+    ),
+    contextFilterMinCandidates: numericSetting(
+      body, 'context_filter_min_candidates', current.context_filter_min_candidates, 2, 20, true
+    ),
+    contextFilterMinKeep: numericSetting(
+      body, 'context_filter_min_keep', current.context_filter_min_keep, 1, 20, true
+    ),
     minKeywordScore: numericSetting(body, 'min_keyword_score', current.min_keyword_score, 0, 1),
     eventTopK: numericSetting(body, 'event_top_k', current.event_top_k, 1, 50, true),
     claimTopK: numericSetting(body, 'claim_top_k', current.claim_top_k, 1, 100, true),
@@ -953,6 +1030,9 @@ function updateRetrievalProfile(sceneId, body) {
   if (values.catalogMinSimilarity > values.vectorOnlyMinSimilarity) {
     throw new Error('轻量候选目录阈值不能高于纯向量详情阈值');
   }
+  if (values.contextFilterMinKeep > values.eventTopK) {
+    throw new Error('上下文过滤最少保留数不能大于事件 TopK');
+  }
   db.prepare(`UPDATE retrieval_profiles SET name = ?, vector_enabled = ?, keyword_enabled = ?,
     graph_enabled = ?, intent_filter_enabled = ?, min_similarity = ?, min_keyword_score = ?,
     event_top_k = ?, claim_top_k = ?, edge_top_k = ?, vector_weight = ?, keyword_weight = ?,
@@ -960,7 +1040,12 @@ function updateRetrievalProfile(sceneId, body) {
     catalog_min_similarity = ?, vector_only_min_similarity = ?, planner_enabled = ?,
     planner_max_candidates = ?, corrective_planner_enabled = ?, planner_max_follow_up_queries = ?,
     agent_memory_tools_enabled = ?, agent_memory_max_calls = ?, agent_memory_max_queries = ?,
-    graph_hops = ?, updated_at = ?
+    graph_hops = ?, granularity_enabled = ?, granularity_router_mode = ?,
+    granularity_ab_percent = ?, granularity_score_weight = ?, association_enabled = ?,
+    association_min_similarity = ?, association_max_degree = ?, ppr_enabled = ?,
+    ppr_damping = ?, ppr_iterations = ?, ppr_top_k = ?, ppr_score_weight = ?,
+    context_filter_mode = ?, context_filter_min_candidates = ?, context_filter_min_keep = ?,
+    updated_at = ?
     WHERE scene_id = ?`).run(
     values.name, values.vectorEnabled, values.keywordEnabled, values.graphEnabled,
     values.intentFilterEnabled, values.minSimilarity, values.minKeywordScore, values.eventTopK,
@@ -969,7 +1054,12 @@ function updateRetrievalProfile(sceneId, body) {
     values.catalogMinSimilarity, values.vectorOnlyMinSimilarity, values.plannerEnabled,
     values.plannerMaxCandidates, values.correctivePlannerEnabled, values.plannerMaxFollowUpQueries,
     values.agentMemoryToolsEnabled, values.agentMemoryMaxCalls, values.agentMemoryMaxQueries,
-    values.graphHops, nowIso(), sceneId
+    values.graphHops, values.granularityEnabled, values.granularityRouterMode,
+    values.granularityAbPercent, values.granularityScoreWeight, values.associationEnabled,
+    values.associationMinSimilarity, values.associationMaxDegree, values.pprEnabled,
+    values.pprDamping, values.pprIterations, values.pprTopK, values.pprScoreWeight,
+    values.contextFilterMode, values.contextFilterMinCandidates, values.contextFilterMinKeep,
+    nowIso(), sceneId
   );
   return getRetrievalProfile(sceneId);
 }
@@ -1458,6 +1548,23 @@ async function handleApi(request, response, url) {
   }
   if (pathname === '/api/admin/graph/replay' && method === 'POST') {
     sendJson(response, 200, await flushGraphProjectionOutbox({ limit: config.neo4j.projectionBatchSize }));
+    return;
+  }
+  if (pathname === '/api/admin/memory-index/rebuild' && method === 'POST') {
+    if (!requireAdminPrincipal(principal, response)) return;
+    const body = await readBody(request);
+    const scope = {
+      userId: assertUserAccess(principal, body.user_id),
+      agentId: safeText(body.agent_id, 100).trim(),
+      storyId: safeText(body.story_id || 'main_story', 100),
+      branchId: safeText(body.branch_id || 'main', 100)
+    };
+    if (!scope.agentId) throw new HttpError(400, '缺少角色作用域', 'AGENT_SCOPE_REQUIRED');
+    const rebuilt = await rebuildMemoryViews(scope, {
+      nativeEmbeddings: body.native_embeddings !== false
+    });
+    const graphProjection = await projectGraphScope(scope);
+    sendJson(response, 200, { status: 'success', scope, ...rebuilt, graphProjection });
     return;
   }
 

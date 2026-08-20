@@ -34,6 +34,8 @@ apps / public               现有 Studio 产品层
 | `mutate` | `POST /v1/memory/mutate` | 受信应用/管理员的确定性写入 |
 | `forget` | `DELETE /v1/memory` | 撤回或物理删除单条结构化记忆/事件 |
 
+`recall` 在 `0.6.0` 中复用 Studio 的六粒度视图、Router、语义关联图、有界 PPR、Corrective Planner 和证据保护过滤；返回合同仍是规范化 `ContextPack`，接入方不需要理解内部视图表。所有阶段继续由服务端锁定 scope 并只读取 active 版本。
+
 `observe`、`mutate` 与 `forget` 必须带 `idempotencyKey`。同一 tenant 下使用相同 key 重试完全相同的请求时，只返回原回执，不重复写入；如果该 key 被复用到不同 payload 或作用域，服务返回 `409 MEMORY_IDEMPOTENCY_*_CONFLICT`。
 
 ## 作用域

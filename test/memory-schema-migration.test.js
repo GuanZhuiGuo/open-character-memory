@@ -34,6 +34,10 @@ test('existing SQLite data receives additive Headless Memory columns without rep
       const count = db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
       db.exec('ALTER TABLE memory_observations DROP COLUMN request_hash');
       db.exec('ALTER TABLE memory_operation_receipts DROP COLUMN request_hash');
+      db.exec('DROP TABLE memory_associations');
+      db.exec('DROP TABLE memory_views');
+      db.exec('ALTER TABLE retrieval_profiles DROP COLUMN granularity_router_mode');
+      db.exec('ALTER TABLE retrieval_profiles DROP COLUMN context_filter_mode');
       console.log(count);
       db.close();
     `);
@@ -42,9 +46,16 @@ test('existing SQLite data receives additive Headless Memory columns without rep
       initializeDatabase();
       const observations = db.prepare('PRAGMA table_info(memory_observations)').all();
       const operations = db.prepare('PRAGMA table_info(memory_operation_receipts)').all();
+      const retrieval = db.prepare('PRAGMA table_info(retrieval_profiles)').all();
+      const memoryViews = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_views'").get();
+      const associations = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_associations'").get();
       const count = db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
       if (!observations.some((item) => item.name === 'request_hash')) process.exit(11);
       if (!operations.some((item) => item.name === 'request_hash')) process.exit(12);
+      if (!retrieval.some((item) => item.name === 'granularity_router_mode')) process.exit(13);
+      if (!retrieval.some((item) => item.name === 'context_filter_mode')) process.exit(14);
+      if (!memoryViews) process.exit(15);
+      if (!associations) process.exit(16);
       console.log(count);
       db.close();
     `);

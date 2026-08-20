@@ -2,12 +2,14 @@
 
 ## 当前版本边界
 
-`0.5.0` 的运行结构是：
+`0.6.0` 的运行结构是：
 
 ```text
 HTTP /api/chat
-  -> 会话锁、固定规则、触发器、混合预召回与 Prompt Compiler
+  -> 会话锁、固定规则、触发器与 Prompt Compiler
+  -> 六粒度视图召回 -> 低熵 Router -> 语义关联图 / 有界 PPR
   -> Corrective Recall Planner -> 必要时改写 Query 并跨首轮候选池重检
+  -> 证据保护型 LLM 上下文过滤
   -> 记忆意图路由 -> 只读 memory_search / memory_expand
   -> 已解锁 Skill/MCP 解析与工具白名单
   -> Pi Agent Core ReAct turn state + lifecycle events
@@ -62,10 +64,15 @@ GET /api/memory/graph?...&valid_at=...&known_at=...
 - `MemoryEntity`：人物、地点、物品、组织、事件与概念。
 - `MemoryEvent`：当前有效事件版本。
 - `MemoryClaim`：当前有效声明版本。
+- `MemoryView`：指回规范事件的六类可重建检索视图。
 - `INVOLVES`：事件涉及实体，并保留角色。
 - `SUBJECT`：声明主语。
 - `EVIDENCE`：声明回指证据事件。
 - `RELATED`：实体关系，保留谓词、证据事件和双时态字段。
+- `VIEW_OF`：MemoryView 指回唯一规范事件。
+- `ASSOCIATED_WITH`：同一作用域内的语义相关边，只用于候选发现。
+
+`RELATED` 是证据支持的事实关系，`ASSOCIATED_WITH` 是可以删除后重建的检索关联。两者不能混用，PPR 分数也不能被解释为事实置信度。完整检索流程见 [多粒度记忆召回设计](multigranularity-memory-retrieval.md)。
 
 ### 写入与恢复
 

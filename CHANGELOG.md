@@ -4,8 +4,15 @@
 
 ## Unreleased
 
+## [0.6.0](https://github.com/GuanZhuiGuo/open-character-memory/releases/tag/v0.6.0) - 2026-08-19
+
 ### Added
 
+- 新增 `turn / event / claim / episode / summary / entity_keyword` 六类可重建记忆视图；规范事件、声明与双时态版本仍是唯一事实源。
+- 新增基于候选熵、置信度、间隔与覆盖度的多粒度 Router，支持 `fixed / shadow / dynamic / ab` 与稳定作用域分桶。
+- 新增与事实关系边隔离的语义关联图、GMM 自适应建边和作用域锁定的有界 Personalized PageRank。
+- 新增 Planner 后的 LLM 长期记忆上下文过滤，模型只有删除提议权，服务端强制保护直接证据、关系证据与时间线成员。
+- 召回实验室与 Trace 新增六粒度权重、关联边来源、PPR 扩散预算和上下文过滤结果；管理员可按当前作用域重建索引与 Neo4j 投影。
 - 新增右上角版本入口和产品内 Release Notes 中心；以仓库 Changelog 为事实源，支持当前版、历史版、待发布更新及 GitHub Release 直达链接。
 - 新增 `memory-runtime/v1` Headless 契约，提供 `observe / recall / expand / mutate / forget` 五个原子操作与结构化 `ContextPack`。
 - 新增 JavaScript/TypeScript alpha SDK、Pi/通用 Agent 适配器、OpenAPI 文档和只读 Memory MCP Server。
@@ -13,13 +20,20 @@
 
 ### Changed
 
+- 召回链路升级为 `作用域与 active 过滤 -> 六粒度检索 -> 动态 Router -> 语义关联/PPR -> Corrective Planner -> 证据保护过滤 -> 主模型记忆工具`。
+- 历史数据首次召回时会兼容性补建六视图与关联边；原生重建入口可重新计算每类视图 Embedding，并刷新 Neo4j 可重建投影。
 - Headless 作用域统一为 `tenant + subject + agent + space + branch`，再由兼容适配器映射到现有 Studio 的用户、角色、故事和分支记录。
 - 架构图与代码 RAG 新增原子记忆契约、Memory Service、SDK、适配器、MCP 和持久化任务边界。
 
 ### Security
 
+- 多粒度视图、语义关联边、PPR 和 LLM 过滤均继承 `user + agent + story + branch` 硬作用域；过滤模型不能新增事件或删除受保护证据。
 - `MEMORY_SERVICE_API_KEY` 仅允访问 `/v1/memory/*`；模型只能使用服务端锁定作用域的只读记忆工具，不能直接提交记忆写入。
 - 幂等 key 仅能重放同一请求；跨作用域或不同 payload 的 key 复用会被 `409` 拒绝，避免误吞写入或返回其他作用域的旧回执。
+
+### Validation
+
+- 新增多粒度完整性、跨用户隔离、稳定 A/B、GMM/PPR 边界和 LLM 证据保护专项测试。
 
 ## [0.5.0](https://github.com/GuanZhuiGuo/open-character-memory/releases/tag/v0.5.0) - 2026-08-17
 

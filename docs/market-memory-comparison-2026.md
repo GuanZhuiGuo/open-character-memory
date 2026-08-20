@@ -1,6 +1,6 @@
 # 2026 Agent 记忆方案对比
 
-> 对比基线：Open Character Memory `0.5.0`
+> 对比基线：Open Character Memory `0.6.0`
 > 资料核验日期：2026-08-16  
 > 范围：面向应用的长期记忆基础设施，以及 Codex、Claude Code、Cursor 这类编码 Agent 的上下文记忆。
 
@@ -23,7 +23,7 @@ Open Character Memory 不应把自己定位成另一个通用向量记忆 API。
 
 ## 当前方案基线
 
-Open Character Memory `0.5.0` 的记忆由六层组成：
+Open Character Memory `0.6.0` 的记忆由七层组成：
 
 | 层 | 当前实现 | 是否进入主模型 |
 | --- | --- | --- |
@@ -32,6 +32,7 @@ Open Character Memory `0.5.0` 的记忆由六层组成：
 | 当前状态 | 结构化字段和当前有效 Claim | 常驻或按需注入 |
 | 事件账本 | 用户事件与按角色-用户隔离的“我们的故事” | 相关时召回 |
 | 图谱投影 | 实体、事件、声明、证据关系，Neo4j 可重建投影 | 作为召回证据 |
+| 多粒度检索投影 | 六类视图、动态 Router、语义关联图、有界 PPR 与证据保护过滤 | 只把最终证据集注入 |
 | Agent Runtime | Pi ReAct、按需只读记忆工具、已解锁 Skill/MCP、能力网关和执行回执 | 记忆意图或资格命中时暴露 |
 
 长期记忆默认每 8 个完整轮次更新一次，场景可配置为 1-8 轮。用户明确提出的长期回复规则和戏外更正走同步快速通道，不等待批量抽取。事件、声明、关系边和结构化历史均有有效时间与认知时间；默认回答硬过滤非当前版本。
@@ -42,7 +43,7 @@ Open Character Memory `0.5.0` 的记忆由六层组成：
 
 | 方案 | 核心定位 | 常驻结构化状态 | 旧事实更新 | 图谱与时间 | 召回方式 | Agent/工具运行时 | 角色陪聊适配 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Open Character Memory 0.5.0** | 角色-用户双向记忆与剧情运行层 | 原生字段、固定属性、必须/避免规则 | 服务端操作与 `active / superseded / retracted`，双时态历史 | 原生事件、实体、Claim、证据边；SQLite 账本 + Neo4j 当前投影 | 混合预召回 + Corrective Planner 跨池改写 + 主模型只读记忆工具 + 硬门槛 | Pi ReAct + 作用域锁定记忆工具 + 受控 Skill/MCP 网关 | **最贴合**，原生用户、角色、故事、分支和条件触发 |
+| **Open Character Memory 0.6.0** | 角色-用户双向记忆与剧情运行层 | 原生字段、固定属性、必须/避免规则 | 服务端操作与 `active / superseded / retracted`，双时态历史 | 原生事实图 + 六视图语义关联图；SQLite 账本 + Neo4j 可重建投影 | 多粒度 Router + 有界 PPR + Corrective Planner + 证据过滤 + 主模型只读工具 | Pi ReAct + 作用域锁定记忆工具 + 受控 Skill/MCP 网关 | **最贴合**，原生用户、角色、故事、分支和条件触发 |
 | **TencentDB Agent Memory 2.0.0** | 面向 Agent 团队的 Memory Hub 与经验资产层 | L0 对话、L1 原子记忆、L2 场景、L3 Persona；另有 Skill、Wiki、CodeGraph | 记忆资产有 owner、version、status 和人工维护；公开合同未提供双时态 `active-only` 状态机 | Wiki 有链接图，CodeGraph 有符号和调用关系；不是角色剧情的时序事件图 | L2/L3 快速恢复，按需下钻 L1/L0；BM25 + 向量 + RRF，并受条数、字符和超时预算限制 | 提供跨 Agent 资产装配及工具协议；官方明确记忆本身不运行 Agent loop | 团队知识和多 Agent 复用很强；角色、用户、故事、分支和视角语义需另建领域层 |
 | **Zep Cloud / Graphiti OSS** | 时序 Context Graph 与 Agent Memory | 可通过实体类型和应用逻辑组装，不是固定注入控制面 | 原生时序事实、失效区间、episode 溯源 | **最强项**，实体、关系、事实、episode 与混合图检索 | 语义 + BM25 + 图遍历，返回面向 Prompt 的上下文 | 不负责完整 Agent Runtime | 很适合复杂人物关系和时间变化；剧情、硬规则、道具仍需应用层 |
 | **Mem0 Platform / OSS** | 易接入的个性化记忆 API | 支持实体 scope、类别和直接导入，但固定规则需应用实现 | 新算法采用 ADD-only，保留新旧事实并在检索排序时处理当前性 | Platform 使用内建实体连接图；不是带类型谓词的关系图。新 OSS 已移除外部图存储 | 语义 + BM25 + Entity Linking，可选 rerank | 提供 SDK/MCP 集成，不是完整业务 Runtime | 快速个性化很合适；对剧情槽位、明确撤回和当前状态硬裁决较弱 |

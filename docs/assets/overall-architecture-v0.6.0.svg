@@ -1,0 +1,203 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="1320" viewBox="0 0 1900 1320">
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#2563EB"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#D97706"/>
+    </marker>
+    <style>
+      text { font-family: "PingFang SC", "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; }
+      .title { font-size: 40px; font-weight: 700; fill: #0F172A; }
+      .subtitle { font-size: 19px; fill: #475569; }
+      .lane-title { font-size: 22px; font-weight: 700; fill: #0F172A; }
+      .card-title { font-size: 18px; font-weight: 700; fill: #0F172A; }
+      .card-text { font-size: 15px; fill: #475569; }
+      .small { font-size: 14px; fill: #64748B; }
+      .step { font-size: 13px; font-weight: 700; fill: #2563EB; }
+      .white-title { font-size: 20px; font-weight: 700; fill: #FFFFFF; }
+      .white-text { font-size: 15px; fill: #DBEAFE; }
+      .line { stroke: #2563EB; stroke-width: 3; fill: none; marker-end: url(#arrow-blue); }
+      .loop { stroke: #D97706; stroke-width: 3; fill: none; marker-end: url(#arrow-amber); }
+    </style>
+  </defs>
+
+  <rect width="1900" height="1320" fill="#FFFFFF"/>
+  <rect width="1900" height="12" fill="#2563EB"/>
+  <text x="48" y="68" class="title">Open Character Memory v0.6.0 总体架构</text>
+  <text x="48" y="102" class="subtitle">六粒度检索、动态 Router、语义关联图与有界 PPR、Corrective Planner、证据保护 Filter、Pi Agentic Memory</text>
+
+  <rect x="40" y="132" width="1820" height="138" rx="6" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="2"/>
+  <text x="64" y="168" class="lane-title">入口、治理与不可变边界</text>
+  <rect x="64" y="188" width="285" height="58" rx="6" fill="#EFF6FF" stroke="#93C5FD"/>
+  <text x="206" y="214" text-anchor="middle" class="card-title">用户端 / 管理端</text>
+  <text x="206" y="237" text-anchor="middle" class="small">对话、配置、评测与 Trace</text>
+  <rect x="368" y="188" width="345" height="58" rx="6" fill="#ECFEFF" stroke="#67E8F9"/>
+  <text x="540" y="214" text-anchor="middle" class="card-title">作用域硬隔离</text>
+  <text x="540" y="237" text-anchor="middle" class="small">user + agent + story + branch</text>
+  <rect x="732" y="188" width="345" height="58" rx="6" fill="#FFF7ED" stroke="#FDBA74"/>
+  <text x="904" y="214" text-anchor="middle" class="card-title">Active Only + 双时态</text>
+  <text x="904" y="237" text-anchor="middle" class="small">superseded / retracted 不可复活</text>
+  <rect x="1096" y="188" width="345" height="58" rx="6" fill="#F5F3FF" stroke="#C4B5FD"/>
+  <text x="1268" y="214" text-anchor="middle" class="card-title">服务端权限裁决</text>
+  <text x="1268" y="237" text-anchor="middle" class="small">模型只提候选，不裁决事实与 scope</text>
+  <rect x="1460" y="188" width="376" height="58" rx="6" fill="#F1F5F9" stroke="#94A3B8"/>
+  <text x="1648" y="214" text-anchor="middle" class="card-title">Shadow / A-B / 回退</text>
+  <text x="1648" y="237" text-anchor="middle" class="small">可观测、可重建、可逐步上线</text>
+
+  <rect x="40" y="298" width="1820" height="358" rx="6" fill="#F8FBFF" stroke="#60A5FA" stroke-width="3"/>
+  <rect x="40" y="298" width="1820" height="50" rx="6" fill="#1D4ED8"/>
+  <text x="64" y="331" class="white-title">每轮读取链路：从规范事实到最小充分证据集</text>
+
+  <rect x="64" y="374" width="198" height="236" rx="6" fill="#FFFFFF" stroke="#93C5FD"/>
+  <text x="84" y="402" class="step">01 · GUARD</text>
+  <text x="84" y="432" class="card-title">Current / Scope</text>
+  <text x="84" y="462" class="card-text">只读取当前有效版本</text>
+  <text x="84" y="488" class="card-text">锁定四级命名空间</text>
+  <text x="84" y="526" class="small">短期记忆：</text>
+  <text x="84" y="550" class="small">最近 16 条直接入 Input</text>
+  <text x="84" y="581" class="small">长期记录：</text>
+  <text x="84" y="605" class="small">按需检索，不全量注入</text>
+
+  <path d="M262 492H280" class="line"/>
+  <rect x="282" y="374" width="198" height="236" rx="6" fill="#FFFFFF" stroke="#67E8F9"/>
+  <text x="302" y="402" class="step">02 · VIEWS</text>
+  <text x="302" y="432" class="card-title">六粒度检索</text>
+  <text x="302" y="462" class="card-text">turn / event / claim</text>
+  <text x="302" y="488" class="card-text">episode / summary</text>
+  <text x="302" y="514" class="card-text">entity_keyword</text>
+  <rect x="302" y="540" width="158" height="48" rx="5" fill="#ECFEFF"/>
+  <text x="381" y="561" text-anchor="middle" class="small">都指回同一</text>
+  <text x="381" y="581" text-anchor="middle" class="card-text">canonical event</text>
+
+  <path d="M480 492H498" class="line"/>
+  <rect x="500" y="374" width="198" height="236" rx="6" fill="#FFFFFF" stroke="#C4B5FD"/>
+  <text x="520" y="402" class="step">03 · ROUTER</text>
+  <text x="520" y="432" class="card-title">低熵动态配权</text>
+  <text x="520" y="462" class="card-text">熵 + Top 间隔</text>
+  <text x="520" y="488" class="card-text">覆盖率 + Query 先验</text>
+  <text x="520" y="526" class="small">fixed / shadow</text>
+  <text x="520" y="550" class="small">dynamic / stable A-B</text>
+  <text x="520" y="584" class="small">Shadow 默认不改排序</text>
+
+  <path d="M698 492H716" class="line"/>
+  <rect x="718" y="374" width="210" height="236" rx="6" fill="#FFFFFF" stroke="#FDBA74"/>
+  <text x="738" y="402" class="step">04 · GRAPH</text>
+  <text x="738" y="432" class="card-title">语义关联 + PPR</text>
+  <text x="738" y="462" class="card-text">GMM 自适应建边</text>
+  <text x="738" y="488" class="card-text">最多 2 跳 / 240 节点</text>
+  <rect x="738" y="522" width="170" height="64" rx="5" fill="#FFF7ED"/>
+  <text x="823" y="547" text-anchor="middle" class="small">只发现候选</text>
+  <text x="823" y="572" text-anchor="middle" class="card-text">不等于事实关系</text>
+
+  <path d="M928 492H946" class="line"/>
+  <rect x="948" y="374" width="210" height="236" rx="6" fill="#FFFFFF" stroke="#93C5FD"/>
+  <text x="968" y="402" class="step">05 · PLANNER</text>
+  <text x="968" y="432" class="card-title">纠正式召回</text>
+  <text x="968" y="462" class="card-text">读取轻量目录</text>
+  <text x="968" y="488" class="card-text">判断证据充分性</text>
+  <text x="968" y="526" class="small">不足：改写 Query</text>
+  <text x="968" y="550" class="small">跨首轮池搜索 active</text>
+  <text x="968" y="584" class="small">仍受当前 scope 约束</text>
+
+  <path d="M1158 492H1176" class="line"/>
+  <rect x="1178" y="374" width="210" height="236" rx="6" fill="#FFFFFF" stroke="#FDBA74"/>
+  <text x="1198" y="402" class="step">06 · FILTER</text>
+  <text x="1198" y="432" class="card-title">证据保护降噪</text>
+  <text x="1198" y="462" class="card-text">LLM 只提议删除</text>
+  <text x="1198" y="488" class="card-text">不能新增或改写事件</text>
+  <text x="1198" y="526" class="small">服务端恢复：</text>
+  <text x="1198" y="550" class="small">直接 / 关系 / 时间线证据</text>
+  <text x="1198" y="584" class="small">失败或不足则全部保留</text>
+
+  <path d="M1388 492H1406" class="line"/>
+  <rect x="1408" y="374" width="198" height="236" rx="6" fill="#FFFFFF" stroke="#C4B5FD"/>
+  <text x="1428" y="402" class="step">07 · PROMPT</text>
+  <text x="1428" y="432" class="card-title">Input 编译</text>
+  <text x="1428" y="462" class="card-text">稳定前缀缓存</text>
+  <text x="1428" y="488" class="card-text">结构化状态 + 证据</text>
+  <text x="1428" y="526" class="small">最近对话保持动态</text>
+  <text x="1428" y="550" class="small">召回详情最小化注入</text>
+  <text x="1428" y="584" class="small">候选文本视作不可信数据</text>
+
+  <path d="M1606 492H1624" class="line"/>
+  <rect x="1626" y="374" width="210" height="236" rx="6" fill="#1D4ED8"/>
+  <text x="1646" y="402" class="white-text">08 · MODEL</text>
+  <text x="1646" y="432" class="white-title">Pi Agent Core</text>
+  <text x="1646" y="462" class="white-text">模型第 1 次推理</text>
+  <text x="1646" y="488" class="white-text">按需 memory_search</text>
+  <text x="1646" y="514" class="white-text">或 memory_expand</text>
+  <text x="1646" y="550" class="white-text">toolResult 回灌</text>
+  <text x="1646" y="576" class="white-text">模型续答</text>
+
+  <rect x="40" y="686" width="1820" height="230" rx="6" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="2"/>
+  <text x="64" y="724" class="lane-title">Runtime、能力与可观测</text>
+  <rect x="64" y="750" width="330" height="130" rx="6" fill="#EFF6FF" stroke="#93C5FD"/>
+  <text x="84" y="782" class="card-title">Pi ReAct Turn Runtime</text>
+  <text x="84" y="812" class="card-text">model → tool call → gateway</text>
+  <text x="84" y="838" class="card-text">→ toolResult → model continuation</text>
+  <text x="84" y="864" class="small">模型选择工具，服务端决定可用范围</text>
+  <rect x="414" y="750" width="330" height="130" rx="6" fill="#F5F3FF" stroke="#C4B5FD"/>
+  <text x="434" y="782" class="card-title">Capability Gateway</text>
+  <text x="434" y="812" class="card-text">只读记忆工具 + 已解锁 Skill/MCP</text>
+  <text x="434" y="838" class="card-text">资格、白名单、确认与执行回执</text>
+  <text x="434" y="864" class="small">解锁不等于执行成功</text>
+  <rect x="764" y="750" width="330" height="130" rx="6" fill="#ECFEFF" stroke="#67E8F9"/>
+  <text x="784" y="782" class="card-title">Headless Memory v1</text>
+  <text x="784" y="812" class="card-text">observe / recall / expand</text>
+  <text x="784" y="838" class="card-text">mutate / forget · SDK / Pi / MCP</text>
+  <text x="784" y="864" class="small">外部 Agent 通过原子契约接入</text>
+  <rect x="1114" y="750" width="330" height="130" rx="6" fill="#FFF7ED" stroke="#FDBA74"/>
+  <text x="1134" y="782" class="card-title">Trace 协作视图</text>
+  <text x="1134" y="812" class="card-text">六视图熵 / 权重 / A-B</text>
+  <text x="1134" y="838" class="card-text">PPR 预算 / Filter 提议 / 工具循环</text>
+  <text x="1134" y="864" class="small">原始 Input / Output 与真实调用耗时</text>
+  <rect x="1464" y="750" width="372" height="130" rx="6" fill="#F1F5F9" stroke="#94A3B8"/>
+  <text x="1484" y="782" class="card-title">评测与无短期记忆重放</text>
+  <text x="1484" y="812" class="card-text">跨会话时序、关系与事实准确性</text>
+  <text x="1484" y="838" class="card-text">Shadow → A-B → Dynamic/Active</text>
+  <text x="1484" y="864" class="small">逐变量上线，保留 legacy 回退</text>
+
+  <rect x="40" y="946" width="1820" height="164" rx="6" fill="#FFFDFC" stroke="#FDBA74" stroke-width="2"/>
+  <text x="64" y="984" class="lane-title">每 X 轮长期记忆更新</text>
+  <rect x="64" y="1004" width="270" height="76" rx="6" fill="#FFFFFF" stroke="#FED7AA"/>
+  <text x="199" y="1033" text-anchor="middle" class="card-title">抽取候选操作</text>
+  <text x="199" y="1060" text-anchor="middle" class="small">字段 / 事件 / 实体 / 关系 / Claim</text>
+  <path d="M334 1042H358" class="loop"/>
+  <rect x="360" y="1004" width="270" height="76" rx="6" fill="#FFFFFF" stroke="#FED7AA"/>
+  <text x="495" y="1033" text-anchor="middle" class="card-title">服务端对齐与裁决</text>
+  <text x="495" y="1060" text-anchor="middle" class="small">create / enrich / update / supersede / retract</text>
+  <path d="M630 1042H654" class="loop"/>
+  <rect x="656" y="1004" width="270" height="76" rx="6" fill="#FFFFFF" stroke="#FED7AA"/>
+  <text x="791" y="1033" text-anchor="middle" class="card-title">双时态规范写入</text>
+  <text x="791" y="1060" text-anchor="middle" class="small">valid time + transaction time + evidence</text>
+  <path d="M926 1042H950" class="loop"/>
+  <rect x="952" y="1004" width="270" height="76" rx="6" fill="#FFFFFF" stroke="#FED7AA"/>
+  <text x="1087" y="1033" text-anchor="middle" class="card-title">六视图与关联边</text>
+  <text x="1087" y="1060" text-anchor="middle" class="small">同步失活 / 重建 Embedding / GMM 建边</text>
+  <path d="M1222 1042H1246" class="loop"/>
+  <rect x="1248" y="1004" width="270" height="76" rx="6" fill="#FFFFFF" stroke="#FED7AA"/>
+  <text x="1383" y="1033" text-anchor="middle" class="card-title">Outbox 图投影</text>
+  <text x="1383" y="1060" text-anchor="middle" class="small">事实图 + 语义图，可失败重放</text>
+  <path d="M1518 1042H1542" class="loop"/>
+  <rect x="1544" y="1004" width="292" height="76" rx="6" fill="#1D4ED8"/>
+  <text x="1690" y="1033" text-anchor="middle" class="white-title">触发器与下一轮</text>
+  <text x="1690" y="1060" text-anchor="middle" class="white-text">读取新的 current 状态</text>
+
+  <rect x="40" y="1140" width="1820" height="136" rx="6" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="2"/>
+  <text x="64" y="1176" class="lane-title">数据、图与模型平面</text>
+  <rect x="64" y="1194" width="530" height="58" rx="6" fill="#EFF6FF" stroke="#93C5FD"/>
+  <text x="329" y="1218" text-anchor="middle" class="card-title">SQLite 主记录库</text>
+  <text x="329" y="1241" text-anchor="middle" class="small">规范事实 + 六视图 + 语义边 + outbox</text>
+  <rect x="614" y="1194" width="430" height="58" rx="6" fill="#F5F3FF" stroke="#C4B5FD"/>
+  <text x="829" y="1218" text-anchor="middle" class="card-title">Neo4j 可重建投影</text>
+  <text x="829" y="1241" text-anchor="middle" class="small">事实 RELATED + 语义 ASSOCIATED_WITH</text>
+  <rect x="1064" y="1194" width="372" height="58" rx="6" fill="#ECFEFF" stroke="#67E8F9"/>
+  <text x="1250" y="1218" text-anchor="middle" class="card-title">Text / Embedding Provider</text>
+  <text x="1250" y="1241" text-anchor="middle" class="small">Ark / OpenAI / Anthropic / Mock</text>
+  <rect x="1456" y="1194" width="380" height="58" rx="6" fill="#FFF7ED" stroke="#FDBA74"/>
+  <text x="1646" y="1218" text-anchor="middle" class="card-title">核心不变量</text>
+  <text x="1646" y="1241" text-anchor="middle" class="small">检索投影可删；规范事实、证据与版本不可丢</text>
+
+  <text x="48" y="1304" class="small">SQLite 是当前唯一事实源。Neo4j、六类视图、语义关联边、PPR 和 LLM Filter 都只能帮助发现或压缩候选，不能越过服务端状态机。</text>
+</svg>

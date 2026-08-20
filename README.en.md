@@ -4,15 +4,15 @@
 
 Open Character Memory is an open-source role-user memory runtime and visual studio for role-play companions and tutoring agents. It remembers user facts, character commitments, shared stories, corrections, relationship state, and narrative branches without treating every semantically similar memory as current truth.
 
-Version `0.5.0` combines a Pi Agent Core ReAct loop with corrective and agentic memory retrieval, a bitemporal SQLite source of truth, a replayable Neo4j graph projection, and controlled Skill/MCP execution.
+Version `0.6.0` combines a Pi Agent Core ReAct loop with multi-granularity, corrective, and agentic memory retrieval, a bitemporal SQLite source of truth, replayable Neo4j fact/semantic graph projections, and controlled Skill/MCP execution.
 
-![Open Character Memory architecture](docs/assets/overall-architecture-v0.5.0.png)
+![Open Character Memory architecture](docs/assets/overall-architecture-v0.6.0.png)
 
 ## Highlights
 
 - Bidirectional user, character, and shared-story memory with strict user/agent/story/branch isolation.
 - Event operations for `create`, additive `enrich`, real-world `update`, belief correction `supersede`, and `retract`, backed by valid and transaction time.
-- Event/entity/claim graph visualization with pre-answer corrective retrieval and in-generation read-only memory tools.
+- Six rebuildable retrieval views per canonical event, entropy-aware routing, semantic associations, bounded PPR, pre-answer corrective retrieval, and in-generation read-only memory tools.
 - Configurable structured fields, extraction cadence, prompts, retrieval policy, plots, and low-code triggers.
 - Scope-locked `memory_search` / `memory_expand`, controlled Skill/MCP exposure, execution receipts, and Pi `toolResult` continuation turns.
 - Inspectable Trace views for prompts, injected memory, retrieval evidence, model/tool calls, and post-turn writes.
@@ -29,14 +29,17 @@ See the [2026 agent-memory comparison](docs/market-memory-comparison-2026.md) fo
 - User-defined persistent response rules that pass server-side safety boundaries.
 - Versioned claims with additive `enrich` plus `active`, `superseded`, and `retracted` states.
 - Bitemporal `valid_*` and `transaction_*` intervals with `valid_at` / `known_at` as-of queries.
-- Neo4j graph projection with tenant scope keys, idempotent replacement, outbox replay, and SQLite fallback.
+- Neo4j fact and semantic-association graph projections with scope keys, idempotent replacement, outbox replay, and SQLite fallback.
 - Pi Agent Core state, lifecycle events, and a ReAct-style tool loop. Read-only memory tools are routed only for memory-relevant turns and cannot accept client/model scope keys. Unlocked scoped props are exposed separately; validated declarative Skill tools and allowlisted MCP tools execute through the server gateway and return `toolResult` before the model continues.
 - User memory plus role/user shared-story events, entities, claims, and evidence-backed relations.
-- Three-layer retrieval: hybrid pre-retrieval builds a lightweight catalog and strict detail set; a Corrective Recall Planner can rewrite or decompose an insufficient query and search all active events in the server-locked scope, outside the initial intent pool; the main model can later call `memory_search` or `memory_expand` when it discovers an evidence gap. All results remain Active Only, and provisional shared-story memories still require direct evidence.
+- Each canonical event is projected into `turn`, `event`, `claim`, `episode`, `summary`, and `entity_keyword` views. These are rebuildable indexes, never independent truth records.
+- An entropy-aware router supports fixed, shadow, dynamic, and stable scope-level A/B modes. Semantic associations are selected with an adaptive GMM threshold, then bounded PPR can expand candidates within at most two hops and 240 nodes.
+- A Corrective Recall Planner can rewrite or decompose an insufficient query and search all active events in the server-locked scope. The main model can later call `memory_search` or `memory_expand` when it discovers an evidence gap.
+- An optional post-Planner LLM filter can only propose deletions from already selected events. The server restores direct evidence, relationship evidence, ordered timeline members, and the configured minimum; malformed output or insufficient evidence keeps the complete set.
 - A hybrid graph ontology: six broad entity classes, controlled core relation families, preserved concrete predicates, and open traceable extensions. First-person relational queries resolve the current user identity before traversing family, ownership, and evidence edges.
 - Deterministic relationship retrieval emits a grounded answer contract containing the user anchor, requested relation family, resolved object, and active evidence edge. Conflicting historical assistant answers are excluded from that model turn, and the decision is visible in Trace.
 - Conditional story unlocking and auditable function calls driven by structured state.
-- Role prompt, memory injection, planner rewrites, cross-pool hits, scope-locked memory tool calls, model usage, and cache diagnostics in Trace.
+- Role prompt, memory injection, six-view entropy/weights, semantic edges, PPR budgets, filter proposals, planner rewrites, cross-pool hits, scope-locked memory tool calls, model usage, and cache diagnostics in Trace.
 - Read-only "no short-term memory" Trace replay: rerun the original query in the same scope while giving both the retrieval planner and main model zero recent dialogue messages. The diagnostic run writes only a new Trace and cannot persist messages or memory, fire triggers, advance plots, or execute Skill/MCP tools.
 - Provider adapters for Ark, OpenAI, Anthropic, and an offline Mock mode.
 - Stable-prefix caching: role instructions and fixed attributes are cacheable; server time, user state, retrieved memory, plots, and recent dialogue stay dynamic. A zero provider-managed `cached_tokens` value means the upstream reported no hit or no cache usage, not that a local cache failed.
@@ -120,11 +123,11 @@ Ark defaults to provider-managed caching reported by Responses usage. Explicit `
 
 ## Storage boundary
 
-SQLite is the current single-node source of truth. Neo4j is a rebuildable read projection for graph traversal, not a second authority. Embeddings remain JSON vectors scored in the application process. The JavaScript/TypeScript SDK and persistent single-node extraction jobs are implemented as an alpha workspace package; independent npm/PyPI publication, a Python SDK, PostgreSQL plus pgvector, and a distributed worker remain future work.
+SQLite is the current single-node source of truth. `memory_views` and `memory_associations` are rebuildable search projections. Neo4j projects both evidence-backed fact edges and `ASSOCIATED_WITH` semantic edges for traversal, but is not a second authority. Embeddings remain JSON vectors scored in the application process. The JavaScript/TypeScript SDK and persistent single-node extraction jobs are implemented as an alpha workspace package; independent npm/PyPI publication, a Python SDK, PostgreSQL plus pgvector, and a distributed worker remain future work.
 
 OpenSearch may become useful later as a hybrid lexical/vector retrieval index for large corpora, but it should not replace the transactional record or Neo4j path projection.
 
-See [the runtime and graph design](docs/bitemporal-neo4j-pi-runtime.md), [the headless memory contract](docs/headless-memory-runtime.md), [the future storage roadmap](docs/future-storage-sdk-roadmap.md), and [the release checklist](docs/open-source-release-checklist.md).
+See [the multi-granularity retrieval design](docs/multigranularity-memory-retrieval.md), [the runtime and graph design](docs/bitemporal-neo4j-pi-runtime.md), [the headless memory contract](docs/headless-memory-runtime.md), [the future storage roadmap](docs/future-storage-sdk-roadmap.md), and [the release checklist](docs/open-source-release-checklist.md).
 
 ## License
 
