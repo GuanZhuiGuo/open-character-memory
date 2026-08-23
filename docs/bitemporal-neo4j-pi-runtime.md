@@ -8,7 +8,8 @@
 HTTP /api/chat
   -> 会话锁、固定规则、触发器与 Prompt Compiler
   -> 六粒度视图召回 -> 低熵 Router -> 语义关联图 / 有界 PPR
-  -> Corrective Recall Planner -> 必要时改写 Query 并跨首轮候选池重检
+  -> Corrective Recall Planner -> 必要时改写 Query 并跨 active 事件与独立 Claim 重检
+  -> 相对时间锚定 / 宽泛画像闭合 / 服务端时序与集合聚合
   -> 证据保护型 LLM 上下文过滤
   -> 记忆意图路由 -> 只读 memory_search / memory_expand
   -> 已解锁 Skill/MCP 解析与工具白名单
@@ -25,10 +26,12 @@ SQLite 是当前唯一事实源。Neo4j 可以删除后从 SQLite 全量重建�
 
 回复前的 Corrective Recall Planner 与生成中的主模型工具不是同一层：
 
-1. **回复前纠正**：首轮向量、关键词和图召回先形成轻量目录。Planner 判断证据是否足够；目录为空或不足时可生成最多 N 个更具体 Query，并在当前 `user + agent + story + branch` 的全部 active 事件中重检，不再受首轮事件类型/collection 候选池限制。
+1. **回复前纠正**：首轮向量、关键词和图召回先形成轻量目录。Planner 判断证据是否足够；目录为空或不足时可生成最多 N 个更具体 Query，并在当前 `user + agent + story + branch` 的全部 active 事件和独立 Claim 中重检，不再受首轮事件类型/collection 候选池限制。宽泛建议还会在自适应相关分数带内闭合已确认画像。
 2. **生成中补证据**：主模型第一次推理后若仍发现事实缺口，可调用 `memory_search` 改写检索词，或用 `memory_expand` 展开已知 event id / entity 的声明与证据邻居。结果作为 `toolResult` 回灌 Pi，再进行下一次模型推理。
 
 两层都不能修改记忆。模型不能传入或更换作用域键；单轮调用次数、单次 Query 数、TopK、图跳数和 Active Only 均由场景配置及服务端硬限制控制。系统只在记忆相关问题、已有记忆证据或 Planner 请求补查时暴露这两个工具，普通闲聊不承担工具循环开销。
+
+时序排序和带明确时间范围的记忆数量不是交给生成模型自由计算：相对时间先保留原表达，并以来源消息 `created_at` 解析锚点；数量问题由服务端扫描当前作用域全部 active 事件、按目标时间范围硬过滤和去重，再由 `deterministic-grounding-guard` 直接返回确定结果，不调用主模型。这里的“0”表示长期记忆闭集中没有记录，不自动推断现实世界从未发生。
 
 ## 双时态语义
 

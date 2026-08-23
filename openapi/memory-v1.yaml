@@ -137,7 +137,7 @@ paths:
     delete:
       tags: [Memory]
       operationId: forgetMemory
-      description: Retract or erase one structured value or event within the locked scope.
+      description: Retract or erase one structured value, standalone claim, or event within the locked scope.
       requestBody:
         required: true
         content:
@@ -288,7 +288,7 @@ components:
       properties:
         scope: { $ref: '#/components/schemas/MemoryScope' }
         idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
-        recordType: { type: string, enum: [structured, event] }
+        recordType: { type: string, enum: [structured, claim, event] }
         operation:
           type: string
           enum: [set, merge, delta, create, enrich, update, supersede, retract]
@@ -302,7 +302,7 @@ components:
       properties:
         scope: { $ref: '#/components/schemas/MemoryScope' }
         idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
-        recordType: { type: string, enum: [structured, event] }
+        recordType: { type: string, enum: [structured, claim, event] }
         recordId: { type: string, maxLength: 160 }
         key: { type: string, maxLength: 160 }
         mode: { type: string, enum: [retract, erase], default: retract }

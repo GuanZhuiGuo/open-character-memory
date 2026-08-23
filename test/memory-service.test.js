@@ -198,6 +198,46 @@ test('structured memory can be written and retracted without deleting its audit 
   ).count >= 2);
 });
 
+test('standalone claim mutation does not require a fake event and remains independently forgettable', async () => {
+  const written = await mutateMemory({
+    scope,
+    idempotencyKey: 'mutation-claim-1',
+    recordType: 'claim',
+    operation: 'create',
+    reason: '受信应用写入可复用偏好',
+    payload: {
+      subject: { name: '同事陈琪', type: 'person' },
+      predicate: '用餐环境偏好',
+      object: '安静的户外座位',
+      memory_kind: 'preference',
+      state_phase: 'current',
+      evidence_level: 'explicit',
+      cardinality: 'set',
+      confidence: 0.92
+    }
+  }, { actorType: 'service' });
+  assert.equal(written.result.memoryKind, 'preference');
+  const row = db.prepare('SELECT event_id, status FROM claims WHERE id = ?').get(written.result.id);
+  assert.equal(row.event_id, '');
+  assert.equal(row.status, 'active');
+
+  const recalled = await recallMemory({ scope, query: '陈琪喜欢什么样的用餐座位？' });
+  assert.ok(recalled.facts.some((item) => item.id === written.result.id
+    && item.memoryKind === 'preference'));
+
+  const forgotten = await forgetMemory({
+    scope,
+    idempotencyKey: 'forget-claim-1',
+    recordType: 'claim',
+    recordId: written.result.id,
+    mode: 'retract',
+    reason: '用户要求撤回该偏好'
+  });
+  assert.equal(forgotten.result.operation, 'retracted');
+  const afterForget = await recallMemory({ scope, query: '陈琪的用餐偏好' });
+  assert.equal(afterForget.facts.some((item) => item.id === written.result.id), false);
+});
+
 test('TypeScript SDK, Pi adapter, and read-only MCP use the versioned HTTP contract end to end', async () => {
   ({ server } = await import('../server.js'));
   server.listen(0, '127.0.0.1');
@@ -210,6 +250,7 @@ test('TypeScript SDK, Pi adapter, and read-only MCP use the versioned HTTP contr
   const capabilities = await client.capabilities();
   assert.equal(capabilities.contractVersion, 'memory-runtime/v1');
   assert.equal(capabilities.features.modelDirectWrites, false);
+  assert.equal(capabilities.features.standaloneSemanticClaims, true);
 
   const blockedResponse = await fetch(`http://127.0.0.1:${address.port}/api/bootstrap`, {
     headers: { Authorization: 'Bearer memory-service-test-key' }

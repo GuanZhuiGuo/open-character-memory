@@ -13,6 +13,8 @@ test('release notes parse linked, historical, and unreleased changelog entries',
 ## [1.2.3](https://example.com/releases/tag/v1.2.3) - 2026-08-18
 ### Fixed
 - Fixed entry.
+### Resolved Bad Cases
+- **Missing evidence**: the answer no longer guesses when no evidence exists.
 `);
 
   assert.equal(releases.length, 2);
@@ -21,6 +23,9 @@ test('release notes parse linked, historical, and unreleased changelog entries',
   assert.equal(releases[1].version, '1.2.3');
   assert.equal(releases[1].githubUrl, 'https://example.com/releases/tag/v1.2.3');
   assert.equal(releases[1].sections[0].title, '修复');
+  assert.equal(releases[1].badCaseCount, 1);
+  assert.equal(releases[1].sections[1].key, 'resolved-bad-cases');
+  assert.equal(releases[1].sections[1].title, '解决的 Bad Case');
 });
 
 test('repository release notes expose the current version and detailed published history', () => {
@@ -37,5 +42,6 @@ test('repository release notes expose the current version and detailed published
   assert.ok(diagnosticRelease);
   assert.ok(diagnosticRelease.sections.some((section) => section.key === 'validation'));
   assert.match(temporalGraphRelease.githubUrl, /releases\/tag\/v0\.4\.3$/);
-  assert.equal(baselineRelease.itemCount, 4);
+  assert.ok(baselineRelease.itemCount >= 4);
+  assert.ok(notes.releases.every((release) => release.badCaseCount > 0));
 });

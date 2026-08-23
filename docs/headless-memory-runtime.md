@@ -32,9 +32,9 @@ apps / public               现有 Studio 产品层
 | `recall` | `POST /v1/memory/recall` | 只返回当前作用域的 active 记忆与来源证据 |
 | `expand` | `POST /v1/memory/expand` | 按事件 ID 或实体名展开声明和图谱邻居 |
 | `mutate` | `POST /v1/memory/mutate` | 受信应用/管理员的确定性写入 |
-| `forget` | `DELETE /v1/memory` | 撤回或物理删除单条结构化记忆/事件 |
+| `forget` | `DELETE /v1/memory` | 撤回或物理删除单条结构化记忆/独立 Claim/事件 |
 
-`recall` 在 `0.6.0` 中复用 Studio 的六粒度视图、Router、语义关联图、有界 PPR、Corrective Planner 和证据保护过滤；返回合同仍是规范化 `ContextPack`，接入方不需要理解内部视图表。所有阶段继续由服务端锁定 scope 并只读取 active 版本。
+`recall` 在 `0.6.0` 中复用 Studio 的六粒度视图、Router、语义关联图、有界 PPR、跨事件/独立 Claim 的 Corrective Planner、相对时间锚定、确定性集合聚合和证据保护过滤；返回合同仍是规范化 `ContextPack`，接入方不需要理解内部视图表。所有阶段继续由服务端锁定 scope 并只读取 active 版本。
 
 `observe`、`mutate` 与 `forget` 必须带 `idempotencyKey`。同一 tenant 下使用相同 key 重试完全相同的请求时，只返回原回执，不重复写入；如果该 key 被复用到不同 payload 或作用域，服务返回 `409 MEMORY_IDEMPOTENCY_*_CONFLICT`。
 
@@ -105,6 +105,10 @@ await memory.observe({
 - `extractionMode=async`：返回 `202 + job id`，持久化 worker 重试抽取，显式称呼/风格/禁止项仍同步生效。
 
 当前 worker 面向单机 SQLite，具备持久化任务、幂等 observation、指数退避和最大尝试次数。任务是 at-least-once attempts，并不承诺 exactly-once commit；它也不等同于多副本分布式队列。
+
+Studio 兼容层的长期抽取使用两条并行管线：事件图谱管线处理结构字段、事件、实体与关系；语义状态管线处理独立事实、偏好、当前/计划状态和角色原话。两者读取同一 observation 证据批次，由服务端执行证据级别、作用域和版本操作校验。模型遗漏时，原子事实守卫只从原文补齐明确标题/名称、已发生金额和位置状态；建议价格、预算、假设不会成为交易事实。位置 Claim 还会进入规范槽位并接受 current / planned 的双向子句时态裁决后提交。
+
+`assistant_utterance` 只表示角色曾说过某条具体信息，默认是 `shared_story + provisional`；只有用户后续复述、选择、认可或行动后才升级为 `accepted + confirmed`。这个区分使角色能回忆“我说过什么”，又不会把自己的输出写成用户事实。
 
 ## MCP
 

@@ -4,7 +4,7 @@ export const MEMORY_EVENT_OPERATIONS = Object.freeze([
   'create', 'enrich', 'update', 'supersede', 'retract'
 ]);
 
-export const MEMORY_MUTATION_RECORD_TYPES = Object.freeze(['structured', 'event']);
+export const MEMORY_MUTATION_RECORD_TYPES = Object.freeze(['structured', 'claim', 'event']);
 export const MEMORY_EXTRACTION_MODES = Object.freeze(['async', 'sync', 'none']);
 
 export class MemoryContractError extends Error {
@@ -154,7 +154,7 @@ export function normalizeMutationRequest(input = {}, defaults = {}) {
     MEMORY_MUTATION_RECORD_TYPES,
     'recordType'
   );
-  const operation = recordType === 'event'
+  const operation = ['claim', 'event'].includes(recordType)
     ? enumValue(input.operation, MEMORY_EVENT_OPERATIONS, 'operation', 'create')
     : enumValue(input.operation, ['set', 'merge', 'delta'], 'operation', 'set');
   const payload = input.payload && typeof input.payload === 'object' && !Array.isArray(input.payload)
@@ -175,6 +175,18 @@ export function normalizeMutationRequest(input = {}, defaults = {}) {
       'payload.event_key',
       { required: true, max: 160 }
     );
+  }
+  if (recordType === 'claim') {
+    if (!payload.subject || typeof payload.subject !== 'object' || Array.isArray(payload.subject)) {
+      throw new MemoryContractError('payload.subject is required', 'MEMORY_CLAIM_SUBJECT_REQUIRED');
+    }
+    payload.subject.name = text(payload.subject.name, 'payload.subject.name', { required: true, max: 160 });
+    payload.predicate = text(payload.predicate, 'payload.predicate', { required: true, max: 160 });
+    if (operation !== 'retract') {
+      payload.object = text(payload.object ?? payload.object_text, 'payload.object', {
+        required: true, max: 1000
+      });
+    }
   }
   return Object.freeze({
     contractVersion: MEMORY_CONTRACT_VERSION,
@@ -197,7 +209,7 @@ export function normalizeMutationRequest(input = {}, defaults = {}) {
 export function normalizeForgetRequest(input = {}, defaults = {}) {
   const recordType = enumValue(
     input.recordType ?? input.record_type,
-    ['structured', 'event'],
+    MEMORY_MUTATION_RECORD_TYPES,
     'recordType'
   );
   return Object.freeze({
@@ -208,7 +220,7 @@ export function normalizeForgetRequest(input = {}, defaults = {}) {
     }),
     recordType,
     recordId: text(input.recordId ?? input.record_id ?? '', 'recordId', {
-      required: recordType === 'event', max: 160
+      required: ['claim', 'event'].includes(recordType), max: 160
     }),
     key: text(input.key ?? '', 'key', { required: recordType === 'structured', max: 160 }),
     mode: enumValue(input.mode, ['retract', 'erase'], 'mode', 'retract'),

@@ -729,6 +729,12 @@ textarea { resize: vertical; line-height: 1.55; }
 .release-section li { position: relative; padding: 0 0 10px 15px; color: #3e4c60; font-size: 10px; line-height: 1.65; }
 .release-section li:last-child { padding-bottom: 0; }
 .release-section li::before { position: absolute; top: .65em; left: 0; width: 5px; height: 5px; content: ''; background: #7ca0dc; border-radius: 50%; }
+.release-section-resolved-bad-cases { margin: 10px 0 4px; padding: 16px; background: #f7faff; border: 1px solid #d9e6fb; border-radius: 7px; }
+.release-section-resolved-bad-cases > header > svg { color: #1f63c7; }
+.release-section-resolved-bad-cases h5 { color: #174d99; }
+.release-section-resolved-bad-cases li { margin-bottom: 8px; padding: 10px 11px 10px 14px; background: #fff; border: 1px solid #e1e9f5; border-left: 3px solid #5b8fdc; border-radius: 5px; }
+.release-section-resolved-bad-cases li:last-child { margin-bottom: 0; padding-bottom: 10px; }
+.release-section-resolved-bad-cases li::before { display: none; }
 .checkbox-row { flex-direction: row !important; align-items: center; gap: 8px !important; }
 .checkbox-row input { width: 16px; height: 16px; margin: 0; }
 .modal-body fieldset { margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }
@@ -1253,6 +1259,7 @@ body[data-role="user"] .select-wrap select:disabled { color: #344054; background
 .extraction-runtime-fields input:disabled { color: #526f9d; background: #f4f7fb; }
 .extraction-object-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .extraction-object-grid article { position: relative; display: grid; grid-template-columns: 24px 28px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 82px; padding: 10px; background: #f8fafc; border: 1px solid #dfe7f1; border-radius: 6px; }
+.extraction-object-grid article:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .extraction-object-grid article > svg { width: 19px; color: #3569b8; }
 .extraction-object-grid .object-sequence { display: grid; place-items: center; width: 22px; height: 22px; color: #3562ae; background: #e8f1ff; border-radius: 4px; font: 8px/1 ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
 .extraction-object-grid article div { min-width: 0; }

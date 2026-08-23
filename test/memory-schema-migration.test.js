@@ -38,6 +38,12 @@ test('existing SQLite data receives additive Headless Memory columns without rep
       db.exec('DROP TABLE memory_views');
       db.exec('ALTER TABLE retrieval_profiles DROP COLUMN granularity_router_mode');
       db.exec('ALTER TABLE retrieval_profiles DROP COLUMN context_filter_mode');
+      db.exec('DROP INDEX idx_claims_kind_phase');
+      db.exec('DROP TABLE claim_evidence');
+      db.exec('ALTER TABLE claims DROP COLUMN memory_kind');
+      db.exec('ALTER TABLE claims DROP COLUMN state_phase');
+      db.exec('ALTER TABLE claims DROP COLUMN memory_space');
+      db.exec('ALTER TABLE claims DROP COLUMN canonicality');
       console.log(count);
       db.close();
     `);
@@ -49,6 +55,8 @@ test('existing SQLite data receives additive Headless Memory columns without rep
       const retrieval = db.prepare('PRAGMA table_info(retrieval_profiles)').all();
       const memoryViews = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_views'").get();
       const associations = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_associations'").get();
+      const claims = db.prepare('PRAGMA table_info(claims)').all();
+      const claimEvidence = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'claim_evidence'").get();
       const count = db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
       if (!observations.some((item) => item.name === 'request_hash')) process.exit(11);
       if (!operations.some((item) => item.name === 'request_hash')) process.exit(12);
@@ -56,6 +64,11 @@ test('existing SQLite data receives additive Headless Memory columns without rep
       if (!retrieval.some((item) => item.name === 'context_filter_mode')) process.exit(14);
       if (!memoryViews) process.exit(15);
       if (!associations) process.exit(16);
+      if (!claims.some((item) => item.name === 'memory_kind')) process.exit(17);
+      if (!claims.some((item) => item.name === 'state_phase')) process.exit(18);
+      if (!claims.some((item) => item.name === 'memory_space')) process.exit(19);
+      if (!claims.some((item) => item.name === 'canonicality')) process.exit(20);
+      if (!claimEvidence) process.exit(21);
       console.log(count);
       db.close();
     `);

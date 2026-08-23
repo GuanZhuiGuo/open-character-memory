@@ -10,10 +10,12 @@ process.env.ARK_API_KEY = '';
 
 const { db, initializeDatabase, repairActiveEvidenceLinks } = await import('../lib/db.js');
 const {
-  compilePinnedMemory, detectFastControlUpdates, ensureEntity, getEventExtractionProfile,
-  getExtractionPromptContract, getMemoryValue, formatRetrievedMemory, getRetrievalProfile,
+  assessMemoryAnswerability, compilePinnedMemory, detectFastControlUpdates, ensureEntity, getEventExtractionProfile,
+  extractAssistantUtteranceCoverageClaims, extractExplicitStateTransitionClaims,
+  extractHighConfidenceLiteralClaims, extractHighConfidenceMonetaryClaims,
+  extractRelativeTemporalEvidence, getExtractionPromptContract, getMemoryValue, formatRetrievedMemory, getRetrievalProfile,
   guardExtractedEventEvidence, listEvents, listGraph, reconcileExtractedEvent, retrieveMemory,
-  setMemoryValue, shouldPreserveDatedEvent, storeEvent
+  setMemoryValue, shouldPreserveDatedEvent, storeEvent, storeSemanticClaim
 } = await import('../lib/memory.js');
 const { evaluateTriggers, getActivePlots, getActiveProps, listProps } = await import('../lib/triggers.js');
 const { json, localEmbedding, nowIso, uid } = await import('../lib/utils.js');
@@ -21,7 +23,7 @@ const {
   answerArchitectureQuestion, buildArchitectureChunks, getArchitectureIndexStatus,
   refreshArchitectureIndex, searchArchitecture
 } = await import('../lib/architecture.js');
-const { applyGroundedHistoryPolicy } = await import('../lib/agent.js');
+const { applyDeterministicResponseContract, applyGroundedHistoryPolicy } = await import('../lib/agent.js');
 const { config } = await import('../lib/config.js');
 const {
   evaluateGranularityRouter, listActiveMemoryAssociations, MEMORY_VIEW_TYPES,
@@ -36,6 +38,12 @@ const baseScope = {
   storyId: 'main_story',
   branchId: 'main'
 };
+const semanticScope = { ...baseScope, userId: 'user_semantic_regression' };
+db.prepare(`INSERT OR IGNORE INTO users
+  (id, name, display_name, avatar_color, status, created_at, updated_at)
+  VALUES (?, ?, ?, '#2563eb', 'active', ?, ?)`).run(
+  semanticScope.userId, semanticScope.userId, '语义记忆回归用户', nowIso(), nowIso()
+);
 
 test('默认配置同时包含陪聊与教育固定字段', () => {
   const keys = db.prepare('SELECT key FROM memory_schemas').all().map((item) => item.key);
@@ -121,6 +129,8 @@ test('抽取合同显示真实轮次窗口并使用独立字段抽取说明', ()
   assert.equal(contract.runtime.shortTermMemoryMessageLimit, 16);
   assert.equal(contract.runtime.shortTermMemoryTurnCapacity, 8);
   assert.equal(contract.runtime.maxEventsPerBatch, 24);
+  assert.equal(contract.runtime.extractionPipelines, 2);
+  assert.equal(contract.runtime.extractionPipelineExecution, 'parallel_then_server_merge');
   assert.equal(addressField.extraction_instruction, '只在用户明确指定今后称呼时写入。');
   assert.match(contract.prompt.user, /只在用户明确指定今后称呼时写入/);
   assert.match(contract.prompt.user, /事件抽取指令/);
@@ -129,7 +139,351 @@ test('抽取合同显示真实轮次窗口并使用独立字段抽取说明', ()
   assert.match(contract.prompt.user, /user_memory\|shared_story/);
   assert.match(contract.prompt.user, /confirmed\|provisional/);
   assert.match(contract.prompt.user, /角色说过\/做过的事/);
+  assert.match(contract.prompt.user, /semantic_claims/);
+  assert.match(contract.prompt.user, /assistant_reference/);
+  assert.match(contract.prompt.user, /assistant_utterance/);
+  assert.match(contract.prompt.user, /state_phase/);
+  assert.match(contract.prompt.user, /至少列出两条不同用户消息/);
+  assert.match(contract.prompt.pipelines.event_graph.user, /事件.*图谱/);
+  assert.match(contract.prompt.pipelines.event_graph.user, /必须拆成两个 event_key/);
+  assert.doesNotMatch(contract.prompt.pipelines.event_graph.user, /semantic_claims/);
+  assert.match(contract.prompt.pipelines.semantic_state.user, /semantic_claims/);
+  assert.match(contract.prompt.pipelines.semantic_state.user, /story_time/);
+  assert.match(contract.prompt.pipelines.semantic_state.user, /时间词不得粗暴作用于整条消息/);
   assert.doesNotMatch(contract.prompt.user, /称呼用户为：\{\{value\}\}/);
+});
+
+function addSemanticEvidenceConversation(id, turns) {
+  const timestamp = nowIso();
+  db.prepare(`INSERT INTO conversations
+    (id, user_id, agent_id, story_id, branch_id, title, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, '语义声明测试', ?, ?)`).run(
+    id, semanticScope.userId, semanticScope.agentId, semanticScope.storyId, semanticScope.branchId,
+    timestamp, timestamp
+  );
+  const insert = db.prepare(`INSERT INTO messages
+    (id, conversation_id, user_id, role, content, metadata_json, created_at)
+    VALUES (?, ?, ?, ?, ?, '{}', ?)`);
+  return turns.map((turn, index) => {
+    const messageId = `${id}_message_${index + 1}`;
+    insert.run(messageId, id, semanticScope.userId, turn.role, turn.content,
+      new Date(Date.now() + index * 1000).toISOString());
+    return messageId;
+  });
+}
+
+test('用户承接的助手信息写入独立共享声明并保留双证据', async () => {
+  const [assistantId, userId] = addSemanticEvidenceConversation('semantic_assistant_acceptance', [
+    { role: 'assistant', content: 'Cihampelas Walk 的 Miss Bee Providore 有很好的 Nasi Goreng。' },
+    { role: 'user', content: '好，我就去 Miss Bee Providore 试试 Nasi Goreng。' }
+  ]);
+  const stored = await storeSemanticClaim({
+    subject: { name: 'Miss Bee Providore', type: 'organization' },
+    predicate: '提供拿手菜',
+    object: 'Cihampelas Walk 的 Nasi Goreng',
+    memory_kind: 'assistant_reference',
+    state_phase: 'current',
+    evidence_level: 'accepted',
+    evidence_message_ids: [assistantId, userId],
+    evidence_keywords: ['Miss Bee Providore', 'Nasi Goreng'],
+    cardinality: 'set',
+    confidence: 0.9
+  }, semanticScope, userId, { validationMode: 'strict' });
+  const row = db.prepare('SELECT * FROM claims WHERE id = ?').get(stored.id);
+  assert.equal(row.event_id, '');
+  assert.equal(row.memory_space, 'shared_story');
+  assert.equal(row.canonicality, 'confirmed');
+  assert.equal(stored.evidenceCount, 2);
+  const retrieval = await retrieveMemory('Cihampelas Walk Nasi Goreng 餐厅', semanticScope, {
+    plannerEnabled: false, contextFilterMode: 'off'
+  });
+  assert.ok(retrieval.claims.some((claim) => claim.id === stored.id
+    && claim.selectedBy !== 'selected_event'));
+});
+
+test('角色单方说过的信息可在追问时召回，后续用户承接会跨周期升级证据', async () => {
+  const [assistantId, userId] = addSemanticEvidenceConversation('semantic_assistant_utterance', [
+    { role: 'assistant', content: '两因素认证可以使用生物特征或一次性密码 OTP。' },
+    { role: 'user', content: '好的，我会考虑你说的生物特征和 OTP。' }
+  ]);
+  const utterance = await storeSemanticClaim({
+    subject: { name: '两因素认证', type: 'concept' }, predicate: '角色曾列举方法',
+    object: '生物特征或一次性密码 OTP', memory_kind: 'assistant_reference',
+    state_phase: 'current', evidence_level: 'assistant_utterance',
+    evidence_message_ids: [assistantId], evidence_keywords: ['生物特征', 'OTP'],
+    cardinality: 'set', confidence: 0.8
+  }, semanticScope, assistantId, { validationMode: 'strict' });
+  let row = db.prepare('SELECT * FROM claims WHERE id = ?').get(utterance.id);
+  assert.equal(row.canonicality, 'provisional');
+  assert.equal(row.source_speaker, 'assistant');
+
+  const retrieval = await retrieveMemory('你之前提过哪些两因素认证方法？', semanticScope, {
+    plannerEnabled: false, contextFilterMode: 'off', minSimilarity: 0
+  });
+  assert.ok(retrieval.claims.some((claim) => claim.id === utterance.id
+    && claim.evidenceLevel === 'assistant_utterance'));
+
+  const accepted = await storeSemanticClaim({
+    subject: { name: '两因素认证', type: 'concept' }, predicate: '角色曾列举方法',
+    object: '生物特征或一次性密码 OTP', memory_kind: 'assistant_reference',
+    state_phase: 'current', evidence_level: 'accepted', evidence_message_ids: [userId],
+    evidence_keywords: ['生物特征', 'OTP'], cardinality: 'set', confidence: 0.9
+  }, semanticScope, userId, { validationMode: 'strict' });
+  assert.equal(accepted.id, utterance.id);
+  row = db.prepare('SELECT * FROM claims WHERE id = ?').get(utterance.id);
+  assert.equal(row.canonicality, 'confirmed');
+  assert.equal(row.source_speaker, 'both');
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM claim_evidence WHERE claim_id = ?')
+    .get(utterance.id).count, 2);
+});
+
+test('一条用户原文明确表达的偏好可直接建立，不误用隐式偏好双证据规则', async () => {
+  const [userId] = addSemanticEvidenceConversation('semantic_explicit_preference', [
+    { role: 'user', content: '我享受在家办公的灵活性，但会想念和同事的日常交流。' }
+  ]);
+  const stored = await storeSemanticClaim({
+    subject: { name: '用户', type: 'person' }, predicate: '工作方式偏好',
+    object: '享受在家办公的灵活性并重视同事交流', memory_kind: 'preference',
+    state_phase: 'current', evidence_level: 'explicit', evidence_message_ids: [userId],
+    evidence_keywords: ['在家办公', '同事'], cardinality: 'set', confidence: 0.9
+  }, semanticScope, userId, { validationMode: 'strict' });
+  assert.equal(stored.evidenceCount, 1);
+});
+
+test('显式命名事实覆盖检查补齐模型偶发漏掉的原文标题', () => {
+  const claims = extractHighConfidenceLiteralClaims([{
+    message_id: 'message_literal_title', role: 'user',
+    content: 'The play I attended was actually a production of The Glass Menagerie, have you heard of it?'
+  }]);
+  assert.equal(claims.length, 1);
+  assert.equal(claims[0].predicate, 'play I attended');
+  assert.equal(claims[0].object, 'The Glass Menagerie');
+  assert.equal(claims[0].state_phase, 'completed');
+  assert.equal(claims[0].metadata.extraction_source, 'server_literal_coverage_guard');
+  assert.deepEqual(extractHighConfidenceLiteralClaims([{
+    message_id: 'message_non_literal', role: 'user', content: 'Maybe that play was interesting.'
+  }]), []);
+  assert.deepEqual(extractHighConfidenceLiteralClaims([{
+    message_id: 'message_fee_not_title', role: 'user',
+    content: 'By the way, I remember when I took Lola to the vet, the consultation fee was $50, which was a discounted price for regular customers.'
+  }]), []);
+});
+
+test('已发生金额覆盖检查保留原子费用且拒绝预算区间', () => {
+  const claims = extractHighConfidenceMonetaryClaims([{
+    message_id: 'message_flea_cost', role: 'user',
+    content: 'By the way, I also got her flea and tick prevention medication, it was $25 for a 3-month supply.'
+  }]);
+  assert.equal(claims.length, 1);
+  assert.equal(claims[0].state_phase, 'completed');
+  assert.match(claims[0].object, /flea and tick prevention medication/);
+  assert.match(claims[0].object, /amount=\$25/);
+  assert.equal(claims[0].metadata.extraction_source, 'server_monetary_fact_coverage_guard');
+  assert.deepEqual(extractHighConfidenceMonetaryClaims([{
+    message_id: 'message_price_range', role: 'user',
+    content: 'Can you recommend a dog bed in the $40-$50 price range?'
+  }]), []);
+});
+
+test('角色原话覆盖检查保留可检索的编号方法与例子', () => {
+  const claims = extractAssistantUtteranceCoverageClaims([{
+    message_id: 'message_assistant_list', role: 'assistant',
+    content: '1. Encryption: Encrypt data at rest. 2. Two-factor authentication: Use biometric authentication or one-time passwords (OTP). 3. Audits: Review access logs.'
+  }], '林晚');
+  const twoFactor = claims.find((claim) => claim.object.includes('one-time passwords'));
+  assert.ok(twoFactor);
+  assert.equal(twoFactor.subject.name, '林晚');
+  assert.equal(twoFactor.memory_kind, 'assistant_reference');
+  assert.equal(twoFactor.evidence_level, 'assistant_utterance');
+  assert.equal(twoFactor.canonicality, 'provisional');
+});
+
+test('显式状态迁移覆盖检查保留计划位置且不冒充当前值', async () => {
+  const content = "I need to organize my closet this weekend, and I'm looking forward to storing my old sneakers in a shoe rack, they're currently taking up space.";
+  const [messageId] = addSemanticEvidenceConversation('semantic_planned_storage_guard', [
+    { role: 'user', content }
+  ]);
+  const claims = extractExplicitStateTransitionClaims([{
+    message_id: messageId, role: 'user', content
+  }]);
+  assert.equal(claims.length, 1);
+  assert.match(claims[0].subject.name, /old sneakers/);
+  assert.equal(claims[0].object, 'shoe rack');
+  assert.equal(claims[0].state_phase, 'planned');
+  assert.equal(claims[0].operation, 'create');
+  assert.equal(claims[0].metadata.extraction_source, 'server_explicit_locative_state_guard');
+  const corrected = await storeSemanticClaim({
+    ...claims[0],
+    subject: { name: '用户的旧运动鞋', type: 'item' },
+    object: '衣柜里的鞋架上',
+    evidence_keywords: ['old sneakers', 'currently taking up space'],
+    state_phase: 'current',
+    metadata: { extraction_source: 'model_semantic_pipeline' }
+  }, semanticScope, messageId, { validationMode: 'strict' });
+  const correctedRow = db.prepare('SELECT state_phase, metadata_json FROM claims WHERE id = ?')
+    .get(corrected.id);
+  assert.equal(correctedRow.state_phase, 'planned');
+  assert.equal(JSON.parse(correctedRow.metadata_json).state_phase_guard, 'planned_locative_target_action');
+  const stored = await storeSemanticClaim(claims[0], semanticScope, messageId, {
+    validationMode: 'strict'
+  });
+  assert.equal(db.prepare('SELECT state_phase FROM claims WHERE id = ?').get(stored.id).state_phase, 'planned');
+});
+
+test('显式位置覆盖检查稳定补齐当前容器并替代旧位置', async () => {
+  const oldContent = "By the way, my archive sneakers, I've been keeping them under my bed for storage, and they're starting to smell.";
+  const [oldMessageId] = addSemanticEvidenceConversation('semantic_old_storage_guard', [
+    { role: 'user', content: oldContent }
+  ]);
+  const oldCurrent = extractExplicitStateTransitionClaims([{
+    message_id: oldMessageId, role: 'user', content: oldContent
+  }]).find((claim) => claim.state_phase === 'current');
+  assert.ok(oldCurrent);
+  assert.equal(oldCurrent.object, 'under my bed');
+  const previous = await storeSemanticClaim(oldCurrent, semanticScope, oldMessageId, {
+    validationMode: 'strict'
+  });
+  const content = "I need to organize my closet this weekend, and I'm looking forward to get rid of some of my archive sneakers in a metal shoe rack in it, they're currently taking up space.";
+  const [messageId] = addSemanticEvidenceConversation('semantic_current_storage_guard', [
+    { role: 'user', content }
+  ]);
+  const claims = extractExplicitStateTransitionClaims([{
+    message_id: messageId, role: 'user', content
+  }]);
+  const current = claims.find((claim) => claim.state_phase === 'current');
+  assert.ok(current);
+  assert.match(current.subject.name, /archive sneakers/);
+  assert.equal(current.object, 'metal shoe rack in my closet');
+  const stored = await storeSemanticClaim(current, semanticScope, messageId, {
+    validationMode: 'strict'
+  });
+  assert.equal(db.prepare('SELECT object_text FROM claims WHERE id = ?').get(stored.id).object_text,
+    'metal shoe rack in my closet');
+  assert.equal(db.prepare('SELECT status FROM claims WHERE id = ?').get(previous.id).status, 'superseded');
+});
+
+test('独立声明从原始证据继承相对时间和会话锚点', async () => {
+  const [userId] = addSemanticEvidenceConversation('semantic_relative_time', [
+    { role: 'user', content: 'I am planning a trip to Arizona. I took a family road trip across the American Southwest a few years ago.' }
+  ]);
+  db.prepare('UPDATE messages SET created_at = ? WHERE id = ?')
+    .run('2023-05-23T00:24:00.000Z', userId);
+  const stored = await storeSemanticClaim({
+    subject: { name: '用户', type: 'person' }, predicate: 'traveled_across',
+    object: 'American Southwest on a family road trip', memory_kind: 'fact',
+    state_phase: 'completed', evidence_level: 'explicit', evidence_message_ids: [userId],
+    evidence_keywords: ['American Southwest', 'family road trip'], confidence: 0.9
+  }, semanticScope, userId, { validationMode: 'strict' });
+  const row = db.prepare('SELECT story_time, metadata_json FROM claims WHERE id = ?').get(stored.id);
+  const metadata = JSON.parse(row.metadata_json);
+  assert.equal(row.story_time, 'a few years ago');
+  assert.equal(metadata.relative_time_expression, 'a few years ago');
+  assert.equal(metadata.source_message_created_at, '2023-05-23T00:24:00.000Z');
+  const planned = await storeSemanticClaim({
+    subject: { name: '用户', type: 'person' }, predicate: 'plans_to_visit',
+    object: 'Arizona', memory_kind: 'state', state_phase: 'planned',
+    evidence_level: 'explicit', evidence_message_ids: [userId],
+    evidence_keywords: ['planning', 'Arizona'], confidence: 0.9
+  }, semanticScope, userId, { validationMode: 'strict' });
+  const plannedRow = db.prepare('SELECT story_time, metadata_json FROM claims WHERE id = ?').get(planned.id);
+  assert.equal(plannedRow.story_time, '');
+  assert.equal(JSON.parse(plannedRow.metadata_json).relative_time_expression, undefined);
+});
+
+test('隐式偏好需要至少两条用户证据，并以独立向量参与召回', async () => {
+  const [firstUserId, , secondUserId] = addSemanticEvidenceConversation('semantic_preference_evidence', [
+    { role: 'user', content: '我用的是 Sony A7R IV，想升级闪光灯。' },
+    { role: 'assistant', content: '可以优先看 Sony 兼容的闪光灯。' },
+    { role: 'user', content: '作为 Sony 相机用户，我也想要兼容的相机包和配件。' }
+  ]);
+  await assert.rejects(() => storeSemanticClaim({
+    subject: { name: '用户', type: 'person' }, predicate: '摄影设备生态偏好', object: 'Sony 兼容配件',
+    memory_kind: 'preference', evidence_level: 'inferred', evidence_message_ids: [firstUserId],
+    evidence_keywords: ['Sony'], cardinality: 'set'
+  }, semanticScope, firstUserId, { validationMode: 'strict' }), /requires_two_user_evidence/);
+  const stored = await storeSemanticClaim({
+    subject: { name: '用户', type: 'person' }, predicate: '摄影设备生态偏好', object: 'Sony 兼容配件',
+    memory_kind: 'preference', evidence_level: 'inferred',
+    evidence_message_ids: [firstUserId, secondUserId], evidence_keywords: ['Sony'],
+    cardinality: 'set', confidence: 0.72
+  }, semanticScope, secondUserId, { validationMode: 'strict' });
+  assert.equal(stored.evidenceCount, 2);
+  const retrieval = await retrieveMemory('Sony 摄影配件建议', semanticScope, {
+    plannerEnabled: false, contextFilterMode: 'off'
+  });
+  assert.ok(retrieval.claims.some((claim) => claim.id === stored.id
+    && claim.memoryKind === 'preference' && claim.evidenceCount === 2));
+});
+
+test('计划状态与当前状态并存，当前问题不会把计划当已完成', async () => {
+  const current = await storeSemanticClaim({
+    subject: { name: '旧运动鞋', type: 'item' }, predicate: '存放位置', object: '床底下',
+    memory_kind: 'state', state_phase: 'current', cardinality: 'single', confidence: 0.9
+  }, semanticScope, '', { validationMode: 'trusted' });
+  const planned = await storeSemanticClaim({
+    subject: { name: '旧运动鞋', type: 'item' }, predicate: '存放位置', object: '衣柜鞋架',
+    memory_kind: 'state', state_phase: 'planned', cardinality: 'single', confidence: 0.8
+  }, semanticScope, '', { validationMode: 'trusted' });
+  const rows = db.prepare(`SELECT id, state_phase, object_text FROM claims
+    WHERE id IN (?, ?) AND status = 'active'`).all(current.id, planned.id);
+  assert.equal(rows.length, 2);
+  const retrieval = await retrieveMemory('旧运动鞋目前放在哪里，之后计划放哪里', semanticScope, {
+    plannerEnabled: false, contextFilterMode: 'off'
+  });
+  assert.ok(retrieval.claims.some((claim) => claim.id === current.id && !claim.phaseConflict));
+  assert.ok(retrieval.claims.some((claim) => claim.id === planned.id && claim.phaseConflict));
+  assert.match(formatRetrievedMemory(retrieval), /不代表已完成或当前事实/);
+  const currentOnlyQuery = await retrieveMemory('旧运动鞋目前放在哪里', semanticScope, {
+    plannerEnabled: false, contextFilterMode: 'off'
+  });
+  assert.ok(currentOnlyQuery.claims.some((claim) => claim.id === current.id));
+  assert.ok(currentOnlyQuery.claims.some((claim) => claim.id === planned.id
+    && claim.selectedBy === 'phase_transition_context'));
+  assert.match(formatRetrievedMemory(currentOnlyQuery), /最后确认的现状和最新计划目标/);
+});
+
+test('服务端按子句校验位置时态，不把当前容器位置误标为未来计划', async () => {
+  const [currentEvidenceId] = addSemanticEvidenceConversation('semantic_clause_phase_current', [
+    { role: 'user', content: 'I need to organize my closet this weekend. The old notebooks in a storage box in it, they are currently taking up space.' }
+  ]);
+  const normalized = await storeSemanticClaim({
+    subject: { name: 'old notebooks', type: 'item' }, predicate: 'storage location',
+    object: 'storage box in closet', memory_kind: 'state', state_phase: 'planned',
+    evidence_level: 'explicit', evidence_message_ids: [currentEvidenceId],
+    evidence_keywords: ['storage box'], cardinality: 'single', confidence: 0.9
+  }, semanticScope, currentEvidenceId, { validationMode: 'strict' });
+  const normalizedRow = db.prepare('SELECT * FROM claims WHERE id = ?').get(normalized.id);
+  assert.equal(normalizedRow.state_phase, 'current');
+  assert.equal(JSON.parse(normalizedRow.metadata_json).state_phase_model, 'planned');
+
+  const [plannedEvidenceId] = addSemanticEvidenceConversation('semantic_clause_phase_planned', [
+    { role: 'user', content: 'I plan to put my spare cables in a storage box this weekend.' }
+  ]);
+  const planned = await storeSemanticClaim({
+    subject: { name: 'spare cables', type: 'item' }, predicate: 'storage location',
+    object: 'storage box', memory_kind: 'state', state_phase: 'planned',
+    evidence_level: 'explicit', evidence_message_ids: [plannedEvidenceId],
+    evidence_keywords: ['storage box'], cardinality: 'single', confidence: 0.9
+  }, semanticScope, plannedEvidenceId, { validationMode: 'strict' });
+  assert.equal(db.prepare('SELECT state_phase FROM claims WHERE id = ?').get(planned.id).state_phase, 'planned');
+});
+
+test('证据充分性门阻止把其他职位的团队数迁移到未证实角色', async () => {
+  await storeSemanticClaim({
+    subject: { name: '用户', type: 'person' }, predicate: 'role', object: 'Senior Software Engineer',
+    memory_kind: 'fact', state_phase: 'current', cardinality: 'single', confidence: 0.95
+  }, semanticScope, '', { validationMode: 'trusted' });
+  await storeSemanticClaim({
+    subject: { name: '用户', type: 'person' }, predicate: 'engineers led', object: '5',
+    memory_kind: 'fact', state_phase: 'current', cardinality: 'single', confidence: 0.9
+  }, semanticScope, '', { validationMode: 'trusted' });
+  const query = 'How many engineers do I lead in my new role as Software Engineer Manager?';
+  const retrieval = await retrieveMemory(query, semanticScope, {
+    plannerEnabled: false, contextFilterMode: 'off', minSimilarity: 0
+  });
+  const gate = await assessMemoryAnswerability(query, retrieval);
+  assert.equal(gate.status, 'conflicted');
+  assert.match(gate.policy, /不得回答/);
 });
 
 test('结构化记忆按用户隔离，相同值不重复生成版本', () => {
@@ -495,6 +849,93 @@ test('跨会话有序事件优先按剧情时间与来源会话时间排序', as
   ]);
 });
 
+test('相对时间保留原文与会话锚点，可比较几年前和去年夏天', () => {
+  const anchor = '2023-05-23T16:49:00.000Z';
+  const familyTrip = extractRelativeTemporalEvidence(
+    'I visited the Grand Canyon with my family a few years ago.', anchor
+  );
+  const europeTrip = extractRelativeTemporalEvidence(
+    'I took a solo trip to Europe last summer.', anchor
+  );
+  assert.equal(familyTrip[0].expression, 'a few years ago');
+  assert.equal(europeTrip[0].expression, 'last summer');
+  assert.ok(Date.parse(familyTrip[0].resolvedAt) < Date.parse(europeTrip[0].resolvedAt));
+  const formatted = formatRetrievedMemory({
+    claims: [], edges: [], intent: {}, answerability: null,
+    events: [{
+      title: '美国西南家庭公路旅行', summary: '用户和家人去过大峡谷。',
+      memorySpace: 'user_memory', canonicality: 'confirmed', storyTime: '',
+      metadata: {
+        relative_time_expression: familyTrip[0].expression,
+        source_message_created_at: anchor
+      }
+    }]
+  });
+  assert.match(formatted, /a few years ago/);
+  assert.match(formatted, /2023-05-23/);
+});
+
+test('宽泛个性化建议可以自适应闭合相关用户画像声明', async () => {
+  const timestamp = nowIso();
+  const scope = { ...baseScope, userId: 'user_profile_closure' };
+  db.prepare(`INSERT INTO users (id, name, display_name, avatar_color, created_at, updated_at)
+    VALUES (?, ?, ?, '#2563eb', ?, ?)`).run(
+    scope.userId, scope.userId, '画像闭合用户', timestamp, timestamp
+  );
+  await storeSemanticClaim({
+    subject: { name: '用户', type: 'person' }, predicate: '当前摄影设备',
+    object: 'Sony A7R IV with Sony 24-70mm f/2.8 lens', memory_kind: 'fact',
+    state_phase: 'current', memory_space: 'user_memory', canonicality: 'confirmed',
+    evidence_level: 'explicit', confidence: 0.95
+  }, scope, '', { validationMode: 'trusted' });
+  const retrieval = await retrieveMemory(
+    'Can you suggest accessories that complement my current photography setup?', scope,
+    {
+      plannerEnabled: false,
+      contextFilterMode: 'off',
+      minSimilarity: 1,
+      vectorOnlyMinSimilarity: 1,
+      minKeywordScore: 1,
+      catalogMinSimilarity: 0
+    }
+  );
+  assert.ok(retrieval.claims.some((claim) => claim.object.includes('Sony A7R IV')));
+  assert.ok(retrieval.claims.some((claim) => claim.selectedBy === 'adaptive_profile_closure'));
+});
+
+test('带月份的记忆计数使用 active 命名空间确定性聚合', async () => {
+  const timestamp = nowIso();
+  const scope = { ...baseScope, userId: 'user_collection_count' };
+  db.prepare(`INSERT INTO users (id, name, display_name, avatar_color, created_at, updated_at)
+    VALUES (?, ?, ?, '#2563eb', ?, ?)`).run(
+    scope.userId, scope.userId, '集合计数用户', timestamp, timestamp
+  );
+  await storeEvent({
+    event_key: 'museum_january', event_type: 'episode', title: '一月参观艺术馆',
+    summary: '用户在2023年1月参观了艺术馆。', story_time: '2023-01-15', importance: 0.8,
+    entities: [{ name: '艺术馆', type: 'place' }]
+  }, scope, 'message_museum_january');
+  const query = 'Current Date: 2023/03/03 (Fri) 18:26\nQuestion: How many museums or galleries did I visit in December?';
+  const retrieval = await retrieveMemory(query, scope, {
+    plannerEnabled: false, contextFilterMode: 'off'
+  });
+  const answerability = await assessMemoryAnswerability(query, retrieval);
+  assert.equal(retrieval.intent.collectionAggregation.timeRange.label, '2022-12');
+  assert.equal(retrieval.intent.collectionAggregation.count, 0);
+  assert.equal(answerability.status, 'supported');
+  assert.equal(answerability.model, 'server_collection_aggregation');
+  const contract = applyDeterministicResponseContract(query, retrieval,
+    'I found January and February visits, but maybe there were none in December.');
+  assert.equal(contract.applied, true);
+  assert.equal(contract.text, 'In the current long-term memory, there are 0 matching records for 2022-12. No record in memory does not prove that none occurred in reality.');
+  const historyPolicy = applyGroundedHistoryPolicy([
+    { role: 'assistant', content: 'You visited one in January.' },
+    { role: 'user', content: 'How many in December?' }
+  ], retrieval);
+  assert.equal(historyPolicy.mode, 'authoritative_memory_current_turn');
+  assert.equal(historyPolicy.omittedMessages, 1);
+});
+
 test('事件实体关系独立落库，图谱可从实体反查事件', async () => {
   const timestamp = nowIso();
   db.prepare(`INSERT INTO users (id, name, display_name, avatar_color, created_at, updated_at)
@@ -591,7 +1032,7 @@ test('零候选 Corrective Planner 可改写 Query 并跳出首轮候选池', as
   assert.equal(result.planner.mode, 'corrective_zero_candidate');
   assert.equal(result.planner.initialCatalogCount, 0);
   assert.equal(result.planner.zeroCandidateRecovery, true);
-  assert.equal(result.planner.followUpSearchScope, 'all_active_scope');
+  assert.equal(result.planner.followUpSearchScope, 'all_active_events_and_claims');
   assert.ok(result.planner.followUpSelectedEventIds.includes(stored.id));
   assert.equal(result.events.find((item) => item.id === stored.id)?.selectedBy, 'planner_follow_up_global');
   assert.equal(result.diagnostics.pipeline.followUpSearchScopeCandidates, 1);

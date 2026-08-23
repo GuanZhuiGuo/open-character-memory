@@ -428,12 +428,13 @@
                     <div class="architecture-node" data-phase="pre generate write input"><i data-lucide="braces"></i><span><strong>Headless Memory Runtime</strong><small id="architectureHeadlessNodeMeta">v1 原子 API · SDK / Pi / MCP</small></span></div>
                     <div class="architecture-node" data-phase="pre generate input"><i data-lucide="layers-3"></i><span><strong>Prompt Compiler</strong><small>硬规则 + 角色属性 + 状态 + 最终召回</small></span></div>
                     <div class="architecture-node" data-phase="pre generate write"><i data-lucide="plug-zap"></i><span><strong>Capability Gateway</strong><small>解锁过滤、白名单、确认、Skill/MCP 执行回执</small></span></div>
-                    <div class="architecture-node" data-phase="pre"><i data-lucide="brain-circuit"></i><span><strong>Corrective Recall Planner</strong><small>轻量目录 → 证据判断 → 零候选 Query 改写与跨池检索</small></span></div>
+                    <div class="architecture-node" data-phase="pre"><i data-lucide="brain-circuit"></i><span><strong>Corrective Recall Planner</strong><small>轻量目录 → 证据判断 → 改写 Query 跨 active 事件与声明检索</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="waypoints"></i><span><strong>Multi-Granularity Router</strong><small id="architectureRouterNodeMeta">六视图 · Shadow / Dynamic / A-B</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="git-branch"></i><span><strong>Semantic Association + PPR</strong><small id="architectureAssociationNodeMeta">自适应建边 · 有界扩散 · 作用域锁定</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="list-filter"></i><span><strong>Memory Context Filter</strong><small id="architectureFilterNodeMeta">模型提议删除 · 服务端保护证据</small></span></div>
+                    <div class="architecture-node" data-phase="pre generate"><i data-lucide="shield-check"></i><span><strong>Premise + Answerability Gate</strong><small>保留身份/关系/位置/时态前提，回答前判定证据充分性</small></span></div>
                     <div class="architecture-node" data-phase="generate"><i data-lucide="database-zap"></i><span><strong>System Memory Tools</strong><small id="architectureMemoryToolMeta">memory_search / memory_expand · 只读且作用域锁定</small></span></div>
-                    <div class="architecture-node" data-phase="pre generate"><i data-lucide="shield-check"></i><span><strong>Grounding Guard</strong><small>确定性图谱答案优先，隔离冲突的历史助手旧答</small></span></div>
+                    <div class="architecture-node" data-phase="pre generate"><i data-lucide="shield-check"></i><span><strong>Grounding Guard</strong><small>确定性关系/时序优先；闭集计数由 Runtime 直接回答</small></span></div>
                     <div class="architecture-node" data-phase="input"><i data-lucide="scan-search"></i><span><strong>Architecture RAG</strong><small>代码切片 + 混合检索 + 证据约束</small></span></div>
                   </section>
 
@@ -442,8 +443,8 @@
                   <section class="architecture-domain memory-domain">
                     <header><span>03</span><strong>记忆与自动化平面</strong><small>Scoped</small></header>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="badge-check"></i><span><strong>角色固定属性</strong><small>agent 全局，每轮固定注入</small></span></div>
-                    <div class="architecture-node" data-phase="pre"><i data-lucide="user-round"></i><span><strong>用户记忆</strong><small>结构化状态 + 双时态用户事件</small></span></div>
-                    <div class="architecture-node" data-phase="pre"><i data-lucide="book-heart"></i><span><strong>我们的故事</strong><small>角色言行 + 共同承诺，双向且隔离</small></span></div>
+                    <div class="architecture-node" data-phase="pre"><i data-lucide="user-round"></i><span><strong>用户记忆</strong><small>结构化状态 + 独立事实/偏好/状态 + 双时态事件</small></span></div>
+                    <div class="architecture-node" data-phase="pre"><i data-lucide="book-heart"></i><span><strong>我们的故事</strong><small>被用户承接的角色言行 + 共同承诺，双证据隔离</small></span></div>
                     <div class="architecture-node" data-phase="pre write"><i data-lucide="layers-3"></i><span><strong>六类检索视图</strong><small>原话 / 事件 / 声明 / 片段 / 摘要 / 实体关键词；均指回规范事件</small></span></div>
                     <div class="architecture-node" data-phase="pre write"><i data-lucide="package-open"></i><span><strong>剧情与道具资格</strong><small>条件命中后解锁；当轮通过能力网关暴露给 Pi</small></span></div>
                     <div class="architecture-node" data-phase="write"><i data-lucide="scan-text"></i><span><strong id="architectureExtractionNodeTitle">长期记忆更新（每 X 轮）</strong><small id="architectureTemporalNodeMeta">抽取 → 双时态版本 → 图投影 → 触发</small></span></div>
@@ -456,7 +457,7 @@
                     <div class="architecture-node" data-phase="generate write input"><i data-lucide="sparkles"></i><span><strong>Text Provider</strong><small>Ark / OpenAI / Anthropic / Mock</small></span></div>
                     <div class="architecture-node" data-phase="pre write input"><i data-lucide="binary"></i><span><strong>Embedding Provider</strong><small>Ark / OpenAI / Local Mock</small></span></div>
                     <div class="architecture-node" data-phase="generate input"><i data-lucide="gauge"></i><span><strong>稳定前缀缓存</strong><small>只缓存人设与固定属性；失败回退完整请求</small></span></div>
-                    <div class="architecture-node" data-phase="pre write input"><i data-lucide="database"></i><span><strong>SQLite · 主记录库（生产升级：PostgreSQL + pgvector）</strong><small id="architectureSqliteNodeMeta">双时态账本、六视图、语义边、任务与 outbox</small></span></div>
+                    <div class="architecture-node" data-phase="pre write input"><i data-lucide="database"></i><span><strong>SQLite · 主记录库（生产升级：PostgreSQL + pgvector）</strong><small id="architectureSqliteNodeMeta">双时态账本、声明证据链、六视图、语义边、任务与 outbox</small></span></div>
                     <div class="architecture-node" data-phase="pre write"><i data-lucide="share-2"></i><span><strong>Neo4j · 可重建图投影</strong><small id="architectureNeo4jNodeMeta">事实图 + 语义关联图；失败回退 SQLite</small></span></div>
                   </section>
                 </div>
@@ -505,7 +506,7 @@
                 <div class="flow-node grid-col-5 has-arrow" data-phase="pre">
                   <span class="step-number">04</span><i data-lucide="search"></i>
                   <strong>回复前纠正式召回</strong>
-                  <small>轻量目录 → Planner 判断 → 必要时改写 Query 跨池重检</small>
+                  <small>轻量目录 → Planner 改写事件/声明检索词 → 服务端证据聚合</small>
                   <span class="timing demand">按需</span>
                 </div>
                 <div class="flow-node grid-col-6 has-arrow" data-phase="pre">
@@ -523,7 +524,7 @@
                 <a class="flow-node grid-col-8 has-arrow config-flow-node" href="#schemaTable" data-phase="write" data-config-link data-jump-page="schemas" data-jump-schema-tab="extraction" data-jump-target="#schemaTable">
                   <span class="step-number">07</span><i data-lucide="scan-text"></i>
                   <strong id="architectureExtractionStepTitle">长期记忆更新</strong>
-                  <small id="architectureExtractionTrigger">累计 X 轮，或跨对话发送前，抽取并更新长期记忆</small>
+                  <small id="architectureExtractionTrigger">累计 X 轮，或跨对话发送前，双管线抽取 + 原子事实 / 状态迁移校验</small>
                   <span class="timing blocking">阻塞等待</span>
                 </a>
                 <div class="flow-node grid-col-9" data-phase="write">
@@ -557,13 +558,13 @@
                   <span>回复前纠正 · 生成中补证据</span>
                 </div>
                 <div class="retrieval-architecture-step grid-col-2 has-arrow" data-phase="pre"><span>01</span><strong>Current / Scope</strong><small>只读当前 active；user + agent + story + branch 四级隔离</small></div>
-                <div class="retrieval-architecture-step catalog grid-col-3 has-arrow" data-phase="pre"><span>02</span><strong>六粒度检索</strong><small>原话、事件、声明、片段、摘要与实体关键词</small></div>
-                <div class="retrieval-architecture-step planner grid-col-4 has-arrow" data-phase="pre"><span>03 · ROUTER</span><strong>低熵动态配权</strong><small>Fixed / Shadow / Dynamic / 稳定 A-B；先观测再生效</small></div>
-                <div class="retrieval-architecture-step graph grid-col-5 has-arrow" data-phase="pre"><span>04 · GRAPH</span><strong>关联图 + 有界 PPR</strong><small>GMM 自适应建边；最多 2 跳、240 节点</small></div>
-                <div class="retrieval-architecture-step planner grid-col-6 has-arrow" data-phase="pre"><span>05 · PLANNER</span><strong>纠正式召回</strong><small>看轻量目录；不足时改写 Query 并跨 active 池检索</small></div>
-                <div class="retrieval-architecture-step gate grid-col-7 has-arrow" data-phase="pre"><span>06 · FILTER</span><strong>证据保护降噪</strong><small>模型只提议删除；服务端恢复直接证据、关系和时间线</small></div>
-                <div class="retrieval-architecture-step planner grid-col-8 has-arrow" data-phase="generate"><span>07 · MODEL</span><strong>主动补证据</strong><small>主模型可调用 memory_search / memory_expand</small></div>
-                <div class="retrieval-architecture-step merge grid-col-9" data-phase="generate"><span>08</span><strong>合并后续答</strong><small>toolResult 回灌 Pi；只把最终证据 ContextPack 注入回答</small></div>
+                <div class="retrieval-architecture-step catalog grid-col-3 has-arrow" data-phase="pre"><span>02</span><strong>事件 + 独立声明</strong><small>六视图事件检索，事实/偏好/状态声明自有 Embedding</small></div>
+                <div class="retrieval-architecture-step graph grid-col-4 has-arrow" data-phase="pre"><span>03 · ROUTER/GRAPH</span><strong>动态配权 + 有界扩散</strong><small>低熵 Router、语义关联图与 PPR；不改写事实</small></div>
+                <div class="retrieval-architecture-step planner grid-col-5 has-arrow" data-phase="pre"><span>04 · PLANNER</span><strong>纠正式召回</strong><small>证据不足时改写 Query，跨 active 事件与独立声明再检索</small></div>
+                <div class="retrieval-architecture-step gate grid-col-6 has-arrow" data-phase="pre"><span>05 · FILTER</span><strong>证据保护降噪</strong><small>模型只提议删除；服务端恢复直接证据、关系和时间线</small></div>
+                <div class="retrieval-architecture-step gate grid-col-7 has-arrow" data-phase="pre generate"><span>06 · GATE</span><strong>前提保护 + 聚合/证据门</strong><small>相对时间按会话锚点解析；排序与计数由服务端确定性聚合</small></div>
+                <div class="retrieval-architecture-step planner grid-col-8 has-arrow" data-phase="generate"><span>07 · MODEL</span><strong>主动补证据</strong><small>仍不足时，主模型可调用 memory_search / memory_expand</small></div>
+                <div class="retrieval-architecture-step merge grid-col-9" data-phase="generate"><span>08</span><strong>受约束续答</strong><small>toolResult 回灌 Pi；确定性计数由 Guard 直答，其他证据不足时禁止猜测</small></div>
               </section>
 
               <section class="timeline-grid swimlane turn-boundary-lane" aria-label="一轮对话的结束点与下一轮解锁点">
@@ -593,10 +594,10 @@
                   <span>同阶段 ≠ 同时点</span>
                 </div>
                 <div class="write-order-node extract grid-col-2 span-2 has-arrow" data-phase="write">
-                  <span>01 · EXTRACT</span><strong>记忆抽取</strong><small>模型返回 structured_updates、relationship_deltas 和 events</small>
+                  <span>01 · PARALLEL EXTRACT</span><strong>双管线并行抽取</strong><small>事件图谱管线输出 fields / events / relations；语义管线输出 facts / preferences / states / assistant references</small>
                 </div>
                 <div class="write-order-node structured grid-col-4 span-2 has-arrow" data-phase="write">
-                  <span>02 · STRUCTURED WRITE</span><strong>写入结构化记忆</strong><small>set / merge / delta，保留版本与证据</small>
+                  <span>02 · GUARD + MERGE</span><strong>证据校验与合并</strong><small>补齐用户命名事实和角色原话；双向校正 current / planned，保留完整位置路径</small>
                 </div>
                 <div class="write-order-node derived grid-col-6 has-arrow" data-phase="write">
                   <span>03 · DERIVE</span><strong>同步派生重算</strong><small id="architectureDerivedRule">亲密度 → 关系阶段</small>
@@ -633,7 +634,7 @@
                 </div>
                 <div class="memory-trigger grid-col-6 graph" data-phase="pre write">
                   <span class="memory-kind">故事层</span><strong>我们的故事</strong>
-                  <small>角色言行、共同物品和承诺；按用户与故事分支存储</small><b>按需 + 每 X 轮</b>
+                  <small>角色原话先以 provisional assistant_utterance 留痕；用户承接后跨周期升级为 confirmed</small><b>按需 + 每 X 轮</b>
                 </div>
                 <div class="memory-trigger grid-col-7 vector" data-phase="pre">
                   <span class="memory-kind">检索层</span><strong>事件图谱与向量</strong>
@@ -641,7 +642,7 @@
                 </div>
                 <div class="memory-trigger grid-col-8 profile" data-phase="write">
                   <span class="memory-kind">画像层</span><strong>稳定偏好</strong>
-                  <small>显式确认或多次证据达标后更新，拒绝偶发噪声</small><b>每 X 轮</b>
+                  <small>单条明确原文作为 explicit；只有模型归纳的隐式偏好才需要多条用户证据</small><b>每 X 轮</b>
                 </div>
                 <div class="memory-trigger grid-col-9 action" data-phase="write">
                   <span class="memory-kind">动作层</span><strong>条件规则</strong>

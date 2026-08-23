@@ -467,7 +467,8 @@ const RELEASE_SECTION_ICONS = {
   fixed: 'badge-check',
   removed: 'circle-minus',
   security: 'shield-check',
-  validation: 'flask-conical'
+  validation: 'flask-conical',
+  'resolved-bad-cases': 'bug-off'
 };
 
 function releaseDateLabel(value) {
@@ -498,7 +499,7 @@ function releaseDetailHtml(release, notes) {
       <div class="release-status-line"><span class="badge ${release.isCurrent ? 'blue' : (release.isUnreleased ? 'amber' : '')}">${statusLabel}</span><time>${escapeHtml(releaseDateLabel(release.date))}</time></div>
       <div class="release-title-row">
         <div><span class="eyebrow">OPEN CHARACTER MEMORY</span><h4>${release.isUnreleased ? '待发布更新' : `v${escapeHtml(release.version)}`}</h4></div>
-        <strong>${release.itemCount} 项变更</strong>
+        <strong>${release.itemCount} 项变更${release.badCaseCount ? ` · 解决 ${release.badCaseCount} 个 bad case` : ''}</strong>
       </div>
       <p>${renderInlineMarkdown(release.summary || '该版本暂无摘要。')}</p>
       <div class="release-detail-actions"><span><i data-lucide="file-text"></i>页面内容来自仓库 ${escapeHtml(notes.source)}</span>${externalLink}</div>
@@ -524,7 +525,7 @@ async function openReleaseNotes() {
           <div class="release-version-list">${notes.releases.map((release) => `
             <button type="button" class="release-version-button ${release.version === current?.version ? 'active' : ''}" data-release-version="${escapeHtml(release.version)}" aria-pressed="${release.version === current?.version}">
               <span>${release.isUnreleased ? '待发布' : `v${escapeHtml(release.version)}`}${release.isCurrent ? '<b>当前</b>' : ''}</span>
-              <small>${release.isUnreleased ? `${release.itemCount} 项开发中` : escapeHtml(release.date)}</small>
+              <small>${release.isUnreleased ? `${release.itemCount} 项开发中` : escapeHtml(release.date)}${release.badCaseCount ? ` · ${release.badCaseCount} cases` : ''}</small>
             </button>`).join('')}</div>
           <footer><i data-lucide="git-branch"></i><span>${unreleasedCount ? `${unreleasedCount} 项更新尚未进入正式版本` : '当前工作区与正式版本一致'}</span></footer>
         </nav>
@@ -960,7 +961,7 @@ async function loadArchitectureOverview() {
   $('#pageMeta').textContent = `${scene.name} · runtime / memory / retrieval`;
   $('#architectureMainWindow').textContent = `最近 ${main.messageLimit} 条消息 · 约 ${main.approximateTurns} 轮`;
   $('#architectureExtractionWindow').textContent = `批次前 ${extraction.contextTurns} 轮 · 最多 ${extraction.messageLimit} 条`;
-  $('#architectureEventThreshold').textContent = `每 ${extractionInterval} 轮 · 跨对话补齐尾批次 · 最多 ${extraction.maxEventsPerBatch} 个事件`;
+  $('#architectureEventThreshold').textContent = `每 ${extractionInterval} 轮 · 双管线并行 · 最多 ${extraction.maxEventsPerBatch} 事件 / ${extraction.maxSemanticClaimsPerBatch || 40} 语义声明`;
   $('#architectureRuntimeExtractionMode').textContent = `阻塞式 · 每 ${extractionInterval} 轮 / 跨对话更新`;
   $('#architectureRuntimeName').textContent = runtime.name === 'pi-agent-core'
     ? `Pi Agent Core ${runtime.version ? `v${runtime.version}` : ''}` : 'Legacy Runtime';
@@ -984,7 +985,7 @@ async function loadArchitectureOverview() {
   $('#architectureTemporalNodeMeta').textContent = temporal.model === 'bitemporal'
     ? `${(graphOntology.eventOperations || ['create', 'update', 'supersede', 'retract']).join(' / ')} → 双时态版本`
     : '抽取 → 结构化派生 → 事件图谱 → 触发';
-  $('#architectureSqliteNodeMeta').textContent = '双时态账本、六视图、语义关联边、持久化任务与 outbox；生产升级 PostgreSQL + pgvector';
+  $('#architectureSqliteNodeMeta').textContent = '双时态账本、独立声明证据链、六视图、语义关联边、持久化任务与 outbox；生产升级 PostgreSQL + pgvector';
   const graphReady = graphStore.mode === 'neo4j' && graphStore.connected;
   $('#architectureNeo4jNodeMeta').textContent = graphStore.mode === 'neo4j'
     ? `${graphReady ? '已连接' : '降级回退'} · 事实关系 + 语义关联投影 · 待投影 ${Number(graphStore.pendingProjections || 0)} 个 scope`
@@ -998,7 +999,7 @@ async function loadArchitectureOverview() {
   $('#architectureInputLimit').textContent = `0 < X ≤ ${main.messageLimit}`;
   $('#architectureMessageLimit').textContent = `X ≤ ${main.messageLimit}`;
   $('#architectureHistoryLimit').textContent = `最多 ${Math.max(0, main.messageLimit - 1)} 条 user / assistant 原文`;
-  $('#architectureExtractionTrigger').textContent = `累计 ${extractionInterval} 轮，或跨对话发送前，抽取并更新长期记忆`;
+  $('#architectureExtractionTrigger').textContent = `累计 ${extractionInterval} 轮，或跨对话发送前，双管线抽取 + 原子事实 / 状态迁移校验`;
   $('#architectureDerivedRule').textContent = thresholds.relationship.stages
     .slice().reverse().map((item) => `${item.minimum} ${item.stage}`).join(' · ');
   renderArchitectureIndex(index);
@@ -1621,12 +1622,42 @@ function retrievalExpansionHtml(diagnostics = {}, candidates = [], { compact = f
   </section>`;
 }
 
+function answerabilityGateHtml(gate = null, diagnostics = {}, { compact = false } = {}) {
+  if (!gate?.status) return '';
+  const labels = {
+    supported: '证据充分', supplemental: '个性化补充', partial: '仅部分支持',
+    conflicted: '前提冲突', insufficient: '证据不足'
+  };
+  const danger = ['conflicted', 'insufficient'].includes(gate.status);
+  const warning = gate.status === 'partial';
+  const dimensions = diagnostics.premiseDimensions || [];
+  const guarded = diagnostics.premiseGuardClaimIds || [];
+  return `<div class="retrieval-planner-result answerability-gate ${compact ? 'compact' : ''}">
+    <span class="strategy-icon"><i data-lucide="${danger ? 'shield-alert' : 'shield-check'}"></i></span>
+    <div><strong>回答前证据门 · ${escapeHtml(labels[gate.status] || gate.status)}</strong><small>${escapeHtml(gate.reason || gate.policy || '已完成前提与目标值校验')}</small></div>
+    <div class="planner-facts"><span>状态 <b class="${danger ? 'text-danger' : (warning ? 'text-warning' : '')}">${escapeHtml(gate.status)}</b></span><span>前提维度 <b>${escapeHtml(dimensions.join(' / ') || '无')}</b></span><span>保护声明 <b>${guarded.length}</b></span><span>冲突声明 <b>${Number(gate.conflictingClaimIds?.length || 0)}</b></span></div>
+  </div>`;
+}
+
+function collectionAggregationHtml(aggregation = null, { compact = false } = {}) {
+  if (aggregation?.mode !== 'deterministic_closed_world_memory_count') return '';
+  const matches = aggregation.matches || [];
+  return `<div class="retrieval-planner-result collection-aggregation ${compact ? 'compact' : ''}">
+    <span class="strategy-icon"><i data-lucide="calculator"></i></span>
+    <div><strong>服务端长期记忆集合聚合</strong><small>${escapeHtml(aggregation.timeRange?.label || '当前查询时间范围')} · 仅统计当前作用域的 active 事件</small></div>
+    <div class="planner-facts"><span>扫描事件 <b>${Number(aggregation.scannedActiveEvents || 0)}</b></span><span>匹配事件 <b>${matches.length}</b></span><span>确定数量 <b>${Number(aggregation.count || 0)}</b></span><span>模式 <b>闭集记忆计数</b></span></div>
+  </div>`;
+}
+
 function renderRetrievalResult(payload) {
   const retrieval = payload.retrieval;
   const embedding = retrieval.queryEmbedding;
   const pipeline = retrieval.diagnostics.pipeline;
   const candidates = retrieval.diagnostics.candidates;
   const planner = retrieval.planner || {};
+  const claimQueryVariants = retrieval.diagnostics.claimQueryVariants || [];
+  const adaptiveProfileClaimIds = retrieval.diagnostics.adaptiveProfileClaimIds || [];
+  const phaseTransitionClaimIds = retrieval.diagnostics.phaseTransitionClaimIds || [];
   const preview = embedding.vectorPreview.map((value) => Number(value).toFixed(6)).join(', ');
   return `<div class="retrieval-result">
     <section class="retrieval-section embedding-section">
@@ -1655,8 +1686,10 @@ function renderRetrievalResult(payload) {
       <div class="retrieval-planner-result">
         <span class="strategy-icon"><i data-lucide="brain-circuit"></i></span>
         <div><strong>回复前 Corrective Planner · ${escapeHtml(planner.status || '未运行')}</strong><small>${escapeHtml(planner.reason || '当前没有候选需要展开或纠正')}</small>${(planner.followUpQueries || []).length ? `<small>改写：${escapeHtml(planner.followUpQueries.join('；'))}</small>` : ''}</div>
-        <div class="planner-facts"><span>模式 <b>${escapeHtml(planner.mode || '—')}</b></span><span>决策 <b>${escapeHtml(planner.decision || 'none')}</b></span><span>首轮目录 <b>${Number(planner.initialCatalogCount || 0)}</b></span><span>跨池命中 <b>${(planner.followUpSelectedEventIds || []).length}</b></span></div>
+        <div class="planner-facts"><span>模式 <b>${escapeHtml(planner.mode || '—')}</b></span><span>决策 <b>${escapeHtml(planner.decision || 'none')}</b></span><span>事件跨池命中 <b>${(planner.followUpSelectedEventIds || []).length}</b></span><span>声明检索词 <b>${claimQueryVariants.length}</b></span><span>画像闭合 <b>${adaptiveProfileClaimIds.length}</b></span><span>状态迁移闭合 <b>${phaseTransitionClaimIds.length}${retrieval.diagnostics.phaseTransitionThreshold != null ? ` @ ${scoreText(retrieval.diagnostics.phaseTransitionThreshold)}` : ''}</b></span></div>
       </div>
+      ${collectionAggregationHtml(retrieval.intent?.collectionAggregation)}
+      ${answerabilityGateHtml(retrieval.answerability, retrieval.diagnostics)}
       ${granularityRouterHtml(retrieval.diagnostics.granularityRouter, candidates)}
       ${retrievalExpansionHtml(retrieval.diagnostics, candidates)}
       <div class="retrieval-candidate-table data-surface">${candidates.length ? `
@@ -1944,9 +1977,9 @@ function renderEventExtractionSettings() {
     ['状态', profile.enabled ? '已启用' : '已停用'],
     ['长期记忆更新', `每 ${profile.extraction_interval_turns || 8} 轮`],
     ['抽取辅助上下文', `批次前 ${profile.context_turns} 轮 / 最多 ${contract?.runtime?.historyMessageLimit || profile.context_turns * 2} 条`],
-    ['批次写入上限', `${contract?.runtime?.maxEventsPerBatch || Math.min(30, (profile.extraction_interval_turns || 8) * profile.max_events_per_turn)} 事件`]
+    ['抽取管线', `${contract?.runtime?.extractionPipelines || 2} 条并行`]
   ].map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
-  $('#schemaResultCount').textContent = '4 类抽取对象';
+  $('#schemaResultCount').textContent = '5 类抽取对象';
 
   const configuredTypes = profile.allowed_event_types || [];
   const knownTypes = new Set(eventTypeOptions.map(([value]) => value));
@@ -1956,11 +1989,24 @@ function renderEventExtractionSettings() {
   const promptUser = contract?.prompt?.user || (state.extractionContractError
     ? `完整 Input 预览加载失败：${state.extractionContractError}`
     : '当前无可用预览');
+  const promptPipelines = contract?.prompt?.pipelines || {};
+  const pipelineLabels = { event_graph: '事件图谱 + 结构字段', semantic_state: '语义事实 + 偏好 + 状态' };
+  const pipelineEntries = Object.entries(promptPipelines);
+  const promptPreviewHtml = pipelineEntries.length
+    ? pipelineEntries.map(([key, value], index) => `<details class="compiled-prompt" ${index === 0 ? 'open' : ''}>
+        <summary><span><i data-lucide="terminal-square"></i>${escapeHtml(pipelineLabels[key] || key)}</span><small>管线 ${index + 1} / ${pipelineEntries.length} · 与另一管线并行</small></summary>
+        <div class="compiled-prompt-layer"><span>SYSTEM</span><pre>${escapeHtml(value.system || '')}</pre></div>
+        <div class="compiled-prompt-layer"><span>USER INPUT</span><pre>${escapeHtml(value.user || '')}</pre></div>
+      </details>`).join('')
+    : `<details class="compiled-prompt" open><summary><span><i data-lucide="terminal-square"></i>查看 System + User Input</span><small>当前已生效版本</small></summary><div class="compiled-prompt-layer"><span>SYSTEM</span><pre>${escapeHtml(promptSystem)}</pre></div><div class="compiled-prompt-layer"><span>USER INPUT</span><pre>${escapeHtml(promptUser)}</pre></div></details>`;
+  const promptCopyText = pipelineEntries.length
+    ? pipelineEntries.map(([key, value], index) => `PIPELINE ${index + 1}: ${pipelineLabels[key] || key}\nSYSTEM\n${value.system || ''}\n\nUSER INPUT\n${value.user || ''}`).join('\n\n===== PARALLEL =====\n\n')
+    : `SYSTEM\n${promptSystem}\n\nUSER INPUT\n${promptUser}`;
   $('#schemaTable').innerHTML = `<section class="extraction-settings">
     <div class="extraction-runtime-contract">
       <div><span>TURN END</span><i data-lucide="message-square"></i><strong>assistant 回复落库</strong><small>1 轮 = user 消息 + assistant 回复</small></div>
       <i data-lucide="arrow-right"></i>
-      <div class="active"><span>EVERY ${profile.extraction_interval_turns || 8} TURNS</span><i data-lucide="scan-text"></i><strong>长期记忆更新</strong><small>抽取结构字段、事件与图谱，统一对齐逐条消息证据</small></div>
+      <div class="active"><span>EVERY ${profile.extraction_interval_turns || 8} TURNS</span><i data-lucide="scan-text"></i><strong>长期记忆更新</strong><small>双管线并行抽取 + 原子事实 / 状态迁移校验，服务端合并</small></div>
       <i data-lucide="arrow-right"></i>
       <div><span>COMMIT BARRIER</span><i data-lucide="database"></i><strong>状态派生与图谱提交</strong><small>提交完成后 /api/chat 才返回</small></div>
     </div>
@@ -1985,13 +2031,15 @@ function renderEventExtractionSettings() {
         <div class="strategy-locked-guard"><i data-lucide="pin"></i><div><strong>显式长期规则快通道</strong><span>“必须 / 一定要 / 不要 / 别再”等明确要求会先区分长期规则与剧情台词，通过边界校验后立即写入“必须遵守 / 避免事项”并固定注入，不等待 X 轮。</span></div><span class="badge blue">同步</span></div>
       </section>
       <section class="extraction-form-section">
-        <header><span>02</span><div><strong>四类抽取对象与提示词来源</strong><small>字段级指令与场景级指令最终编译为同一次模型 Input</small></div></header>
+        <header><span>02</span><div><strong>五类抽取对象与提示词来源</strong><small>两条模型管线读取同一证据批次；服务端再检查事实覆盖与 current / planned 时态</small></div></header>
         <div class="extraction-object-grid">
           <article><span class="object-sequence">A</span><i data-lucide="list-tree"></i><div><strong>结构化字段</strong><small>${fieldInstructions.length} 个字段，使用每个字段的“抽取说明”</small><code>structured_updates[]</code></div><button class="icon-button bordered" type="button" id="openStructuredFields" title="管理字段抽取说明"><i data-lucide="arrow-up-right"></i></button></article>
           <article><span class="object-sequence">B</span><i data-lucide="calendar-clock"></i><div><strong>事件</strong><small>经历、约定、关系节点与剧情进展</small><code>events[]</code></div></article>
           <article><span class="object-sequence">C</span><i data-lucide="circle-dot"></i><div><strong>实体</strong><small>存在于事件内，写入 entities 并建立事件链接</small><code>events[].entities[]</code></div></article>
-          <article><span class="object-sequence">D</span><i data-lucide="git-branch"></i><div><strong>关系与声明</strong><small>稳定边写 relations，可版本化事实写 claims</small><code>relations[] + claims[]</code></div></article>
+          <article><span class="object-sequence">D</span><i data-lucide="git-branch"></i><div><strong>事件关系</strong><small>事件内实体边与带证据原子声明</small><code>relations[] + events[].claims[]</code></div></article>
+          <article><span class="object-sequence">E</span><i data-lucide="badge-info"></i><div><strong>独立语义声明</strong><small>用户事实、显式/隐式偏好、当前/计划状态与角色原话</small><code>semantic_claims[]</code></div></article>
         </div>
+        <div class="strategy-locked-guard"><i data-lucide="shield-check"></i><div><strong>原子事实与状态迁移校验</strong><span>补齐用户原文中的明确名称、已发生金额和位置状态，保留角色曾列举的方法、选项与推荐原话。建议价格和预算不会记成交易；同一物品的新当前位置替代旧值，计划目标独立保留。全部回指消息证据，角色原话仍为 provisional。</span></div><span class="badge blue">服务端固定</span></div>
         <div class="object-instruction-stack">
           <label><span>事件抽取指令</span><textarea name="event_instruction" rows="3">${escapeHtml(profile.event_instruction || '')}</textarea><small>与系统硬规则、事件类型白名单共同生效。</small></label>
           <label><span>实体抽取指令</span><textarea name="entity_instruction" rows="3">${escapeHtml(profile.entity_instruction || '')}</textarea><small>实体不独立漂浮，只有被事件接受后才写库并关联。</small></label>
@@ -2015,17 +2063,13 @@ function renderEventExtractionSettings() {
         <div class="extraction-guards">
           <span><i data-lucide="shield-check"></i><strong>只写待抽取批次</strong><small>批次前的辅助上下文只用于理解代词、省略和承接关系</small></span>
           <span><i data-lucide="shield-check"></i><strong>旧值标记为“已被新版本替代”</strong><small>当前有效版本才进入默认回答</small></span>
-          <span><i data-lucide="shield-check"></i><strong>助手情节不等于用户事实</strong><small>必须有用户承接证据</small></span>
+          <span><i data-lucide="shield-check"></i><strong>角色原话不等于用户事实</strong><small>assistant_utterance 可供追问但为 provisional；用户承接后才升级 confirmed</small></span>
           <span><i data-lucide="shield-check"></i><strong>作用域硬隔离</strong><small>user / agent / story / branch</small></span>
         </div>
       </section>
       <section class="extraction-form-section prompt-preview-section">
-        <header><span>05</span><div><strong>当前生效的完整模型 Input</strong><small>来自同一个服务端编译器，与真实抽取共用代码；运行时占位符会替换为待抽取批次</small></div><button id="copyExtractionPrompt" class="button secondary compact" type="button"><i data-lucide="copy"></i>复制 Input</button></header>
-        <details class="compiled-prompt" open>
-          <summary><span><i data-lucide="terminal-square"></i>查看 System + User Input</span><small>当前已生效版本，未保存的表单修改尚未编译</small></summary>
-          <div class="compiled-prompt-layer"><span>SYSTEM</span><pre>${escapeHtml(promptSystem)}</pre></div>
-          <div class="compiled-prompt-layer"><span>USER INPUT</span><pre>${escapeHtml(promptUser)}</pre></div>
-        </details>
+        <header><span>05</span><div><strong>当前生效的双管线模型 Input</strong><small>两条管线共用待抽取批次与有效声明，但使用不同 System 和输出 Schema；任一非法 JSON 会受约束重试一次</small></div><button id="copyExtractionPrompt" class="button secondary compact" type="button"><i data-lucide="copy"></i>复制 Input</button></header>
+        ${promptPreviewHtml}
       </section>
       <footer class="extraction-form-actions"><span><i data-lucide="info"></i>${isAdmin() ? '保存后立即重新编译预览，并从下一轮开始生效。' : '当前为普通用户只读视图，可查看完整配置但不能修改。'}</span>${isAdmin() ? '<button class="button primary" type="submit"><i data-lucide="save"></i>保存抽取配置</button>' : '<span class="badge blue">只读</span>'}</footer>
     </form>
@@ -2036,8 +2080,8 @@ function renderEventExtractionSettings() {
     $('#schemaTable')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
   $('#copyExtractionPrompt')?.addEventListener('click', async () => {
-    await navigator.clipboard.writeText(`SYSTEM\n${promptSystem}\n\nUSER INPUT\n${promptUser}`);
-    toast('已复制当前生效的抽取 Input');
+    await navigator.clipboard.writeText(promptCopyText);
+    toast('已复制两条当前生效的抽取 Input');
   });
   const contextTurnsInput = $('#extractionContextTurns');
   contextTurnsInput?.addEventListener('input', () => {
@@ -2117,8 +2161,8 @@ async function editRetrievalProfile() {
           <label class="strategy-toggle"><span><strong>关键词召回</strong><small>文本重叠候选</small></span><span class="toggle-control"><input name="keyword_enabled" type="checkbox" ${profile.keyword_enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>图谱扩展</strong><small>Claims + entity edges</small></span><span class="toggle-control"><input name="graph_enabled" type="checkbox" ${profile.graph_enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>意图硬过滤</strong><small>事件类型与 collection</small></span><span class="toggle-control"><input name="intent_filter_enabled" type="checkbox" ${profile.intent_filter_enabled ? 'checked' : ''}><i></i></span></label>
-          <label class="strategy-toggle"><span><strong>回复前 Recall Planner</strong><small>轻量目录后判断是否展开或改写</small></span><span class="toggle-control"><input name="planner_enabled" type="checkbox" ${profile.planner_enabled ? 'checked' : ''}><i></i></span></label>
-          <label class="strategy-toggle"><span><strong>零候选纠正式规划</strong><small>目录为空时仍可改写 Query 并跨池检索</small></span><span class="toggle-control"><input name="corrective_planner_enabled" type="checkbox" ${profile.corrective_planner_enabled ? 'checked' : ''}><i></i></span></label>
+          <label class="strategy-toggle"><span><strong>回复前 Recall Planner</strong><small>轻量目录后判断是否展开，并为事件与声明改写 Query</small></span><span class="toggle-control"><input name="planner_enabled" type="checkbox" ${profile.planner_enabled ? 'checked' : ''}><i></i></span></label>
+          <label class="strategy-toggle"><span><strong>零候选纠正式规划</strong><small>目录为空时仍可跨 active 事件与独立声明检索</small></span><span class="toggle-control"><input name="corrective_planner_enabled" type="checkbox" ${profile.corrective_planner_enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>主模型主动记忆工具</strong><small>生成中按证据缺口调用只读检索</small></span><span class="toggle-control"><input name="agent_memory_tools_enabled" type="checkbox" ${profile.agent_memory_tools_enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>多粒度记忆视图</strong><small>原话、事件、声明、片段、摘要与实体</small></span><span class="toggle-control"><input name="granularity_enabled" type="checkbox" ${profile.granularity_enabled ? 'checked' : ''}><i></i></span></label>
           <label class="strategy-toggle"><span><strong>语义关联图</strong><small>独立于事实关系边的可重建投影</small></span><span class="toggle-control"><input name="association_enabled" type="checkbox" ${profile.association_enabled ? 'checked' : ''}><i></i></span></label>
@@ -2128,7 +2172,7 @@ async function editRetrievalProfile() {
       </section>
       <section class="strategy-modal-section">
         <div class="strategy-section-title"><span>02</span><div><strong>三层检索门槛与预算</strong><small>预召回、纠正式检索与生成中工具各自受限</small></div></div>
-        <div class="retrieval-stage-note"><span><b>预召回</b> 目录与严格详情门槛</span><i data-lucide="arrow-right"></i><span><b>Planner</b> 零候选可跨池改写</span><i data-lucide="arrow-right"></i><span><b>主模型</b> 证据不足才调用只读工具</span></div>
+        <div class="retrieval-stage-note"><span><b>预召回</b> 目录与严格详情门槛</span><i data-lucide="arrow-right"></i><span><b>Planner</b> 可改写事件与声明检索词</span><i data-lucide="arrow-right"></i><span><b>服务端</b> 时序/计数确定性聚合</span><i data-lucide="arrow-right"></i><span><b>主模型</b> 仍不足才调用只读工具</span></div>
         <div class="form-grid strategy-number-grid">
           <label><span>轻量目录相似度</span><input name="catalog_min_similarity" type="number" min="0" max="1" step="0.01" value="${profile.catalog_min_similarity}" required><small>宽进，只暴露名称和关系</small></label>
           <label><span>纯向量详情相似度</span><input name="vector_only_min_similarity" type="number" min="0" max="1" step="0.01" value="${profile.vector_only_min_similarity}" required><small>无关键词或图谱证据时的硬门槛</small></label>
@@ -3416,6 +3460,7 @@ const TRACE_SPAN_LABELS = {
   memory_retrieval_planner: '二次召回规划',
   memory_context_filter: '长期记忆上下文过滤',
   hybrid_memory_retrieval: '混合记忆召回',
+  memory_answerability_gate: '回答前证据充分性校验',
   agent_memory_search: '主模型主动检索记忆',
   agent_memory_expand: '主模型展开图谱证据',
   capability_resolution: '当轮工具解析',
@@ -3423,6 +3468,7 @@ const TRACE_SPAN_LABELS = {
   debug_replay_policy: '无短期记忆调试策略',
   short_term_history_policy: '短期记忆冲突隔离',
   model_response: 'Pi Runtime 与 LLM 协作',
+  grounded_response_contract: '服务端确定性回答合同',
   post_turn_memory_commit: '长期记忆更新',
   trigger_evaluation_post_commit: '记忆更新后条件触发',
   response_complete: '本轮收口'
@@ -3463,11 +3509,20 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
   const promptOutput = parseJson(promptSpan?.output_json, {});
   const promptComposition = promptOutput.promptComposition || modelInput.promptComposition || {};
   const retrievalSpan = trace.spans.find((span) => span.name === 'hybrid_memory_retrieval');
+  const answerabilitySpan = trace.spans.find((span) => span.name === 'memory_answerability_gate');
   const historyPolicySpan = trace.spans.find((span) => span.name === 'short_term_history_policy');
   const capabilitySpan = trace.spans.find((span) => span.name === 'capability_resolution');
   const memorySpan = trace.spans.find((span) => span.name === 'post_turn_memory_commit');
   const memoryOutput = parseJson(memorySpan?.output_json, {});
+  const extractionPipelines = memoryOutput.pipelines || {};
+  const extractionPipelineSummary = Object.keys(extractionPipelines).length
+    ? [
+      `事件图谱 ${Number(extractionPipelines.eventGraph?.outputCount || 0)} 个候选 / ${Number(extractionPipelines.eventGraph?.attempts || 1)} 次请求`,
+      `语义声明 ${Number(extractionPipelines.semanticState?.outputCount || 0)} 条候选 / ${Number(extractionPipelines.semanticState?.attempts || 1)} 次请求`
+    ].join('；')
+    : '';
   const retrievalOutput = parseJson(retrievalSpan?.output_json, {});
+  const answerabilityOutput = parseJson(answerabilitySpan?.output_json, {});
   const historyPolicyOutput = parseJson(historyPolicySpan?.output_json, {});
   const capabilityOutput = parseJson(capabilitySpan?.output_json, {});
   const usage = modelOutput.usage || {};
@@ -3504,6 +3559,8 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
   const unlockedTools = exposedTools.filter((tool) => tool.sourceType !== 'system_memory');
   const toolExecutions = lifecycle.filter((event) => event.type === 'tool_execution_end');
   const callCount = Number(bridge.requestCount || providerCalls.length || (bridge.status ? 1 : 0));
+  const gateStatus = answerabilityOutput.status || '未记录';
+  const gateRisk = ['conflicted', 'insufficient', 'partial'].includes(gateStatus);
   const reactLoopHtml = toolLoopEnabled ? providerCalls.map((call, index) => {
     const nextCall = providerCalls[index + 1];
     const executions = nextCall ? toolExecutions.filter((event) =>
@@ -3521,7 +3578,7 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
     <section class="trace-collaboration" aria-label="Runtime 与模型协作视图">
       <header class="trace-collaboration-header">
         <div><span class="eyebrow">RUNTIME × MODEL</span><h4>本次回复的真实协作链</h4></div>
-        <div class="trace-mode-badges"><span class="badge ${agentTurnEnabled ? 'blue' : 'amber'}">${agentTurnEnabled ? 'Agent Turn 已启用' : 'Legacy 调用链'}</span><span class="badge ${toolLoopEnabled ? 'blue' : 'amber'}">${toolLoopEnabled ? 'ReAct 工具循环' : '本轮无工具'}</span>${noShortTermReplay ? '<span class="badge blue">无短期记忆测试</span>' : (isolatedHistory ? '<span class="badge blue">长期证据优先</span>' : '')}</div>
+        <div class="trace-mode-badges"><span class="badge ${agentTurnEnabled ? 'blue' : 'amber'}">${agentTurnEnabled ? 'Agent Turn 已启用' : 'Legacy 调用链'}</span><span class="badge ${toolLoopEnabled ? 'blue' : 'amber'}">${toolLoopEnabled ? 'ReAct 工具循环' : '本轮无工具'}</span><span class="badge ${gateRisk ? 'amber' : 'blue'}">证据门 ${escapeHtml(gateStatus)}</span>${noShortTermReplay ? '<span class="badge blue">无短期记忆测试</span>' : (isolatedHistory ? '<span class="badge blue">长期证据优先</span>' : '')}</div>
       </header>
       <div class="trace-collaboration-flow">
         <div class="trace-actor pipeline"><i data-lucide="route"></i><span><small>会话编排</small><strong>Memory Agent Turn Pipeline</strong><em>${pipelineHistoryLabel} · ${promptChars.toLocaleString()} 字符系统输入</em></span></div>
@@ -3533,11 +3590,11 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
         <div class="trace-actor llm"><i data-lucide="sparkles"></i><span><small>具体 LLM</small><strong>${escapeHtml(provider)} / ${escapeHtml(model)}</strong><em>${Number(usage.inputTokens || 0).toLocaleString()} in · ${Number(usage.outputTokens || 0).toLocaleString()} out</em></span></div>
       </div>
       <div class="trace-sequence">
-        <div><span class="trace-sequence-index">01</span><strong>Turn Pipeline 组装输入</strong><small>${escapeHtml(assemblyNote)}</small><time>${traceMs(promptSpan?.duration_ms)}</time></div>
+        <div><span class="trace-sequence-index">01</span><strong>召回、前提校验与输入组装</strong><small>${escapeHtml(assemblyNote)} 证据门：${escapeHtml(gateStatus)}。</small><time>${traceMs((retrievalSpan?.duration_ms || 0) + (answerabilitySpan?.duration_ms || 0) + (promptSpan?.duration_ms || 0))}</time></div>
         <div><span class="trace-sequence-index">02</span><strong>${escapeHtml(runtimeName)} 接管本轮</strong><small>${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[firstEvent.type] || firstEvent.type || '启动')} → ${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[lastEvent.type] || lastEvent.type || '收口')}，维护 Agent state 与消息生命周期。</small><time>${traceMs(firstEvent.atMs, '+')}</time></div>
         <div><span class="trace-sequence-index">03</span><strong>暴露 ${exposedTools.length} 个当轮工具</strong><small>${exposedTools.length ? `系统只读记忆 ${systemMemoryTools.length} 个，已解锁 Skill / MCP ${unlockedTools.length} 个：${escapeHtml(exposedTools.map((tool) => tool.name).join('、'))}` : '本轮没有可调用工具，模型直接生成文本。'}</small><time>${traceMs(capabilitySpan?.duration_ms)}</time></div>
         <div><span class="trace-sequence-index">04</span><strong>Provider Bridge 发起 ${callCount} 次模型请求</strong><small>${toolLoopEnabled ? '模型可按证据缺口调用 memory_search / memory_expand，或选择已解锁能力；执行结果作为 toolResult 回灌 Pi，再由模型继续推理。' : `Pi 将统一消息请求交给 ${escapeHtml(model)}，模型直接返回最终文本。`}</small><time>${traceMs(bridge.responseAtMs, '+')}</time></div>
-        <div><span class="trace-sequence-index">05</span><strong>Turn Pipeline 完成轮后处理</strong><small>长期记忆更新：${noShortTermReplay ? '调试禁用' : escapeHtml(memoryOutput.status || '未触发')}；本轮召回 ${Number.isFinite(selectedMemories) ? selectedMemories : 0} 条候选记忆。</small><time>${traceMs(memorySpan?.duration_ms)}</time></div>
+        <div><span class="trace-sequence-index">05</span><strong>Turn Pipeline 完成轮后处理</strong><small>长期记忆更新：${noShortTermReplay ? '调试禁用' : escapeHtml(memoryOutput.status || '未触发')}${extractionPipelineSummary ? `；${escapeHtml(extractionPipelineSummary)}` : ''}；本轮召回 ${Number.isFinite(selectedMemories) ? selectedMemories : 0} 条候选记忆。</small><time>${traceMs(memorySpan?.duration_ms)}</time></div>
       </div>
       ${toolLoopEnabled ? `<div class="trace-react-loop"><span class="trace-lifecycle-label">ReAct 调用链</span><div>${reactLoopHtml || '<span>本轮暴露了工具，但模型没有调用。</span>'}</div></div>` : ''}
       <div class="trace-lifecycle"><span class="trace-lifecycle-label">Pi 生命周期</span><div>${lifecycleHtml}</div></div>
@@ -3558,7 +3615,9 @@ async function loadTraceDetail(id) {
   const modelSpan = trace.spans.find((span) => span.name === 'model_response');
   const modelOutput = parseJson(modelSpan?.output_json, {});
   const retrievalSpan = trace.spans.find((span) => span.name === 'hybrid_memory_retrieval');
+  const answerabilitySpan = trace.spans.find((span) => span.name === 'memory_answerability_gate');
   const retrievalOutput = parseJson(retrievalSpan?.output_json, {});
+  const answerabilityOutput = parseJson(answerabilitySpan?.output_json, {});
   const usage = modelOutput.usage || {};
   const cache = modelOutput.cache || {};
   const inputTokens = Number(usage.inputTokens || cache.inputTokens || 0);
@@ -3583,6 +3642,7 @@ async function loadTraceDetail(id) {
       retrievalOutput.diagnostics?.candidates || [],
       { compact: true }
     )}
+    ${answerabilityGateHtml(answerabilityOutput, retrievalOutput.diagnostics || {}, { compact: true })}
     <details class="trace-raw-panel"><summary><span><i data-lucide="braces"></i><strong>原始 Span</strong></span><small>${trace.spans.length} 个节点 · 完整 Input / Output</small><i data-lucide="chevron-down"></i></summary><div class="trace-raw-spans">${trace.spans.map((span, index) => {
       const input = parseJson(span.input_json, {});
       const output = parseJson(span.output_json, {});

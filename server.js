@@ -25,7 +25,7 @@ import { getReleaseNotes } from './lib/releases.js';
 import {
   CORE_RELATION_FAMILIES, ENTITY_TYPE_ONTOLOGY, EVENT_OPERATIONS,
   EXTRACTION_CONTEXT_MAX_MESSAGES, EXTRACTION_CONTEXT_MAX_TURNS, EXTRACTION_INTERVAL_MAX_TURNS,
-  formatRetrievedMemory,
+  assessMemoryAnswerability, formatRetrievedMemory,
   getEventExtractionProfile, getExtractionPromptContract, getRetrievalProfile, listEvents,
   listGraph, listMemoryForAdmin, listMemorySchemas, RELATIONSHIP_STAGE_THRESHOLDS,
   retrieveMemory, setMemoryValue
@@ -739,6 +739,10 @@ function architectureOverview(sceneId) {
           30,
           Number(extraction?.max_events_per_turn || 0) * extractionIntervalTurns
         ),
+        maxSemanticClaimsPerBatch: Math.min(40, Math.max(6, extractionIntervalTurns * 5)),
+        pipelines: ['event_graph', 'semantic_state'],
+        pipelineExecution: 'parallel_then_server_merge',
+        semanticEvidenceLevels: ['explicit', 'assistant_utterance', 'accepted', 'inferred'],
         minImportance: Number(extraction?.min_importance || 0),
         includeAssistant: Boolean(extraction?.include_assistant)
       },
@@ -1886,6 +1890,7 @@ async function handleApi(request, response, url) {
     }
     const startedAt = performance.now();
     const retrieval = await retrieveMemory(query, scope, { contextMessages });
+    retrieval.answerability = await assessMemoryAnswerability(query, retrieval);
     const scene = db.prepare('SELECT id, name FROM scenes WHERE id = ?').get(agent.scene_id);
     sendJson(response, 200, {
       query,
