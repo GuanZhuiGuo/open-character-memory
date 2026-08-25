@@ -6,9 +6,9 @@
 
 Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的开源记忆 Agent 参考实现和可视化工作台。它不只“记得用户”，也会管理角色说过的话、双方共同经历、事件更正、关系状态与剧情分支。系统将管理员定义的结构化字段、用户明确偏好、事件图谱、当前有效状态和混合召回分层管理。
 
-当前 `0.6.0` 采用 **Pi Agent Core ReAct runtime + 多粒度/纠正式/Agentic 记忆召回 + SQLite 双时态主账本 + Neo4j 可重建事实图与语义关联图投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
+当前 `0.7.0` 采用 **Pi Agent Core ReAct runtime + 多粒度/纠正式/Agentic 记忆召回 + SQLite 双时态主账本 + Neo4j 可重建事实图与语义关联图投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
 
-![Open Character Memory 总体架构](docs/assets/overall-architecture-v0.6.0.png)
+![Open Character Memory 总体架构](docs/assets/overall-architecture-v0.7.0.png)
 
 ## 项目特点
 

@@ -4,9 +4,9 @@
 
 Open Character Memory is an open-source role-user memory runtime and visual studio for role-play companions and tutoring agents. It remembers user facts, character commitments, shared stories, corrections, relationship state, and narrative branches without treating every semantically similar memory as current truth.
 
-Version `0.6.0` combines a Pi Agent Core ReAct loop with multi-granularity, corrective, and agentic memory retrieval, a bitemporal SQLite source of truth, replayable Neo4j fact/semantic graph projections, and controlled Skill/MCP execution.
+Version `0.7.0` combines a Pi Agent Core ReAct loop with multi-granularity, corrective, and agentic memory retrieval, a bitemporal SQLite source of truth, replayable Neo4j fact/semantic graph projections, and controlled Skill/MCP execution.
 
-![Open Character Memory architecture](docs/assets/overall-architecture-v0.6.0.png)
+![Open Character Memory architecture](docs/assets/overall-architecture-v0.7.0.png)
 
 ## Highlights
 

@@ -24,7 +24,7 @@
 
   <rect width="1900" height="1320" fill="#FFFFFF"/>
   <rect width="1900" height="12" fill="#2563EB"/>
-  <text x="48" y="68" class="title">Open Character Memory v0.6.0 总体架构</text>
+  <text x="48" y="68" class="title">Open Character Memory v0.7.0 总体架构</text>
   <text x="48" y="102" class="subtitle">双管线抽取、相对时间锚定、事件 / Claim 跨池召回、确定性聚合与 Pi Agentic Memory</text>
 
   <rect x="40" y="132" width="1820" height="138" rx="6" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="2"/>

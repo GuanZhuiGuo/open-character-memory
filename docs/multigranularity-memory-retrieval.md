@@ -1,6 +1,6 @@
 # 多粒度记忆召回设计
 
-> 适用版本：Open Character Memory 0.6.0
+> 适用版本：Open Character Memory 0.7.0
 
 ## 目标
 

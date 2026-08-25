@@ -11,6 +11,7 @@ COPY --chown=node:node package.json package-lock.json ./
 COPY --chown=node:node packages ./packages
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --chown=node:node server.js ./
+COPY --chown=node:node CHANGELOG.md ./
 COPY --chown=node:node lib ./lib
 COPY --chown=node:node public ./public
 COPY --chown=node:node scripts ./scripts

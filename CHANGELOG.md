@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## [0.7.0](https://github.com/GuanZhuiGuo/open-character-memory/releases/tag/v0.7.0) - 2026-08-25
+
 ### Added
 
 - 新增独立语义声明管线，将用户事实、显式/隐式偏好、当前/计划状态与角色原话从事件图谱抽取中拆开，两条管线并行运行后由服务端合并。
@@ -19,15 +21,20 @@
 - Planner 改写词会同时检索全部 active 事件与独立 Claim；宽泛画像问题使用自适应相关带闭合，带时间范围的数量问题由服务端确定性扫描与聚合。
 - 记忆设置、系统架构图、Trace 协作视图与代码 RAG 切片同步为双管线抽取和回答证据门逻辑。
 
+### Fixed
+
+- Docker 生产镜像包含 Release Notes 所需的 `CHANGELOG.md`，容器内 `/api/releases` 不再因缺失文件返回 400。
+
 ### Resolved Bad Cases
 
 - **用户未确认的角色回答被写成用户事实**：例如角色自行说“你应该喜欢蓝色”，用户没有确认；现在它不会进入用户画像或固定注入，只以 `assistant_utterance + provisional` 留在角色原话中，用户后续明确承接后才升级。
 - **状态已经更新却仍回答旧位置**：例如旧鞋先放床下，后来明确移到衣柜鞋架，并计划再整理；现在同一物品的新当前位置会 supersede 旧值，计划目标单独说明，不再把床下当成现状。
 - **多项事实只记住或回答其中一项**：例如兽医诊疗费 `$50`、跳蚤药 `$25`，询问总费用时只答 `$50`；现在已发生金额会按原子证据分别保存并完整召回，建议价和预算不会混入。
+- **服务器已上线但容器看不到发布记录**：例如 Docker 部署后健康检查正常，打开 Release Notes 却返回 400；现在构建阶段会携带 Changelog，并由容器烟测直接验证正式版本和待发布计数。
 
 ### Validation
 
-- Node 自动化测试 `68/68`、离线记忆回归 `5/5`、开源预检 `93` 个文件通过。
+- Node 自动化测试 `69/69`、离线记忆回归 `5/5`、开源预检 `95` 个文件通过；`v0.7.0` Docker 镜像构建及 Release API 烟测通过。
 - LongMemEval cleaned oracle 12 题分层 pilot 最终 `12/12`：用户事实、角色原话、偏好、跨会话组合、知识更新和时间推理各 `2/2`。该 pilot 使用 oracle evidence sessions 和本地配置的 Ark 评审模型，只作为兼容性门禁，不是官方 LongMemEval-S 排行榜分数。
 
 ## [0.6.0](https://github.com/GuanZhuiGuo/open-character-memory/releases/tag/v0.6.0) - 2026-08-19

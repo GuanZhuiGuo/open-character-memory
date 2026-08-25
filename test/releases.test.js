@@ -29,19 +29,34 @@ test('release notes parse linked, historical, and unreleased changelog entries',
 });
 
 test('repository release notes expose the current version and detailed published history', () => {
-  const notes = getReleaseNotes('0.6.0');
+  const notes = getReleaseNotes('0.7.0');
   const current = notes.releases.find((release) => release.isCurrent);
   const diagnosticRelease = notes.releases.find((release) => release.version === '0.4.4');
   const temporalGraphRelease = notes.releases.find((release) => release.version === '0.4.3');
   const baselineRelease = notes.releases.find((release) => release.version === '0.2.4');
 
-  assert.equal(notes.currentVersion, '0.6.0');
+  assert.equal(notes.currentVersion, '0.7.0');
   assert.ok(current);
   assert.ok(current.itemCount >= 10);
-  assert.match(current.githubUrl, /releases\/tag\/v0\.6\.0$/);
+  assert.match(current.githubUrl, /releases\/tag\/v0\.7\.0$/);
   assert.ok(diagnosticRelease);
   assert.ok(diagnosticRelease.sections.some((section) => section.key === 'validation'));
   assert.match(temporalGraphRelease.githubUrl, /releases\/tag\/v0\.4\.3$/);
   assert.ok(baselineRelease.itemCount >= 4);
   assert.ok(notes.releases.every((release) => release.badCaseCount > 0));
+});
+
+test('release notes hide an empty unreleased section after a formal release', () => {
+  const releases = parseChangelog(`# Changelog
+
+## Unreleased
+
+## [1.2.3](https://example.com/releases/tag/v1.2.3) - 2026-08-25
+### Added
+- Released entry.
+`);
+
+  assert.equal(releases.length, 1);
+  assert.equal(releases[0].version, '1.2.3');
+  assert.equal(releases.some((release) => release.isUnreleased), false);
 });
