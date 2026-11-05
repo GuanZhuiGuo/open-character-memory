@@ -1,0 +1,312 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Open Character Memory v0.9.0",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1360,
+      850
+    ],
+    "views": [
+      {
+        "id": "conversation",
+        "label": "对话与上下文",
+        "focus": [
+          "reader",
+          "gateway",
+          "context",
+          "runtime",
+          "ledger"
+        ],
+        "note": "容量预算、摘要快照与近期完整轮次共同编译对话上下文。"
+      },
+      {
+        "id": "memory-care",
+        "label": "记忆整理与纠错",
+        "focus": [
+          "gateway",
+          "reviews",
+          "repair",
+          "ledger",
+          "readiness"
+        ],
+        "note": "周期回顾绑定来源版本，实体纠错通过事务保留历史与审计。"
+      },
+      {
+        "id": "execution",
+        "label": "工具与持久执行",
+        "focus": [
+          "runtime",
+          "execution",
+          "artifacts",
+          "ledger",
+          "projection"
+        ],
+        "note": "Pi 执行受控工具，持久 DAG 由独立 Worker 领取并恢复。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "reader",
+      "type": "frontend",
+      "label": "用户与管理工作台",
+      "sublabel": "对话 · 回顾 · 图谱纠错",
+      "pos": [
+        50,
+        80
+      ],
+      "size": [
+        230,
+        80
+      ]
+    },
+    {
+      "id": "gateway",
+      "type": "security",
+      "label": "认证与作用域 API",
+      "sublabel": "用户 / 角色 / 故事 / 分支",
+      "pos": [
+        390,
+        80
+      ],
+      "size": [
+        230,
+        80
+      ]
+    },
+    {
+      "id": "context",
+      "type": "backend",
+      "label": "上下文编译",
+      "sublabel": "容量预算 · 摘要 · 近期轮次",
+      "pos": [
+        730,
+        80
+      ],
+      "size": [
+        230,
+        80
+      ]
+    },
+    {
+      "id": "runtime",
+      "type": "backend",
+      "label": "Pi ReAct 主 Agent",
+      "sublabel": "记忆检索 · 证据门 · 模型续答",
+      "pos": [
+        1070,
+        80
+      ],
+      "size": [
+        230,
+        80
+      ]
+    },
+    {
+      "id": "reviews",
+      "type": "backend",
+      "label": "跨事件周期回顾",
+      "sublabel": "周 / 月 · 账本事件版本与原文",
+      "pos": [
+        50,
+        350
+      ],
+      "size": [
+        230,
+        80
+      ]
+    },
+    {
+      "id": "repair",
+      "type": "backend",
+      "label": "实体纠错与审计",
+      "sublabel": "同名拆分 · 别名合并 · 幂等",
+      "pos": [
+        390,
+        350
+      ],
+      "size": [
+        230,
+        80
+      ]
+    },
+    {
+      "id": "ledger",
+      "type": "database",
+      "label": "SQLite 权威记忆账本",
+      "sublabel": "双时态 · 原文 · 六粒度视图",
+      "pos": [
+        730,
+        350
+      ],
+      "size": [
+        230,
+        80
+      ]
+    },
+    {
+      "id": "execution",
+      "type": "backend",
+      "label": "受控工具与持久任务",
+      "sublabel": "Skill / MCP · Subagent · DAG",
+      "tag": "独立 Worker · 按部署启用沙箱",
+      "pos": [
+        1070,
+        350
+      ],
+      "size": [
+        230,
+        80
+      ]
+    },
+    {
+      "id": "readiness",
+      "type": "frontend",
+      "label": "记忆处理状态",
+      "sublabel": "保存 · 抽取 · 索引 · 可检索",
+      "pos": [
+        50,
+        620
+      ],
+      "size": [
+        230,
+        80
+      ]
+    },
+    {
+      "id": "projection",
+      "type": "database",
+      "label": "Neo4j 图投影",
+      "sublabel": "outbox 重放 · 失败回退账本",
+      "pos": [
+        730,
+        620
+      ],
+      "size": [
+        230,
+        80
+      ]
+    },
+    {
+      "id": "artifacts",
+      "type": "database",
+      "label": "Trace 与产物存储",
+      "sublabel": "调用记录 · 检查点 · 下载授权",
+      "pos": [
+        1070,
+        620
+      ],
+      "size": [
+        230,
+        80
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "reader",
+      "to": "gateway",
+      "label": "登录与请求",
+      "variant": "emphasis"
+    },
+    {
+      "from": "gateway",
+      "to": "context",
+      "label": "当前会话",
+      "variant": "emphasis"
+    },
+    {
+      "from": "context",
+      "to": "runtime",
+      "label": "编译输入",
+      "variant": "emphasis"
+    },
+    {
+      "from": "context",
+      "to": "ledger",
+      "label": "有效状态与来源",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        845.0,
+        255.0
+      ]
+    },
+    {
+      "from": "gateway",
+      "to": "repair",
+      "label": "确认纠错",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        505.0,
+        255.0
+      ]
+    },
+    {
+      "from": "reader",
+      "to": "reviews",
+      "label": "生成与查看",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        165.0,
+        255.0
+      ]
+    },
+    {
+      "from": "repair",
+      "to": "ledger",
+      "label": "事务版本化"
+    },
+    {
+      "from": "reviews",
+      "to": "readiness",
+      "label": "整理状态",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "variant": "dashed",
+      "labelAt": [
+        165.0,
+        525.0
+      ]
+    },
+    {
+      "from": "ledger",
+      "to": "projection",
+      "label": "可重放投影",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "variant": "dashed",
+      "labelAt": [
+        845.0,
+        525.0
+      ]
+    },
+    {
+      "from": "runtime",
+      "to": "execution",
+      "label": "白名单与预算",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1185.0,
+        255.0
+      ]
+    },
+    {
+      "from": "execution",
+      "to": "artifacts",
+      "label": "执行回执",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1185.0,
+        525.0
+      ]
+    }
+  ]
+}

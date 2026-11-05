@@ -18,6 +18,7 @@ COPY --chown=node:node scripts ./scripts
 COPY --chown=node:node sandbox ./sandbox
 COPY --chown=node:node evals ./evals
 COPY --chown=node:node openapi ./openapi
+COPY --chown=node:node docs/memory-lifecycle-v0.9.architecture.html ./docs/
 
 RUN mkdir -p /app/data && chown node:node /app/data
 

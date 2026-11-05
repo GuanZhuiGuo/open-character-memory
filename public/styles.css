@@ -17,6 +17,40 @@
   --shadow: 0 12px 30px rgba(38, 62, 106, 0.10);
 }
 
+.memory-readiness-strip { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-bottom: 16px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 12px; }
+.memory-readiness-strip > span { display: inline-flex; align-items: center; gap: 7px; }
+.memory-readiness-strip svg { width: 15px; height: 15px; color: var(--primary); }
+.memory-status-warning { color: var(--amber); font-size: 12px; line-height: 1.6; }
+.memory-review-workbench { min-width: 0; margin-bottom: 20px; }
+.memory-review-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.memory-review-toolbar h4 { margin: 0 0 5px; font-size: 16px; }
+.memory-review-toolbar p { margin: 0; color: var(--muted); font-size: 12px; }
+.memory-review-list { display: grid; gap: 16px; }
+.memory-review-card { padding: 20px; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.memory-review-card > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.memory-review-card > header small { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; }
+.memory-review-card .markdown-content { margin: 18px 0; line-height: 1.75; overflow-wrap: anywhere; }
+.memory-review-card details { padding-top: 12px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); }
+.memory-review-card summary { cursor: pointer; }
+.memory-review-card details li { padding: 4px 0; }
+.memory-review-card footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; color: var(--muted); font-size: 11px; }
+.entity-repair-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+.repair-evidence-list { display: grid; gap: 8px; margin: 14px 0; max-height: 340px; overflow-y: auto; }
+.repair-evidence-row { display: flex; align-items: flex-start; gap: 10px; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.repair-evidence-row input { flex: 0 0 auto; margin-top: 4px; }
+.repair-evidence-row span { min-width: 0; }
+.repair-evidence-row strong { display: block; font-size: 13px; line-height: 1.6; }
+.repair-evidence-row small { display: block; margin-top: 4px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
+.form-field { display: grid; gap: 7px; margin: 16px 0; font-size: 13px; }
+.form-field input, .form-field select, .form-field textarea { width: 100%; min-height: 38px; padding: 8px 10px; }
+.form-field textarea { min-height: 78px; }
+.form-hint { color: var(--muted); font-size: 12px; line-height: 1.6; }
+@media (max-width: 720px) {
+  .memory-review-toolbar { align-items: flex-start; }
+  .memory-review-card { padding: 16px; }
+  .memory-readiness-strip { gap: 10px 16px; }
+}
+
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { overflow: hidden; background: var(--page); }

@@ -4,13 +4,13 @@
 
 Open Character Memory is an open-source role-user memory runtime and visual studio for role-play companions and tutoring agents. It remembers user facts, character commitments, shared stories, corrections, relationship state, and narrative branches without treating every semantically similar memory as current truth.
 
-Version `0.8.0` combines a Pi Agent Core ReAct loop and persistent Plan-Execute Deep Agent with multi-granularity, corrective, and agentic memory retrieval, a bitemporal SQLite source of truth, replayable Neo4j fact/semantic graph projections, and controlled Skill/MCP execution.
+Version `0.9.0` combines a Pi Agent Core ReAct loop and persistent Plan-Execute Deep Agent with multi-granularity, corrective, and agentic memory retrieval, a bitemporal SQLite source of truth, replayable Neo4j fact/semantic graph projections, and controlled Skill/MCP execution.
 
-Version `0.8.0` keeps bounded parallel Subagents for work that should finish inside the current turn and adds a durable cross-request DAG runtime for long work. Model-proposed plans are validated and persisted by the server, then executed by an independent leased Worker with checkpoints, human approvals, bounded replanning, and reconciliation for uncertain non-idempotent writes.
+Version `0.9.0` keeps bounded parallel Subagents for work that should finish inside the current turn and adds a durable cross-request DAG runtime for long work. Model-proposed plans are validated and persisted by the server, then executed by an independent leased Worker with checkpoints, human approvals, bounded replanning, and reconciliation for uncertain non-idempotent writes.
 
-![Open Character Memory v0.8.0 architecture](docs/assets/overall-architecture-v0.8.0.png)
+![Open Character Memory v0.9.0 architecture](docs/assets/overall-architecture-v0.9.0.png)
 
-[Open the interactive architecture diagram](docs/memory-agent-deep-runtime-v2.architecture.html)
+[Open the interactive architecture diagram](docs/memory-lifecycle-v0.9.architecture.html)
 
 ## Highlights
 
@@ -89,6 +89,12 @@ docker compose up --build
 The application Compose file does not bundle an OpenSandbox control plane. Keep `SANDBOX_RUNTIME_ENABLED=false` until one is deployed, its sandbox image is built, and the server-side connection variables are configured. See [Sandbox, parallel Subagents, and the Deep Agent Runtime](docs/sandbox-subagent-runtime.md).
 
 Local development defaults to an inline worker. Production separates the web process from durable execution: set `DEEP_AGENT_WORKER_MODE=external`, run `npm run worker:deep-agent`, or use the supplied systemd/Compose worker service. The validated DAG, lease, checkpoint, approval, replan, and side-effect reconciliation contracts are documented in [Persistent Deep Agent Runtime](docs/deep-agent-runtime.md).
+
+## Conversation continuity and memory care
+
+Conversation history uses an estimated 6,000-token budget, recent complete turns, and persisted auxiliary summaries with source fingerprints and message watermarks. Summary failures retain uncompressed source messages. Deterministic fact answers and diagnostic replay bypass summaries.
+
+Weekly/monthly reviews bind active event versions and source evidence. Source changes mark a review stale. The graph inspector provides scoped entity merge/split with versioned corrections, audit records, idempotency and replayable projections. Logged-in users can operate on their own memory. Readiness distinguishes stored messages, extraction backlog, search indexes and graph projection state.
 
 ## Headless Memory Runtime
 

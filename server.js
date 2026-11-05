@@ -15,6 +15,15 @@ import {
 import { artifactUploadContract, getArtifact, readArtifactBytes, saveArtifact } from './lib/artifacts.js';
 import { getCapabilityRuntimeStatus } from './lib/capabilities.js';
 import { config } from './lib/config.js';
+import {
+  DEFAULT_CONVERSATION_CONTEXT_OPTIONS, ensureConversationContextSchema, getConversationContextStatus
+} from './lib/conversation-context.js';
+import {
+  ensureEntityRepairSchema, getEntityRepairDetails, mergeEntities, splitEntity, replayEntityRepairProjections
+} from './lib/entity-repair.js';
+import {
+  migrateMemoryReviews, listMemoryReviews, getMemoryReview, generateMemoryReview, getMemoryReadiness
+} from './lib/memory-review.js';
 import { db, initializeDatabase } from './lib/db.js';
 import {
   cancelDeepAgentRun, createDeepAgentRun, decideDeepAgentApproval, getDeepAgentRun,
@@ -49,6 +58,9 @@ import { hash, json, nowIso, parseJson, safeText, uid } from './lib/utils.js';
 import { createZip } from './lib/zip.js';
 
 initializeDatabase();
+ensureConversationContextSchema();
+ensureEntityRepairSchema();
+migrateMemoryReviews();
 await initializeGraphStore();
 
 const projectDir = path.dirname(fileURLToPath(import.meta.url));
@@ -268,6 +280,12 @@ function assertUserAccess(principal, requestedUserId) {
 }
 
 function userMayAccessRoute(pathname, method) {
+  if (pathname === '/api/memory/reviews' && ['GET', 'POST'].includes(method)) return true;
+  if (pathname === '/api/memory/readiness' && method === 'GET') return true;
+  if (/^\/api\/memory\/reviews\/[^/]+$/.test(pathname) && method === 'GET') return true;
+  if (/^\/api\/memory\/entities\/[^/]+\/repair$/.test(pathname) && method === 'GET') return true;
+  if (['/api/memory/entities/merge', '/api/memory/entities/split'].includes(pathname) && method === 'POST') return true;
+  if (/^\/api\/conversations\/[^/]+\/context$/.test(pathname) && method === 'GET') return true;
   if (pathname === '/v1/memory/capabilities' && method === 'GET') return true;
   if (['/v1/memory/observe', '/v1/memory/recall', '/v1/memory/expand'].includes(pathname)
     && method === 'POST') return true;
@@ -741,7 +759,7 @@ function architectureOverview(sceneId) {
         messageLimit: MAIN_MODEL_MESSAGE_LIMIT,
         approximateTurns: Math.floor(MAIN_MODEL_MESSAGE_LIMIT / 2),
         unit: 'messages',
-        overflowBehavior: '超出的旧消息不进入主模型 Input，原始消息仍保留在数据库'
+        overflowBehavior: '历史对话按容量预算整理为摘要，保留近期完整轮次；原文和摘要水位持久化'
       },
       extraction: {
         intervalTurns: extractionIntervalTurns,
@@ -858,9 +876,17 @@ function architectureOverview(sceneId) {
     artifactUpload: artifactUploadContract(),
     graphStore: getGraphStoreStatus(),
     compression: {
-      rollingSummaryEnabled: false,
-      tokenThreshold: null,
-      currentBehavior: `仅取最近 ${MAIN_MODEL_MESSAGE_LIMIT} 条消息；尚未实现 token 阈值或滚动摘要`
+      rollingSummaryEnabled: true,
+      tokenThreshold: DEFAULT_CONVERSATION_CONTEXT_OPTIONS.maxContextTokens,
+      keepRecentMessages: DEFAULT_CONVERSATION_CONTEXT_OPTIONS.keepRecentMessages,
+      summaryMaxTokens: DEFAULT_CONVERSATION_CONTEXT_OPTIONS.maxSummaryTokens,
+      budgetUnit: 'estimated_history_tokens',
+      currentBehavior: '历史摘要与近期完整对话组成辅助上下文；模型失败保留未压缩原文并报告超预算'
+    },
+    memoryLifecycle: {
+      reviews: { periods: ['weekly', 'monthly'], freshness: 'source_version_and_content_fingerprint' },
+      entityRepair: { operations: ['merge', 'split'], history: 'bitemporal_versions', projection: 'replayable' },
+      readiness: { stages: ['saved', 'extraction', 'index', 'searchable'], connectionVerified: false }
     },
     timing: {
       sameTimePoint: false,
@@ -1500,6 +1526,7 @@ async function handleApi(request, response, url) {
   if (pathname === '/api/health' && method === 'GET') {
     sendJson(response, 200, {
       ok: true,
+      version: SYSTEM_VERSION,
       database: { sourceOfTruth: 'sqlite', temporalModel: 'bitemporal' },
       graphStore: getGraphStoreStatus(),
       runtime: getAgentRuntimeStatus(),
@@ -1514,6 +1541,12 @@ async function handleApi(request, response, url) {
 
   if (pathname === '/api/releases' && method === 'GET') {
     sendJson(response, 200, getReleaseNotes(SYSTEM_VERSION));
+    return;
+  }
+  if (pathname === '/api/architecture/diagram' && method === 'GET') {
+    const diagram = fs.readFileSync(path.join(projectDir, 'docs/memory-lifecycle-v0.9.architecture.html'));
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+    response.end(diagram);
     return;
   }
 
@@ -1964,6 +1997,65 @@ async function handleApi(request, response, url) {
     return;
   }
 
+  if (pathname === '/api/memory/readiness' && method === 'GET') {
+    const scope = queryScope(url);
+    scope.userId = assertUserAccess(principal, scope.userId);
+    sendJson(response, 200, await getMemoryReadiness(scope));
+    return;
+  }
+  if (pathname === '/api/memory/reviews' && method === 'GET') {
+    const scope = queryScope(url);
+    scope.userId = assertUserAccess(principal, scope.userId);
+    sendJson(response, 200, await listMemoryReviews(scope, { limit: 30 }));
+    return;
+  }
+  if (pathname === '/api/memory/reviews' && method === 'POST') {
+    const body = await readBody(request);
+    const scope = {
+      userId: assertUserAccess(principal, body.user_id), agentId: body.agent_id || '',
+      storyId: body.story_id || 'main_story', branchId: body.branch_id || 'main'
+    };
+    sendJson(response, 200, await generateMemoryReview(scope, {
+      period: body.period || 'weekly', date: body.date, startDate: body.start_date,
+      endDate: body.end_date, topic: body.topic, force: body.force === true
+    }));
+    return;
+  }
+  const reviewMatch = pathname.match(/^\/api\/memory\/reviews\/([^/]+)$/);
+  if (reviewMatch && method === 'GET') {
+    const scope = queryScope(url);
+    scope.userId = assertUserAccess(principal, scope.userId);
+    const review = await getMemoryReview(decodeURIComponent(reviewMatch[1]), scope);
+    if (!review) throw new HttpError(404, '回顾记录不存在', 'REVIEW_NOT_FOUND');
+    sendJson(response, 200, review);
+    return;
+  }
+  const entityRepairMatch = pathname.match(/^\/api\/memory\/entities\/([^/]+)\/repair$/);
+  if (entityRepairMatch && method === 'GET') {
+    const scope = queryScope(url);
+    scope.userId = assertUserAccess(principal, scope.userId);
+    sendJson(response, 200, await getEntityRepairDetails(scope, decodeURIComponent(entityRepairMatch[1])));
+    return;
+  }
+  if (['/api/memory/entities/merge', '/api/memory/entities/split'].includes(pathname) && method === 'POST') {
+    const body = await readBody(request);
+    const scope = {
+      userId: assertUserAccess(principal, body.user_id), agentId: body.agent_id || '',
+      storyId: body.story_id || 'main_story', branchId: body.branch_id || 'main'
+    };
+    const operation = pathname.endsWith('/merge') ? mergeEntities : splitEntity;
+    sendJson(response, 200, await operation(scope, body));
+    return;
+  }
+  const contextMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/context$/);
+  if (contextMatch && method === 'GET') {
+    const userId = assertUserAccess(principal, url.searchParams.get('user_id'));
+    const conversation = db.prepare('SELECT * FROM conversations WHERE id = ? AND user_id = ?')
+      .get(decodeURIComponent(contextMatch[1]), userId);
+    if (!conversation) throw new HttpError(404, '会话不存在', 'CONVERSATION_NOT_FOUND');
+    sendJson(response, 200, getConversationContextStatus(conversation));
+    return;
+  }
   if (pathname === '/api/memory/schemas' && method === 'GET') {
     sendJson(response, 200, decodeRows(listMemorySchemas(), ['default_json', 'constraints_json']));
     return;
@@ -2234,11 +2326,34 @@ export const server = http.createServer(async (request, response) => {
   }
 });
 
+let entityRepairRecoveryTimer = null;
+let entityRepairRecovery = null;
+
+function recoverEntityRepairIndexes() {
+  if (entityRepairRecovery) return entityRepairRecovery;
+  entityRepairRecovery = (async () => {
+    const scopes = db.prepare(`SELECT DISTINCT user_id, agent_id, story_id, branch_id FROM entity_repairs
+      WHERE projection_status = 'pending' ORDER BY created_at LIMIT 8`).all();
+    for (const scope of scopes) {
+      await replayEntityRepairProjections({
+        userId: scope.user_id, agentId: scope.agent_id, storyId: scope.story_id, branchId: scope.branch_id
+      });
+    }
+  })().catch(() => {
+    // Failed projections remain pending in the audit ledger for the next pass.
+  }).finally(() => { entityRepairRecovery = null; });
+  return entityRepairRecovery;
+}
+
 server.on('listening', () => {
   startMemoryJobWorker();
   startDeepAgentWorker();
+  void recoverEntityRepairIndexes();
+  entityRepairRecoveryTimer = setInterval(() => { void recoverEntityRepairIndexes(); }, 30_000);
+  entityRepairRecoveryTimer.unref?.();
 });
 server.on('close', () => {
+  clearInterval(entityRepairRecoveryTimer);
   stopMemoryJobWorker();
   void stopDeepAgentWorker();
   void closeSandboxRuntime();

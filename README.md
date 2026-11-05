@@ -6,13 +6,13 @@
 
 Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的开源记忆 Agent 参考实现和可视化工作台。它不只“记得用户”，也会管理角色说过的话、双方共同经历、事件更正、关系状态与剧情分支。系统将管理员定义的结构化字段、用户明确偏好、事件图谱、当前有效状态和混合召回分层管理。
 
-当前 `0.8.0` 采用 **Pi Agent Core ReAct runtime + 持久 Plan-Execute Deep Agent + 多粒度/纠正式/Agentic 记忆召回 + SQLite 双时态主账本 + Neo4j 可重建事实图与语义关联图投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
+当前 `0.9.0` 采用 **Pi Agent Core ReAct runtime + 持久 Plan-Execute Deep Agent + 多粒度/纠正式/Agentic 记忆召回 + SQLite 双时态主账本 + Neo4j 可重建事实图与语义关联图投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
 
-`0.8.0` 同时保留两种协作路径：当前 Turn 内的 **有界并行 Subagent** 用于短小独立任务；跨请求的 **持久 Deep Agent** 将模型提出的 DAG 交给服务端校验和独立 Worker，支持检查点、租约恢复、人工审批、受限重规划和不可幂等写入对账。文件、文档和命令继续只在 OpenSandbox 中运行。
+`0.9.0` 同时保留两种协作路径：当前 Turn 内的 **有界并行 Subagent** 用于短小独立任务；跨请求的 **持久 Deep Agent** 将模型提出的 DAG 交给服务端校验和独立 Worker，支持检查点、租约恢复、人工审批、受限重规划和不可幂等写入对账。文件、文档和命令继续只在 OpenSandbox 中运行。
 
-![Open Character Memory v0.8.0 总体架构](docs/assets/overall-architecture-v0.8.0.png)
+![Open Character Memory v0.9.0 总体架构](docs/assets/overall-architecture-v0.9.0.png)
 
-[打开可交互架构图](docs/memory-agent-deep-runtime-v2.architecture.html)
+[打开可交互架构图](docs/memory-lifecycle-v0.9.architecture.html)
 
 ## 项目特点
 
@@ -26,6 +26,15 @@ Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的�
 - **持久 Deep Agent**：复杂任务以 Run/Node/Edge DAG 落库，独立 Worker 跨请求执行；检查点、审批、重规划、取消、租约恢复和副作用回执都可在 Trace 审计。
 - **可观测与可评测**：Trace 展示完整 Prompt、记忆注入、召回证据、模型/工具循环与轮后写入，仓库附带离线回归评测。
 - **Headless 记忆契约**：新增 `observe / recall / expand / mutate / forget` 原子 API、持久化抽取队列、TypeScript SDK、Pi/通用适配器和只读 MCP Server，现有 Studio 功能保持兼容。
+
+## 记忆整理与纠错
+
+- **周期回顾**。在“我们的故事”或“记忆查询 → 回忆整理”中按周、月和主题整理当前有效事件。回顾绑定事件版本、声明证据和原文指纹，来源变化后标记待重算。生成失败保留旧正文并显示失败状态。
+- **实体纠错**。在图谱实体详情中合并重复对象，或将选定事件、关系、声明拆分给带区分名称的新对象。操作通过四级作用域、幂等和事务校验，保存纠正版本与审计，历史认知可回放。六视图更新文本并复用事件向量，声明向量按纠正内容重算。失败投影由 Web 进程每 30 秒扫描重试。
+- **处理状态**。记忆查询展示会话消息与接入原文数量、待抽取消息、队列失败、可检索事件及图谱待同步项。模型配置状态与连接验证分开，索引失败数在缺少持久化记录时返回 `null`。
+- **个人操作权限**。登录用户可整理和纠正自己的记忆。跨用户请求由服务端拒绝，管理员可以在所选用户范围内操作。
+
+Studio API 提供 `GET /api/memory/readiness`、`GET/POST /api/memory/reviews`、`GET /api/memory/reviews/:id`、`GET /api/memory/entities/:id/repair`、`POST /api/memory/entities/merge`、`POST /api/memory/entities/split` 和只读 `GET /api/conversations/:id/context`。各入口使用 `user_id + agent_id + story_id + branch_id`，实体纠错要求 `reason` 与 `idempotencyKey`。
 
 ## Headless Memory Runtime
 
@@ -195,7 +204,7 @@ docker compose up --build
 
 沙箱镜像、OpenSandbox 部署、工具权限和并行 Subagent 合同见 [`docs/sandbox-subagent-runtime.md`](docs/sandbox-subagent-runtime.md)；持久 DAG、Worker、检查点、审批与恢复语义见 [`docs/deep-agent-runtime.md`](docs/deep-agent-runtime.md)。仓库的 `compose.yaml` 不内置 OpenSandbox control plane；生产启用工具前必须独立部署并设置 `SANDBOX_RUNTIME_ENABLED=true`。
 
-主模型当前把最近 16 条消息（约 8 轮）作为短期记忆直接装配进 Input，未实现 token 阈值或滚动摘要。长期记忆更新默认每 8 轮执行一次，可按场景调低为 1-8 轮，但不能超过短期记忆容量；用户明确提出的长期回复规则仍走即时快通道。陪伴场景的抽取辅助上下文默认读取待抽取批次之前 2 轮、最多 4 条只读消息，只用来理解“它、那件事、还是改到银座”等代词、省略或承接关系，不会把这些历史内容重复写入长期记忆，可按场景配置为 1-10 轮。
+主模型历史对话采用约 6000 估算 token 的预算，按完整轮次保留近期原文，其余分批生成带覆盖水位和来源 SHA256 的辅助摘要。默认保留约 16 条近期消息，摘要最多约 1000 token；单次最多整理 4 批。模型失败或近期单轮过大时保留原文，并在 Trace 报告超预算。确定性事实问答与无短期诊断回放跳过摘要。长期记忆更新默认每 8 轮执行一次，可按场景调低为 1-8 轮，但不能超过短期记忆容量；用户明确提出的长期回复规则仍走即时快通道。陪伴场景的抽取辅助上下文默认读取待抽取批次之前 2 轮、最多 4 条只读消息，只用来理解“它、那件事、还是改到银座”等代词、省略或承接关系，不会把这些历史内容重复写入长期记忆，可按场景配置为 1-10 轮。
 
 ## 数据库
 

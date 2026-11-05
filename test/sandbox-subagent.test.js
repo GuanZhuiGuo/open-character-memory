@@ -127,4 +127,3 @@ test('subagent routing is bounded and child tasks overlap under the concurrency 
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM agent_task_runs WHERE trace_id = ? AND status = 'success'")
     .get(traceId).count, 2);
 });
-

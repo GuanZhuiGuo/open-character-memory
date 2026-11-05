@@ -20,6 +20,9 @@ const state = {
   conversations: [],
   messages: [],
   memoryValues: [],
+  memoryReviews: [],
+  memoryReadiness: null,
+  memoryLoadGeneration: 0,
   memoryTab: 'values',
   events: [],
   eventListOrder: 'story',
@@ -1099,7 +1102,8 @@ async function loadArchitectureOverview() {
   const retrieval = thresholds.retrieval || {};
   const extractionInterval = Math.max(1, Number(extraction.intervalTurns || 1));
   $('#pageMeta').textContent = `${scene.name} · runtime / memory / retrieval`;
-  $('#architectureMainWindow').textContent = `最近 ${main.messageLimit} 条消息 · 约 ${main.approximateTurns} 轮`;
+  $('#architectureMainWindow').textContent = `约 ${compression.tokenThreshold || 6000} token 历史预算 · 近期完整轮次`;
+  $('#architectureContextNodeMeta').textContent = `约 ${compression.tokenThreshold || 6000} token 历史预算 · 摘要覆盖水位 · 近期原文`;
   $('#architectureExtractionWindow').textContent = `批次前 ${extraction.contextTurns} 轮 · 最多 ${extraction.messageLimit} 条`;
   $('#architectureEventThreshold').textContent = `每 ${extractionInterval} 轮 · 双管线并行 · 最多 ${extraction.maxEventsPerBatch} 事件 / ${extraction.maxSemanticClaimsPerBatch || 40} 语义声明`;
   $('#architectureRuntimeExtractionMode').textContent = `阻塞式 · 每 ${extractionInterval} 轮 / 跨对话更新`;
@@ -1156,10 +1160,10 @@ async function loadArchitectureOverview() {
   $('#architectureExtractionNodeTitle').textContent = `长期记忆更新（每 ${extractionInterval} 轮）`;
   $('#architectureExtractionStepTitle').textContent = '长期记忆更新';
   $('#architectureCompressionStatus').textContent = compression.rollingSummaryEnabled ? '滚动摘要已启用' : '滚动摘要未启用';
-  $('#architectureRecentContext').textContent = `最近 ${main.messageLimit} 条原文`;
-  $('#architectureInputLimit').textContent = `0 < X ≤ ${main.messageLimit}`;
-  $('#architectureMessageLimit').textContent = `X ≤ ${main.messageLimit}`;
-  $('#architectureHistoryLimit').textContent = `最多 ${Math.max(0, main.messageLimit - 1)} 条 user / assistant 原文`;
+  $('#architectureRecentContext').textContent = '历史辅助摘要 + 近期完整轮次';
+  $('#architectureInputLimit').textContent = `约 ${compression.tokenThreshold || 6000} token`;
+  $('#architectureMessageLimit').textContent = '按容量整理';
+  $('#architectureHistoryLimit').textContent = '保留完整轮次；摘要失败保留原文';
   $('#architectureExtractionTrigger').textContent = `累计 ${extractionInterval} 轮，或跨对话发送前，双管线抽取 + 原子事实 / 状态迁移校验`;
   $('#architectureDerivedRule').textContent = thresholds.relationship.stages
     .slice().reverse().map((item) => `${item.minimum} ${item.stage}`).join(' · ');
@@ -1202,21 +1206,38 @@ function renderMemoryCategories() {
 
 async function loadMemory() {
   renderMemoryContext();
+  const requestGeneration = ++state.memoryLoadGeneration;
+  const requestedScope = scopeQuery().toString();
+  const currentRequest = () => requestGeneration === state.memoryLoadGeneration
+    && requestedScope === scopeQuery().toString();
+  const [readiness, reviews] = await Promise.all([
+    api(`/api/memory/readiness?${requestedScope}`),
+    api(`/api/memory/reviews?${requestedScope}`)
+  ]);
+  if (!currentRequest()) return;
+  state.memoryReadiness = readiness;
+  state.memoryReviews = reviews;
+  renderMemoryReadiness();
   const userMode = state.portalMode === 'user';
   $('#memoryUserView').classList.toggle('hidden', !userMode);
   $('#memoryAdminView').classList.toggle('hidden', userMode);
   if (userMode) {
-    const params = new URLSearchParams(scopeQuery());
+    const params = new URLSearchParams(requestedScope);
     params.set('order', 'story');
-    [state.memoryValues, state.events] = await Promise.all([
-      api(`/api/memory/values?${scopeQuery()}`),
+    const [values, events] = await Promise.all([
+      api(`/api/memory/values?${requestedScope}`),
       api(`/api/memory/events?${params}`)
     ]);
+    if (!currentRequest()) return;
+    state.memoryValues = values;
+    state.events = events;
     await loadUnlockedCatalog();
+    if (!currentRequest()) return;
     renderUserStoryView();
     return;
   }
   const valuesMode = state.memoryTab === 'values';
+  $('#memorySummary').classList.toggle('hidden', state.memoryTab === 'reviews');
   if (state.memoryTab !== 'graph') {
     state.graphNetwork?.destroy();
     state.graphNetwork = null;
@@ -1226,7 +1247,9 @@ async function loadMemory() {
   $('#memoryCategoryFilter').disabled = !valuesMode;
   $('#memoryCategoryList').classList.toggle('disabled', !valuesMode);
   if (state.memoryTab === 'values') {
-    state.memoryValues = await api(`/api/memory/values?${scopeQuery()}`);
+    const values = await api(`/api/memory/values?${requestedScope}`);
+    if (!currentRequest()) return;
+    state.memoryValues = values;
     const categories = [...new Set(state.memoryValues.map((item) => item.category))];
     const select = $('#memoryCategoryFilter');
     const old = select.value;
@@ -1234,21 +1257,31 @@ async function loadMemory() {
     select.value = categories.includes(old) ? old : '';
     renderMemoryValues();
   } else if (state.memoryTab === 'events') {
-    const params = new URLSearchParams(scopeQuery());
+    const params = new URLSearchParams(requestedScope);
     params.set('order', state.eventListOrder);
     params.set('include_history', String(state.eventListIncludeHistory));
-    state.events = await api(`/api/memory/events?${params}`);
+    const events = await api(`/api/memory/events?${params}`);
+    if (!currentRequest()) return;
+    state.events = events;
     renderEventList();
   } else if (state.memoryTab === 'graph') {
-    const graph = await api(`/api/memory/graph?${scopeQuery()}`);
+    const graph = await api(`/api/memory/graph?${requestedScope}`);
+    if (!currentRequest()) return;
     renderGraph(graph);
+  } else if (state.memoryTab === 'reviews') {
+    metrics([]);
+    $('#memoryResultCount').textContent = `${state.memoryReviews.length} 份回顾`;
+    renderMemoryReviews($('#memoryContent'));
   } else if (state.memoryTab === 'retrieval') {
     const scene = sceneForAgent();
-    state.retrievalProfile = await api(`/api/scenes/${encodeURIComponent(scene.id)}/retrieval-profile`);
+    const profile = await api(`/api/scenes/${encodeURIComponent(scene.id)}/retrieval-profile`);
+    if (!currentRequest()) return;
+    state.retrievalProfile = profile;
     renderRetrievalLab();
   } else {
     const params = new URLSearchParams({ user_id: state.currentUserId, agent_id: state.currentAgentId, key: '' });
     const history = await api(`/api/memory/history?${params}`);
+    if (!currentRequest()) return;
     renderMemoryHistory(history);
   }
 }
@@ -1283,6 +1316,7 @@ function renderUserStoryView() {
       <div><span>已解锁剧情</span><strong>${activePlots.length}</strong><small>个故事节点</small></div>
       <div><span>已拥有道具</span><strong>${activeProps.length}</strong><small>件能力道具</small></div>
     </section>
+    <section id="userMemoryReviews"></section>
     <div class="user-story-layout">
       <section class="story-memory-stream">
         <header><div><span class="eyebrow">MOMENTS</span><h4>故事片段</h4></div><span>${storyEvents.length} 个片段</span></header>
@@ -1294,7 +1328,80 @@ function renderUserStoryView() {
         <section><header><i data-lucide="scroll-text"></i><h4>正在展开</h4></header>${activePlots.length ? activePlots.slice(0, 4).map((plot) => `<div class="keepsake-line"><span>${escapeHtml(plot.branch_label || '主线')}</span><strong>${escapeHtml(plot.name)}</strong></div>`).join('') : '<p>新的剧情尚未解锁。</p>'}</section>
       </aside>
     </div>`;
+  renderMemoryReviews($('#userMemoryReviews'));
   refreshIcons();
+}
+
+function renderMemoryReadiness() {
+  const readiness = state.memoryReadiness;
+  if (!readiness) return;
+  const source = readiness.source || {};
+  const extraction = readiness.extraction || {};
+  const index = readiness.index || {};
+  const graph = readiness.graph || {};
+  const waiting = Number(extraction.pending || 0) + Number(extraction.running || 0);
+  $('#memoryReadinessStrip').innerHTML = `
+    <span><i data-lucide="save"></i>${Number(source.chatMessages || 0)} 条会话消息 · ${Number(source.observationMessages || 0)} 条接入原文</span>
+    <span><i data-lucide="brain-circuit"></i>${waiting ? `${waiting} 项抽取处理中` : '抽取队列空闲'}${extraction.unextractedChatMessages ? ` · ${extraction.unextractedChatMessages} 条待抽取` : ''}</span>
+    <span><i data-lucide="search"></i>${Number(index.searchable || 0)} 个事件可检索${index.pending ? ` · ${index.pending} 个待建索引` : ''}</span>
+    ${Number(extraction.failed || 0) ? `<span class="memory-status-warning">${extraction.failed} 项抽取失败</span>` : ''}
+    ${Number(graph.pending || 0) ? `<span>图谱 ${graph.pending} 项待同步</span>` : ''}`;
+  if (Number(graph.failed || 0)) {
+    $('#memoryReadinessStrip').insertAdjacentHTML('beforeend', `<span class="memory-status-warning">图谱 ${Number(graph.failed)} 项待重试</span>`);
+  }
+  refreshIcons();
+}
+
+function reviewStatusLabel(review) {
+  return ({ ready: '可回顾', stale: '来源已变更', failed: '整理失败', generating: '正在整理', empty: '暂无事件' })[review.status] || review.status;
+}
+
+function renderMemoryReviews(root) {
+  if (!root) return;
+  root.innerHTML = `<section class="memory-review-workbench">
+    <header class="memory-review-toolbar"><div><h4>回忆整理</h4><p>按周或月回顾经历，查看对应事件与来源。</p></div><button class="button secondary compact" data-generate-review><i data-lucide="book-open"></i>整理回忆</button></header>
+    <div class="memory-review-list">${state.memoryReviews.length ? state.memoryReviews.map((review) => `
+      <article class="memory-review-card">
+        <header><div><strong>${escapeHtml(review.topic || (review.period === 'monthly' ? '月度回顾' : '每周回顾'))}</strong><small>${escapeHtml(review.startDate)} — ${escapeHtml(review.endDate)}</small></div><span class="badge ${review.status === 'ready' ? 'blue' : 'amber'}">${escapeHtml(reviewStatusLabel(review))}</span></header>
+        ${review.stale ? '<p class="memory-status-warning">来源事件发生变化，请重新整理后阅读当前回顾。</p>' : ''}
+        ${review.lastError ? `<p class="memory-status-warning">${escapeHtml(review.lastError)}</p>` : ''}
+        <div class="markdown-content">${renderMarkdown(review.content || '这个时间范围还没有可整理的事件。')}</div>
+        <details><summary>查看 ${review.sourceRefs?.length || 0} 个来源事件</summary><ul>${(review.sourceRefs || []).map((source) => `<li>${escapeHtml(source.title || source.eventId)} · 版本 ${Number(source.version || 1)}</li>`).join('')}</ul></details>
+        <footer><span>${escapeHtml(review.model || '')}</span><button class="button ghost compact" data-refresh-review="${escapeHtml(review.id)}">重新整理</button></footer>
+      </article>`).join('') : emptyState('book-open', '选择一周或一个月，整理当前作用域中的经历')}</div>
+  </section>`;
+  $('[data-generate-review]', root).addEventListener('click', () => openMemoryReviewForm());
+  $$('[data-refresh-review]', root).forEach((button) => button.addEventListener('click', () => {
+    openMemoryReviewForm(state.memoryReviews.find((review) => review.id === button.dataset.refreshReview));
+  }));
+  refreshIcons();
+}
+
+function openMemoryReviewForm(review = null) {
+  const selectedScope = Object.fromEntries(scopeQuery());
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+  openModal({
+    title: review ? '重新整理回忆' : '整理回忆', submitLabel: '开始整理',
+    body: `<label class="form-field"><span>时间范围</span><select name="period"><option value="weekly" ${review?.period !== 'monthly' ? 'selected' : ''}>一周</option><option value="monthly" ${review?.period === 'monthly' ? 'selected' : ''}>一个月</option></select></label>
+      <label class="form-field"><span>选择该周或该月中的一天</span><input type="date" name="date" value="${escapeHtml(review?.startDate || today)}" required></label>
+      <label class="form-field"><span>关注的主题（可选）</span><input name="topic" maxlength="120" value="${escapeHtml(review?.topic || '')}" placeholder="例如旅行、学习或共同约定"></label>
+      <p class="form-hint">仅整理当前用户与角色的有效事件，回顾附带来源记录。</p>`,
+    onSubmit: async (data) => {
+      if (new URLSearchParams(selectedScope).toString() !== scopeQuery().toString()) {
+        throw new Error('用户或角色已切换，请重新选择要整理的回忆');
+      }
+      const result = await api('/api/memory/reviews', { method: 'POST', body: {
+        ...selectedScope, period: data.get('period'), date: data.get('date'), topic: data.get('topic'), force: Boolean(review)
+      } });
+      if (result.status === 'failed') throw new Error(result.lastError || '整理失败，请稍后重试');
+      const feedback = {
+        ready: '回忆已整理', empty: '该时间范围暂无可整理的事件',
+        generating: '回忆正在整理，请稍后查看', stale: '来源在整理期间发生变化，请重新整理'
+      };
+      toast(feedback[result.status] || '回顾状态已更新');
+      await loadMemory();
+    }
+  });
 }
 
 function renderMemoryValue(item) {
@@ -1531,6 +1638,7 @@ function renderGraphInspector(node) {
       <span class="badge ${node.status === 'active' ? 'blue' : 'red'}" title="${escapeHtml(statusInfo(node.status).detail)}">${escapeHtml(statusLabel(node.status))}</span>
     </div>
     <h4>${escapeHtml(node.title)}</h4>
+    ${node.kind === 'entity' && node.status === 'active' ? '<div class="entity-repair-actions"><button class="button secondary compact" data-repair-kind="split">拆分同名实体</button><button class="button secondary compact" data-repair-kind="merge">合并重复实体</button></div>' : ''}
     ${node.description ? `<p>${escapeHtml(node.description)}</p>` : ''}
     <dl>${node.fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || '-')}</dd></div>`).join('')}</dl>
     ${node.relatedEvents?.length ? `<section class="graph-related-section"><header><span>关联事件</span><b>${node.relatedEvents.length}</b></header>${node.relatedEvents.map((item) => `<button type="button" data-focus-graph-node="${escapeHtml(item.nodeId)}"><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.storyTime || '未设定剧情时间')}</small></span><em>${escapeHtml(item.roles.join('·'))}</em><i data-lucide="locate-fixed"></i></button>`).join('')}</section>` : ''}
@@ -1542,7 +1650,46 @@ function renderGraphInspector(node) {
     state.graphNetwork.focus(nodeId, { scale: Math.max(state.graphNetwork.getScale(), 0.9), animation: { duration: 260 } });
     renderGraphInspector(state.graphNodeDetails.get(nodeId));
   }));
+  $$('[data-repair-kind]', root).forEach((button) => button.addEventListener('click', () => {
+    openEntityRepair(node.entityId, button.dataset.repairKind).catch((error) => toast(error.message, 'error'));
+  }));
   refreshIcons();
+}
+
+async function openEntityRepair(entityId, operation) {
+  const selectedScope = Object.fromEntries(scopeQuery());
+  const graphEntities = [...(state.graphData?.entities || [])];
+  const detail = await api(`/api/memory/entities/${encodeURIComponent(entityId)}/repair?${new URLSearchParams(selectedScope)}`);
+  if (new URLSearchParams(selectedScope).toString() !== scopeQuery().toString()) return;
+  const key = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `repair_${Date.now()}_${Array.from(crypto.getRandomValues(new Uint32Array(3))).join('_')}`;
+  const entity = detail.entity;
+  const merging = operation === 'merge';
+  const candidates = graphEntities.filter((item) => item.id !== entityId && item.entity_type === entity.entity_type && item.status === 'active');
+  const eventChoices = (detail.events || []).map((event) => `<label class="repair-evidence-row"><input type="checkbox" name="eventIds" value="${escapeHtml(event.id)}"><span><strong>${escapeHtml(event.title)}</strong><small>${escapeHtml(event.summary || '')}</small></span></label>`).join('');
+  const relationChoices = (detail.relations || []).map((edge) => `<label class="repair-evidence-row"><input type="checkbox" name="edgeIds" value="${escapeHtml(edge.id)}"><span><strong>${escapeHtml(edge.sourceName)} → ${escapeHtml(edge.predicate)} → ${escapeHtml(edge.targetName)}</strong><small>${escapeHtml(typeof edge.evidence === 'string' ? edge.evidence : edge.evidence?.content || '')}</small></span></label>`).join('');
+  const claimChoices = (detail.claims || []).map((claim) => `<label class="repair-evidence-row"><input type="checkbox" name="claimIds" value="${escapeHtml(claim.id)}"><span><strong>${escapeHtml(claim.subjectName)} · ${escapeHtml(claim.predicate)} · ${escapeHtml(claim.object_text || '')}</strong><small>${escapeHtml(claim.evidence?.content || '')}</small></span></label>`).join('');
+  openModal({
+    title: merging ? `合并到「${entity.canonical_name}」` : `拆分「${entity.canonical_name}」`,
+    submitLabel: '确认纠错', width: 720,
+    body: merging
+      ? `<p>选择与「${escapeHtml(entity.canonical_name)}」属于同一对象的实体，关联证据将归入当前实体。</p><div class="repair-evidence-list">${candidates.map((item) => `<label class="repair-evidence-row"><input type="checkbox" name="sourceEntityIds" value="${escapeHtml(item.id)}"><span><strong>${escapeHtml(item.canonical_name)}</strong><small>${escapeHtml(parseJson(item.aliases_json, []).join('、'))}</small></span></label>`).join('') || '<p>当前作用域没有可合并的同类型实体。</p>'}</div><label class="form-field"><span>纠错原因</span><textarea name="reason" maxlength="500" required></textarea></label>`
+      : `<label class="form-field"><span>新实体的区分名称</span><input name="canonicalName" maxlength="120" placeholder="例如张伟（大学同学）" required></label><p>勾选属于新实体的事件、关系或声明。选择整个事件时，该事件中与原实体关联的证据会一起转移。</p><div class="repair-evidence-list">${eventChoices}${relationChoices}${claimChoices}${!eventChoices && !relationChoices && !claimChoices ? '<p>暂无可分配的有效证据。</p>' : ''}</div><label class="form-field"><span>纠错原因</span><textarea name="reason" maxlength="500" required></textarea></label>`,
+    onSubmit: async (data) => {
+      if (new URLSearchParams(selectedScope).toString() !== scopeQuery().toString()) {
+        throw new Error('用户或角色已切换，请重新打开纠错窗口');
+      }
+      const input = merging
+        ? { survivorId: entityId, sourceEntityIds: data.getAll('sourceEntityIds') }
+        : { entityId, canonicalName: data.get('canonicalName'), eventIds: data.getAll('eventIds'), edgeIds: data.getAll('edgeIds'), claimIds: data.getAll('claimIds') };
+      const result = await api(`/api/memory/entities/${operation}`, { method: 'POST', body: {
+        ...selectedScope, ...input, reason: data.get('reason'), idempotencyKey: key
+      } });
+      toast(result.projection?.status === 'pending' ? '纠错已保存，检索索引待重试' : '实体纠错已保存');
+      await loadMemory();
+    }
+  });
 }
 
 function buildGraphNetwork(graph) {
@@ -1601,7 +1748,7 @@ function buildGraphNetwork(graph) {
       });
       const aliases = parseJson(entity.aliases_json, []);
       nodeDetails.set(id, {
-        kind: 'entity', kindLabel: '实体', title: entity.canonical_name, status: entity.status,
+        kind: 'entity', entityId: entity.id, kindLabel: '实体', title: entity.canonical_name, status: entity.status,
         description: '', fields: [['类型', entity.entity_type], ['别名', aliases.join('、')], ['更新', formatDate(entity.updated_at)]],
         relatedEvents: [...(relatedEventsByEntity.get(entity.id)?.values() || [])]
       });

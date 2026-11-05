@@ -148,6 +148,7 @@
         </section>
 
         <section id="page-memory" class="page admin-page">
+          <div id="memoryReadinessStrip" class="memory-readiness-strip" aria-live="polite"></div>
           <div id="memoryUserView" class="user-story-view hidden"></div>
           <div id="memoryAdminView" class="memory-workbench">
             <aside class="object-sidebar memory-instance-sidebar">
@@ -186,6 +187,7 @@
                 <div class="segmented memory-tab-list" role="tablist">
                   <button class="active" data-memory-tab="values">结构化记忆</button>
                   <button data-memory-tab="events">事件列表</button>
+                  <button data-memory-tab="reviews">回忆整理</button>
                   <button data-memory-tab="graph">事件图谱</button>
                   <button data-memory-tab="retrieval">召回测试</button>
                   <button data-memory-tab="history">变更记录</button>
@@ -377,6 +379,7 @@
               <button data-timeline-view="write" role="tab" aria-selected="false">写入与重算</button>
             </div>
             <div class="architecture-toolbar-actions">
+              <a class="button secondary compact" href="__APP_BASE_PATH__/api/architecture/diagram" target="_blank" rel="noopener noreferrer">总体架构图</a>
               <div class="timeline-legend" aria-label="执行方式图例">
                 <span><i class="legend-mark sync"></i>本轮同步</span>
                 <span><i class="legend-mark demand"></i>按需 / 阈值</span>
@@ -403,10 +406,10 @@
               </header>
 
               <section class="architecture-thresholds" aria-label="当前运行阈值">
-                <div><span>短期记忆</span><strong id="architectureMainWindow">最近 16 条消息 · 约 8 轮</strong><small>每轮直接进入主模型 Input，不单独抽取</small></div>
+                <div><span>短期记忆</span><strong id="architectureMainWindow">约 6000 token 历史预算</strong><small>辅助摘要 + 近期完整轮次</small></div>
                 <div><span>抽取辅助上下文</span><strong id="architectureExtractionWindow">批次前 2 轮 · 最多 4 条</strong><small>只帮助抽取模型理解“它 / 那件事”，不会重复写入</small></div>
                 <div><span>长期记忆更新阈值</span><strong id="architectureEventThreshold">每 X 轮 · 跨对话补齐尾批次</strong><small>阈值或跨对话边界触发结构化字段、事件与图谱更新</small></div>
-                <div><span>长对话压缩</span><strong id="architectureCompressionStatus">滚动摘要未启用</strong><small>当前没有 token 阈值</small></div>
+                <div><span>长对话压缩</span><strong id="architectureCompressionStatus">滚动摘要</strong><small>来源指纹 · 覆盖水位 · 失败保留原文</small></div>
               </section>
 
               <section class="system-architecture-map" aria-label="Memory Agent 系统组件拓扑">
@@ -464,6 +467,8 @@
                     <div class="architecture-node" data-phase="generate input"><i data-lucide="gauge"></i><span><strong>稳定前缀缓存</strong><small>只缓存人设与固定属性；失败回退完整请求</small></span></div>
                     <div class="architecture-node" data-phase="pre write input"><i data-lucide="database"></i><span><strong>SQLite · 主记录库（生产升级：PostgreSQL + pgvector）</strong><small id="architectureSqliteNodeMeta">双时态账本、声明证据链、六视图、语义边、任务与 outbox</small></span></div>
                     <div class="architecture-node" data-phase="pre write"><i data-lucide="share-2"></i><span><strong>Neo4j · 可重建图投影</strong><small id="architectureNeo4jNodeMeta">事实图 + 语义关联图；失败回退 SQLite</small></span></div>
+                    <div class="architecture-node" data-phase="pre input"><i data-lucide="layers"></i><span><strong>对话摘要快照</strong><small id="architectureContextNodeMeta">容量预算 · 覆盖水位 · 近期完整轮次</small></span></div>
+                    <div class="architecture-node" data-phase="write"><i data-lucide="book-open"></i><span><strong>周期回顾与实体纠错</strong><small>来源指纹 · 变更待重算 · 事务版本与审计</small></span></div>
                     <div class="architecture-node" data-phase="generate write"><i data-lucide="box"></i><span><strong>OpenSandbox · 执行隔离</strong><small id="architectureSandboxNodeMeta">网络 deny · 非 root · 命令白名单</small></span></div>
                     <div class="architecture-node" data-phase="generate write"><i data-lucide="server-cog"></i><span><strong>Deep Agent Worker · 长任务执行</strong><small id="architectureDeepWorkerNodeMeta">租约调度 · 重启恢复 · 多进程抢占</small></span></div>
                     <div class="architecture-node" data-phase="generate write"><i data-lucide="file-archive"></i><span><strong>Artifact Store · 附件与产物</strong><small id="architectureArtifactNodeMeta">用户/角色/会话隔离 · 下载可审计</small></span></div>
@@ -702,7 +707,7 @@
                     <span><b>P0</b>安全边界 · 角色人设与固定属性 · 常驻控制</span>
                     <span><b>P1</b>当前关系 · 当前场景 · Active Claims</span>
                     <span><b>P2</b>纠正式展开事件 · 图谱证据 · 已解锁剧情</span>
-                    <span><b>P3</b><i id="architectureRecentContext">最近 16 条原文</i> · 当前消息已包含</span>
+                    <span><b>P3</b><i id="architectureRecentContext">历史辅助摘要 + 近期完整轮次</i> · 当前消息已包含</span>
                   </div>
                 </div>
                 <div class="compress-step grid-col-4 has-arrow" data-phase="pre">
@@ -715,7 +720,7 @@
                 </div>
                 <div class="compress-step grid-col-6 has-arrow" data-phase="pre">
                   <span>预算装配</span><strong>限定窗口</strong>
-                  <small>P0 不裁剪<br>相关性重排 + TopK<br>对话窗口仅取最近 16 条</small>
+                  <small>P0 不裁剪<br>相关性重排 + TopK<br>历史对话按容量生成辅助摘要</small>
                 </div>
                 <div class="prompt-stack grid-col-7" data-phase="generate">
                   <span>FINAL CONTEXT</span>
@@ -727,13 +732,13 @@
                   </ol>
                 </div>
                 <div class="rolling-summary grid-col-8 span-2" data-phase="write">
-                  <div class="block-title"><span>当前实现：无滚动摘要</span><b>NOT ENABLED</b></div>
+                  <div class="block-title"><span>历史对话容量整理</span><b>SNAPSHOT</b></div>
                   <div class="rollup-flow">
-                    <span>超出 16 条</span><i data-lucide="arrow-right"></i>
-                    <span>旧消息不进入主模型</span><i data-lucide="arrow-right"></i>
-                    <span>原文仍留库</span>
+                    <span>容量或轮次阈值</span><i data-lucide="arrow-right"></i>
+                    <span>合并辅助摘要</span><i data-lucide="arrow-right"></i>
+                    <span>保留近期完整轮次</span>
                   </div>
-                  <small>相关历史仍可通过结构化记忆、Active Claims、事件向量和图谱召回；当前代码没有 token 阈值。</small>
+                  <small>快照绑定原文 ID、SHA256 与作用域；模型失败保留未整理原文，确定性事实问答跳过摘要。</small>
                 </div>
               </section>
 
