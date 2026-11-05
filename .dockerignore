@@ -2,7 +2,8 @@
 .github
 .env.local
 data
-docs
+docs/*
+!docs/memory-lifecycle-v0.9.architecture.html
 output
 node_modules
 playwright-report

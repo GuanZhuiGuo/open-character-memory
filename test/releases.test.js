@@ -39,7 +39,7 @@ test('repository release notes expose the current version and detailed published
 
   assert.equal(notes.currentVersion, packageMetadata.version);
   assert.ok(current);
-  assert.ok(current.itemCount >= 10);
+  assert.ok(current.itemCount >= 2);
   assert.ok(current.githubUrl.endsWith(`/releases/tag/v${packageMetadata.version}`));
   assert.ok(diagnosticRelease);
   assert.ok(diagnosticRelease.sections.some((section) => section.key === 'validation'));

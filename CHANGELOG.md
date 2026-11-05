@@ -4,6 +4,16 @@
 
 ## Unreleased
 
+## [0.9.1](https://github.com/GuanZhuiGuo/open-character-memory/releases/tag/v0.9.1) - 2026-11-05
+
+### Fixed
+
+- Docker 构建上下文包含运行时总体架构图，容器可读取 `/api/architecture/diagram` 所需 HTML。
+
+### Validation
+
+- 依赖安装、Node 24 测试 `125/125`、离线记忆回归 `5/5` 和开源预检通过。容器构建由 GitHub CI 验证。
+
 ## [0.9.0](https://github.com/GuanZhuiGuo/open-character-memory/releases/tag/v0.9.0) - 2026-11-05
 
 ### Added
