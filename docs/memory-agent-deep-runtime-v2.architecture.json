@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Open Character Memory v0.8.0 持久 Deep Agent Runtime",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1380, 700],
+    "views": [
+      {
+        "id": "react-request",
+        "label": "Pi ReAct 单轮执行",
+        "focus": ["user_ui", "app_api", "pi_runtime", "memory_plane", "tool_router", "subagent_pool"],
+        "note": "Pi 在单次请求内完成记忆召回、工具选择和有界并行。"
+      },
+      {
+        "id": "sandbox-path",
+        "label": "真实沙箱链路",
+        "focus": ["tool_router", "subagent_pool", "sandbox_adapter", "opensandbox_control", "sandbox_container", "artifact_trace"],
+        "note": "OpenSandbox 控制面和镜像可用后，Bash 与文档工具才真正运行。"
+      },
+      {
+        "id": "durable-workflow",
+        "label": "持久 Deep Agent",
+        "focus": ["app_api", "pi_runtime", "durable_runtime", "approval_workers", "memory_plane", "artifact_trace"],
+        "note": "服务端校验并保存 DAG，独立 Worker 通过租约、检查点、审批和重规划跨请求执行。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "user_ui",
+      "type": "frontend",
+      "label": "用户与管理界面",
+      "sublabel": "对话 · 附件 · Trace",
+      "pos": [20, 270],
+      "size": [140, 66]
+    },
+    {
+      "id": "app_api",
+      "type": "backend",
+      "label": "Memory Agent API",
+      "sublabel": "认证 · 隔离 · SSE",
+      "pos": [210, 270],
+      "size": [150, 66]
+    },
+    {
+      "id": "pi_runtime",
+      "type": "backend",
+      "label": "Pi ReAct 主 Agent",
+      "sublabel": "模型 ↔ 工具循环",
+      "tag": "0.8 已启用",
+      "pos": [410, 270],
+      "size": [160, 66]
+    },
+    {
+      "id": "subagent_pool",
+      "type": "backend",
+      "label": "有界并行 Subagent",
+      "sublabel": "独立上下文 · 深度 1",
+      "tag": "0.8 已启用",
+      "pos": [640, 270],
+      "size": [170, 66]
+    },
+    {
+      "id": "sandbox_adapter",
+      "type": "security",
+      "label": "沙箱策略适配器",
+      "sublabel": "白名单 · 预算 · 脱敏",
+      "tag": "按部署启用",
+      "pos": [870, 270],
+      "size": [170, 66]
+    },
+    {
+      "id": "opensandbox_control",
+      "type": "cloud",
+      "label": "OpenSandbox 控制面",
+      "sublabel": "生命周期 · 网络策略",
+      "tag": "外部依赖",
+      "pos": [1110, 270],
+      "size": [170, 66]
+    },
+    {
+      "id": "sandbox_container",
+      "type": "security",
+      "label": "隔离沙箱容器",
+      "sublabel": "非 root · 无宿主密钥",
+      "tag": "按任务创建",
+      "pos": [1110, 470],
+      "size": [170, 66]
+    },
+    {
+      "id": "memory_plane",
+      "type": "database",
+      "label": "记忆与图谱平面",
+      "sublabel": "SQLite · Embedding · Neo4j",
+      "pos": [210, 500],
+      "size": [150, 68]
+    },
+    {
+      "id": "tool_router",
+      "type": "backend",
+      "label": "能力路由与工具注册表",
+      "sublabel": "Memory · MCP · Skill · Sandbox",
+      "pos": [400, 500],
+      "size": [180, 68]
+    },
+    {
+      "id": "artifact_trace",
+      "type": "database",
+      "label": "Artifact 与 Trace",
+      "sublabel": "作用域产物 · 执行证据",
+      "pos": [1110, 610],
+      "size": [170, 68]
+    },
+    {
+      "id": "durable_runtime",
+      "type": "messagebus",
+      "label": "持久任务运行时",
+      "sublabel": "DAG · Checkpoint · Replan",
+      "tag": "0.8 已启用",
+      "pos": [640, 50],
+      "size": [180, 68]
+    },
+    {
+      "id": "approval_workers",
+      "type": "backend",
+      "label": "Deep Agent Worker",
+      "sublabel": "租约 · 审批 · 恢复",
+      "tag": "独立进程",
+      "pos": [860, 50],
+      "size": [190, 68]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Memory Agent 应用运行时",
+      "wraps": ["app_api", "pi_runtime", "subagent_pool", "sandbox_adapter", "memory_plane", "tool_router"],
+      "pad": 18
+    },
+    {
+      "kind": "security-group",
+      "label": "独立执行安全边界",
+      "wraps": ["opensandbox_control", "sandbox_container"],
+      "pad": 18
+    },
+    {
+      "kind": "region",
+      "label": "持久执行平面",
+      "wraps": ["durable_runtime", "approval_workers"],
+      "pad": 18
+    }
+  ],
+  "connections": [
+    { "from": "user_ui", "to": "app_api", "label": "HTTPS / SSE", "variant": "emphasis", "labelAt": [185, 350] },
+    { "from": "app_api", "to": "pi_runtime", "label": "本轮输入", "variant": "emphasis" },
+    { "from": "app_api", "to": "memory_plane", "label": "作用域数据", "labelAt": [285, 350] },
+    { "from": "pi_runtime", "to": "tool_router", "label": "按意图暴露能力", "labelAt": [490, 350] },
+    { "from": "pi_runtime", "to": "subagent_pool", "label": "2-N 个独立任务", "variant": "emphasis", "labelAt": [605, 350] },
+    { "from": "tool_router", "to": "sandbox_adapter", "label": "受控工具调用", "variant": "security" },
+    { "from": "subagent_pool", "to": "sandbox_adapter", "label": "按 profile 授权", "variant": "security", "labelAt": [840, 250] },
+    { "from": "sandbox_adapter", "to": "opensandbox_control", "label": "Sandbox SDK", "variant": "security" },
+    { "from": "opensandbox_control", "to": "sandbox_container", "label": "创建实例", "variant": "security", "labelAt": [1195, 350] },
+    { "from": "sandbox_container", "to": "artifact_trace", "label": "输出与执行证据", "variant": "dashed", "labelAt": [1195, 575] },
+    { "from": "pi_runtime", "to": "durable_runtime", "label": "登记并校验 DAG", "variant": "emphasis" },
+    { "from": "durable_runtime", "to": "memory_plane", "label": "Run / Node / Checkpoint", "variant": "dashed", "via": [[10, 84], [10, 534]], "labelAt": [80, 440] },
+    { "from": "durable_runtime", "to": "approval_workers", "label": "就绪节点 / 租约", "variant": "emphasis", "labelAt": [840, 132] },
+    { "from": "approval_workers", "to": "sandbox_adapter", "label": "审批后执行", "variant": "security", "labelAt": [955, 180] },
+    { "from": "approval_workers", "to": "artifact_trace", "label": "事件 / 回执 / 产物", "variant": "dashed", "via": [[1330, 84], [1330, 644]] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "v0.8.0 已完成的运行闭环",
+      "items": [
+        "简单任务由 Pi ReAct 收口，短小独立任务由有界 Subagent 并行",
+        "复杂任务落为无环 DAG，独立 Worker 跨请求领取节点并从检查点恢复",
+        "审批、受限重规划和不可幂等对账均由服务端状态机裁决"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "仍需单独满足的生产条件",
+      "items": [
+        "真实 Bash 与文档执行依赖外部 OpenSandbox 控制面和隔离镜像",
+        "SQLite WAL 只支持单机 Worker；多主机调度需迁移 PostgreSQL 队列",
+        "当前不包含递归团队、Agent 实时通信或编码 Harness 的 Git/IDE/PR 工作流"
+      ]
+    }
+  ]
+}

@@ -11,6 +11,7 @@ process.env.EMBEDDING_PROVIDER = 'mock';
 process.env.AGENT_RUNTIME = 'pi';
 process.env.GRAPH_STORE = 'sqlite';
 process.env.BASE_PATH = '';
+process.env.ARTIFACT_ROOT = path.join(tempDir, 'artifacts');
 
 const { server } = await import('../server.js');
 const { db } = await import('../lib/db.js');
@@ -40,6 +41,35 @@ test('chat NDJSON streams runtime deltas and completes with current extraction p
     assert.equal(registration.status, 201);
     const registered = await registration.json();
     const cookie = registration.headers.getSetCookie()[0].split(';', 1)[0];
+    const upload = await fetch(`${baseUrl}/api/artifacts/upload`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        user_id: registered.user.id,
+        agent_id: 'agent_linwan',
+        file_name: 'notes.md',
+        mime_type: 'text/markdown',
+        data_base64: Buffer.from('# Notes\n\nScoped attachment.').toString('base64')
+      })
+    });
+    assert.equal(upload.status, 201);
+    const artifact = await upload.json();
+    const download = await fetch(`${baseUrl}${artifact.downloadUrl}`, { headers: { Cookie: cookie } });
+    assert.equal(download.status, 200);
+    assert.match(await download.text(), /Scoped attachment/);
+    const secondRegistration = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: 'stream_user_2', display_name: 'Other User', password: 'password123'
+      })
+    });
+    assert.equal(secondRegistration.status, 201);
+    const secondCookie = secondRegistration.headers.getSetCookie()[0].split(';', 1)[0];
+    const forbiddenDownload = await fetch(`${baseUrl}${artifact.downloadUrl}`, {
+      headers: { Cookie: secondCookie }
+    });
+    assert.equal(forbiddenDownload.status, 403);
     db.prepare(`UPDATE event_extraction_profiles SET extraction_interval_turns = 1
       WHERE scene_id = 'scene_companion'`).run();
 
@@ -53,7 +83,8 @@ test('chat NDJSON streams runtime deltas and completes with current extraction p
       body: JSON.stringify({
         user_id: registered.user.id,
         agent_id: 'agent_linwan',
-        message: '请用 **Markdown** 回答。'
+        message: '请用 **Markdown** 回答。',
+        attachment_ids: [artifact.id]
       })
     });
     assert.equal(response.status, 200);
@@ -69,6 +100,10 @@ test('chat NDJSON streams runtime deltas and completes with current extraction p
     assert.equal(completed.result.memoryExtraction.pendingTurns, 0);
     assert.equal(completed.result.memoryExtraction.progress, 0);
     assert.equal(completed.result.memoryExtraction.canExtract, false);
+    const storedArtifact = db.prepare('SELECT * FROM artifacts WHERE id = ?').get(artifact.id);
+    assert.equal(storedArtifact.user_id, registered.user.id);
+    assert.equal(storedArtifact.agent_id, 'agent_linwan');
+    assert.equal(storedArtifact.conversation_id, completed.result.conversation.id);
 
     for (const asset of ['/vendor/marked.umd.js', '/vendor/purify.min.js']) {
       const assetResponse = await fetch(`${baseUrl}${asset}`);

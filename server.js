@@ -12,14 +12,22 @@ import {
 import {
   answerArchitectureQuestion, getArchitectureIndexStatus, SYSTEM_VERSION
 } from './lib/architecture.js';
+import { artifactUploadContract, getArtifact, readArtifactBytes, saveArtifact } from './lib/artifacts.js';
 import { getCapabilityRuntimeStatus } from './lib/capabilities.js';
 import { config } from './lib/config.js';
 import { db, initializeDatabase } from './lib/db.js';
+import {
+  cancelDeepAgentRun, createDeepAgentRun, decideDeepAgentApproval, getDeepAgentRun,
+  getDeepAgentRuntimeStatus, listDeepAgentRuns, resolveDeepAgentReconciliation,
+  startDeepAgentWorker, stopDeepAgentWorker
+} from './lib/deep-agent-runtime.js';
 import {
   flushGraphProjectionOutbox, getGraphStoreStatus, initializeGraphStore, projectGraphScope
 } from './lib/graph-store.js';
 import { rebuildMemoryViews } from './lib/memory-views.js';
 import { getAgentRuntimeStatus } from './lib/pi-runtime.js';
+import { closeSandboxRuntime, getSandboxRuntimeStatus } from './lib/sandbox-runtime.js';
+import { getSubagentRuntimeStatus } from './lib/subagent-runtime.js';
 import { checkModelHealth, configuredModels } from './lib/providers/index.js';
 import { getReleaseNotes } from './lib/releases.js';
 import {
@@ -105,11 +113,14 @@ function writeNdjson(response, payload) {
 }
 
 function sendBuffer(response, status, buffer, contentType, filename) {
+  const originalName = String(filename || 'download');
+  const asciiName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'download';
   response.writeHead(status, {
     'Content-Type': contentType,
     'Content-Length': buffer.length,
-    'Content-Disposition': `attachment; filename="${filename}"`,
-    'Cache-Control': 'private, max-age=300'
+    'Content-Disposition': `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(originalName)}`,
+    'Cache-Control': 'private, max-age=300',
+    'X-Content-Type-Options': 'nosniff'
   });
   response.end(buffer);
 }
@@ -263,19 +274,24 @@ function userMayAccessRoute(pathname, method) {
   if (/^\/v1\/memory\/jobs\/[^/]+$/.test(pathname) && method === 'GET') return true;
   if (pathname === '/api/conversations' && ['GET', 'POST'].includes(method)) return true;
   if (pathname === '/api/chat' && method === 'POST') return true;
+  if (pathname === '/api/artifacts/upload' && method === 'POST') return true;
   if (/^\/api\/conversations\/[^/]+\/memory-extraction$/.test(pathname)
     && ['GET', 'POST'].includes(method)) return true;
   if (pathname === '/api/feedback' && method === 'POST') return true;
   if (/^\/api\/traces\/[^/]+\/replay-no-short-term$/.test(pathname) && method === 'POST') return true;
+  if (pathname === '/api/deep-agent/runs' && ['GET', 'POST'].includes(method)) return true;
+  if (/^\/api\/deep-agent\/runs\/[^/]+(?:\/cancel)?$/.test(pathname) && ['GET', 'POST'].includes(method)) return true;
+  if (/^\/api\/deep-agent\/approvals\/[^/]+\/decision$/.test(pathname) && method === 'POST') return true;
   if (['/api/memory/retrieval-test', '/api/architecture/ask', '/api/admin/health/models', '/api/admin/health/ark'].includes(pathname)
     && method === 'POST') return true;
   if (method !== 'GET') return false;
   if ([
     '/api/bootstrap', '/api/agents', '/api/scenes', '/api/memory/schemas', '/api/memory/values',
     '/api/memory/history', '/api/memory/graph', '/api/memory/events', '/api/plots', '/api/triggers',
-    '/api/tools', '/api/props', '/api/traces', '/api/architecture/overview'
+    '/api/tools', '/api/props', '/api/traces', '/api/architecture/overview', '/api/artifacts/contract'
   ].includes(pathname)) return true;
   return /^\/api\/conversations\/[^/]+$/.test(pathname)
+    || /^\/api\/artifacts\/[^/]+\/download$/.test(pathname)
     || /^\/api\/props\/templates\/(skill\.zip|mcp\.json)$/.test(pathname)
     || /^\/api\/scenes\/[^/]+\/(retrieval-profile|event-extraction-profile|extraction-contract)$/.test(pathname)
     || /^\/api\/traces\/[^/]+$/.test(pathname);
@@ -836,6 +852,10 @@ function architectureOverview(sceneId) {
     },
     runtime: getAgentRuntimeStatus(),
     capabilities: getCapabilityRuntimeStatus(),
+    sandbox: getSandboxRuntimeStatus(),
+    subagents: getSubagentRuntimeStatus(),
+    deepAgent: getDeepAgentRuntimeStatus(),
+    artifactUpload: artifactUploadContract(),
     graphStore: getGraphStoreStatus(),
     compression: {
       rollingSummaryEnabled: false,
@@ -1484,6 +1504,9 @@ async function handleApi(request, response, url) {
       graphStore: getGraphStoreStatus(),
       runtime: getAgentRuntimeStatus(),
       capabilities: getCapabilityRuntimeStatus(),
+      sandbox: getSandboxRuntimeStatus(),
+      subagents: getSubagentRuntimeStatus(),
+      deepAgent: getDeepAgentRuntimeStatus(),
       ...configuredModels()
     });
     return;
@@ -1498,6 +1521,92 @@ async function handleApi(request, response, url) {
   if (!principal) return;
   if (principal.role === 'user' && !userMayAccessRoute(pathname, method)) {
     requireAdminPrincipal(principal, response);
+    return;
+  }
+
+  if (pathname === '/api/deep-agent/runs' && method === 'GET') {
+    const requestedUserId = url.searchParams.get('user_id') || (principal.role === 'user' ? principal.userId : '');
+    const userId = requestedUserId ? assertUserAccess(principal, requestedUserId) : '';
+    const conversationId = url.searchParams.get('conversation_id') || '';
+    if (conversationId) {
+      const conversation = db.prepare('SELECT user_id FROM conversations WHERE id = ?').get(conversationId);
+      if (!conversation) throw new HttpError(404, '会话不存在', 'CONVERSATION_NOT_FOUND');
+      assertUserAccess(principal, conversation.user_id);
+    }
+    sendJson(response, 200, listDeepAgentRuns({
+      userId,
+      conversationId,
+      traceId: url.searchParams.get('trace_id') || '',
+      limit: url.searchParams.get('limit') || 50
+    }));
+    return;
+  }
+  if (pathname === '/api/deep-agent/runs' && method === 'POST') {
+    const body = await readBody(request);
+    const userId = assertUserAccess(principal, body.user_id || principal.userId);
+    const conversation = db.prepare('SELECT * FROM conversations WHERE id = ?').get(body.conversation_id);
+    if (!conversation) throw new HttpError(404, '会话不存在', 'CONVERSATION_NOT_FOUND');
+    if (conversation.user_id !== userId) throw new HttpError(403, '会话不属于当前用户', 'FORBIDDEN');
+    const run = createDeepAgentRun({
+      scope: {
+        userId,
+        agentId: body.agent_id || conversation.agent_id,
+        storyId: conversation.story_id,
+        branchId: conversation.branch_id
+      },
+      conversationId: conversation.id,
+      traceId: body.trace_id || '',
+      objective: body.objective,
+      nodes: body.nodes,
+      budget: body.budget || {},
+      metadata: { ...(body.metadata || {}), source: 'api', requestedBy: principal.role }
+    });
+    sendJson(response, 201, run);
+    return;
+  }
+  const deepRunMatch = pathname.match(/^\/api\/deep-agent\/runs\/([^/]+)$/);
+  if (deepRunMatch && method === 'GET') {
+    const run = getDeepAgentRun(deepRunMatch[1]);
+    if (!run) throw new HttpError(404, 'Deep Agent 任务不存在', 'DEEP_AGENT_RUN_NOT_FOUND');
+    assertUserAccess(principal, run.userId);
+    sendJson(response, 200, run);
+    return;
+  }
+  const deepCancelMatch = pathname.match(/^\/api\/deep-agent\/runs\/([^/]+)\/cancel$/);
+  if (deepCancelMatch && method === 'POST') {
+    const run = getDeepAgentRun(deepCancelMatch[1]);
+    if (!run) throw new HttpError(404, 'Deep Agent 任务不存在', 'DEEP_AGENT_RUN_NOT_FOUND');
+    assertUserAccess(principal, run.userId);
+    sendJson(response, 200, cancelDeepAgentRun(run.id, principal.role));
+    return;
+  }
+  const deepApprovalMatch = pathname.match(/^\/api\/deep-agent\/approvals\/([^/]+)\/decision$/);
+  if (deepApprovalMatch && method === 'POST') {
+    const approval = db.prepare(`SELECT a.*, r.user_id FROM deep_agent_approvals a
+      JOIN deep_agent_runs r ON r.id = a.run_id WHERE a.id = ?`).get(deepApprovalMatch[1]);
+    if (!approval) throw new HttpError(404, '审批记录不存在', 'DEEP_AGENT_APPROVAL_NOT_FOUND');
+    assertUserAccess(principal, approval.user_id);
+    const body = await readBody(request);
+    sendJson(response, 200, decideDeepAgentApproval({
+      approvalId: approval.id,
+      decision: body.decision,
+      decidedBy: principal.role === 'admin' ? 'admin' : principal.userId,
+      note: body.note || ''
+    }));
+    return;
+  }
+  const deepReconcileMatch = pathname.match(/^\/api\/deep-agent\/runs\/([^/]+)\/nodes\/([^/]+)\/reconcile$/);
+  if (deepReconcileMatch && method === 'POST') {
+    requireAdminPrincipal(principal, response);
+    if (principal.role !== 'admin') return;
+    const body = await readBody(request);
+    sendJson(response, 200, resolveDeepAgentReconciliation({
+      runId: deepReconcileMatch[1],
+      nodeId: deepReconcileMatch[2],
+      decision: body.decision,
+      receipt: body.receipt || {},
+      actor: 'admin'
+    }));
     return;
   }
 
@@ -1587,6 +1696,10 @@ async function handleApi(request, response, url) {
         memoryService: getMemoryServiceCapabilities(),
         runtime: getAgentRuntimeStatus(),
         capabilities: getCapabilityRuntimeStatus(),
+        sandbox: getSandboxRuntimeStatus(),
+        subagents: getSubagentRuntimeStatus(),
+        deepAgent: getDeepAgentRuntimeStatus(),
+        artifactUpload: artifactUploadContract(),
         models: configuredModels()
       });
       return;
@@ -1604,6 +1717,10 @@ async function handleApi(request, response, url) {
       memoryService: getMemoryServiceCapabilities(),
       runtime: getAgentRuntimeStatus(),
       capabilities: getCapabilityRuntimeStatus(),
+      sandbox: getSandboxRuntimeStatus(),
+      subagents: getSubagentRuntimeStatus(),
+      deepAgent: getDeepAgentRuntimeStatus(),
+      artifactUpload: artifactUploadContract(),
       models: configuredModels()
     });
     return;
@@ -1719,6 +1836,55 @@ async function handleApi(request, response, url) {
     }));
     return;
   }
+  if (pathname === '/api/artifacts/contract' && method === 'GET') {
+    sendJson(response, 200, artifactUploadContract());
+    return;
+  }
+  if (pathname === '/api/artifacts/upload' && method === 'POST') {
+    const contract = artifactUploadContract();
+    const body = await readBody(request, Math.ceil(contract.maxBytes * 1.45) + 100_000);
+    const userId = assertUserAccess(principal, body.user_id);
+    const agentId = safeText(body.agent_id, 100).trim();
+    const conversationId = safeText(body.conversation_id, 100).trim();
+    if (conversationId) {
+      const conversation = db.prepare('SELECT user_id, agent_id FROM conversations WHERE id = ?').get(conversationId);
+      if (!conversation) throw new HttpError(404, '会话不存在', 'CONVERSATION_NOT_FOUND');
+      if (conversation.user_id !== userId || (agentId && conversation.agent_id !== agentId)) {
+        throw new HttpError(403, '附件与当前会话作用域不匹配', 'ARTIFACT_SCOPE_FORBIDDEN');
+      }
+    }
+    const encoded = String(body.data_base64 || '').trim();
+    if (!encoded || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+      throw new HttpError(400, '附件不是合法 Base64 数据', 'INVALID_ARTIFACT_DATA');
+    }
+    const bytes = Buffer.from(encoded, 'base64');
+    if (!bytes.length || bytes.length > contract.maxBytes) {
+      throw new HttpError(400, `单个附件需小于 ${Math.ceil(contract.maxBytes / 1024 / 1024)}MB`, 'ARTIFACT_TOO_LARGE');
+    }
+    const extension = path.extname(String(body.file_name || '')).toLowerCase();
+    if (!contract.allowedExtensions.includes(extension)) {
+      throw new HttpError(400, `不支持上传 ${extension || '无扩展名'} 文件`, 'ARTIFACT_TYPE_NOT_ALLOWED');
+    }
+    const artifact = saveArtifact({
+      userId,
+      agentId,
+      conversationId,
+      sourceType: 'uploaded',
+      fileName: body.file_name,
+      mimeType: body.mime_type,
+      bytes
+    });
+    sendJson(response, 201, artifact);
+    return;
+  }
+  const artifactDownloadMatch = pathname.match(/^\/api\/artifacts\/([^/]+)\/download$/);
+  if (artifactDownloadMatch && method === 'GET') {
+    const artifact = getArtifact(artifactDownloadMatch[1]);
+    if (!artifact) throw new HttpError(404, '附件或产物不存在', 'ARTIFACT_NOT_FOUND');
+    assertUserAccess(principal, artifact.user_id);
+    sendBuffer(response, 200, readArtifactBytes(artifact), artifact.mime_type, artifact.file_name);
+    return;
+  }
   const conversationMatch = pathname.match(/^\/api\/conversations\/([^/]+)$/);
   if (conversationMatch && method === 'GET') {
     const userId = assertUserAccess(principal, url.searchParams.get('user_id'));
@@ -1764,7 +1930,8 @@ async function handleApi(request, response, url) {
       agentId: body.agent_id,
       conversationId: body.conversation_id || '',
       previousConversationId: body.previous_conversation_id || '',
-      message
+      message,
+      attachmentIds: Array.isArray(body.attachment_ids) ? body.attachment_ids : []
     };
     if (!String(request.headers.accept || '').includes('application/x-ndjson')) {
       sendJson(response, 200, await chat(chatRequest));
@@ -2067,8 +2234,15 @@ export const server = http.createServer(async (request, response) => {
   }
 });
 
-server.on('listening', startMemoryJobWorker);
-server.on('close', stopMemoryJobWorker);
+server.on('listening', () => {
+  startMemoryJobWorker();
+  startDeepAgentWorker();
+});
+server.on('close', () => {
+  stopMemoryJobWorker();
+  void stopDeepAgentWorker();
+  void closeSandboxRuntime();
+});
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   server.listen(config.port, config.host, () => {

@@ -1,0 +1,29 @@
+[Unit]
+Description=Memory Agent Studio Deep Agent Worker
+After=network-online.target memory-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=memory-agent
+Group=memory-agent
+WorkingDirectory=/opt/memory-agent-studio
+Environment=NODE_ENV=production
+Environment=DEEP_AGENT_RUNTIME_ENABLED=true
+Environment=DEEP_AGENT_WORKER_MODE=external
+EnvironmentFile=-/etc/memory-agent.env
+ExecStart=/usr/bin/env DATABASE_PATH=/opt/memory-agent-studio/data/memory-agent.db /opt/node-v24/bin/node /opt/memory-agent-studio/scripts/deep-agent-worker.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/memory-agent-studio/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

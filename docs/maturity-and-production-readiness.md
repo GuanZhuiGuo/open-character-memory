@@ -28,7 +28,7 @@
 
 分布式执行是同一任务可以由多个进程或机器安全协作，并在任一 Worker 崩溃后继续。它通常要求持久化任务队列、租约或分布式锁、幂等键、会话序号、检查点、重试退避、死信队列、超时取消和结果去重。
 
-当前 Headless `async observe` 已把任务保存到 `memory_jobs`，支持幂等、重试退避和 dead 状态，解决了“进程重启后任务必然丢失”的基础问题。但 worker 仍在单个 Node 进程内，没有租约、分布式锁或多 worker 抢占协议；原 Studio 的 `conversationTurnQueues` 也仍是进程内 `Map`，X 轮抽取保持 HTTP 内阻塞语义。因此它是单机 durable queue，不是可横向扩容的 Durable Execution。
+当前要分开两条任务链：Headless `async observe` 已把记忆抽取任务保存到 `memory_jobs`，支持幂等、重试退避和 dead 状态，但其 worker 仍在 Web Node 进程内。`0.8.0` 的 Deep Agent 长任务已使用独立 Worker、SQLite 原子领取、租约、检查点、审批和不可幂等对账，能在单机多进程间恢复。两者都还没有 PostgreSQL/消息队列上的多主机协调，因此应称为“单机持久执行”，不是可水平扩容的分布式 Durable Execution。
 
 ## 为什么时序图谱与图数据库能力仍有边界
 
@@ -56,11 +56,11 @@ Graphiti 的 episode 溯源、可扩展 ontology、时序事实和混合图检�
 ## 为什么生产级扩展仍弱
 
 - 单进程锁，不能协调多副本。
-- 原 Studio 的 X 轮抽取仍阻塞 HTTP；Headless 虽有持久化任务与失败重试，但尚无多副本租约和独立 worker 部署。
+- 原 Studio 的 X 轮抽取仍阻塞 HTTP；Headless 抽取 worker 仍在 Web 进程内。Deep Agent 已有独立租约 Worker，但仅支持同一 SQLite 主机，不能跨机扩容。
 - 多步记忆写入尚未统一放入一个数据库事务，后续步骤失败时早先写入不会自动回滚。
 - SQLite 本地文件限制水平扩容，向量检索仍是应用层扫描。
 - 认证是产品演示级账号与单管理员密码，不是企业 SSO、RBAC 或租户密钥管理。
 - 有 Trace，但还没有 OpenTelemetry、指标、告警、SLO、容量压测和成本预算。
 - 没有滚动升级、备份恢复演练、数据迁移校验与灾难恢复 Runbook。
 
-`0.7.0` 已包含 Pi ReAct 工具循环、多粒度/纠正式/Agentic 召回、双时态版本、Neo4j 图投影、受控 Skill/MCP 能力网关、Headless Memory API、TypeScript alpha SDK 和单机持久化抽取队列。独立包发布、Python SDK、PostgreSQL/pgvector、可替换存储适配器和多副本执行仍是明确的生产扩展 backlog，不能把单机可运行等同于分布式生产就绪。
+`0.8.0` 已包含 Pi ReAct 工具循环、有界并行 Subagent、单机持久 Deep Agent、多粒度/纠正式/Agentic 召回、双时态版本、Neo4j 图投影、受控 Skill/MCP 能力网关、Headless Memory API、TypeScript alpha SDK 和单机持久化抽取队列。独立包发布、Python SDK、PostgreSQL/pgvector、可替换存储适配器和多主机执行仍是明确的生产扩展 backlog，不能把单机可运行等同于分布式生产就绪。

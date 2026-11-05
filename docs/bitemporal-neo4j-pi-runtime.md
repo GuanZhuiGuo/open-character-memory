@@ -2,7 +2,7 @@
 
 ## 当前版本边界
 
-`0.7.0` 的运行结构是：
+`0.8.0` 的运行结构是：
 
 ```text
 HTTP /api/chat
@@ -13,8 +13,11 @@ HTTP /api/chat
   -> 证据保护型 LLM 上下文过滤
   -> 记忆意图路由 -> 只读 memory_search / memory_expand
   -> 已解锁 Skill/MCP 解析与工具白名单
+  -> 文件/命令意图路由 -> OpenSandbox 工具白名单
+  -> 多任务意图路由 -> delegate_parallel_tasks
   -> Pi Agent Core ReAct turn state + lifecycle events
-  -> Text Provider -> 可选记忆/能力 tool call -> toolResult -> Text Provider 续答
+  -> Text Provider -> 可选记忆/能力/沙箱 tool call -> toolResult -> Text Provider 续答
+                   -> 可选有界并行 Subagents -> 汇总 toolResult -> Text Provider 续答
   -> SQLite 双时态主记录
   -> graph_projection_outbox
   -> Neo4j 当前图投影
@@ -98,12 +101,16 @@ Pi runtime 当前提供：
 - 按需暴露、作用域锁定的只读 `memory_search / memory_expand`，以及与其分离的已解锁 Skill/MCP 工具。
 - 会话 ID 透传。
 - 每次请求的模型轮数、工具调用次数与同批工具串行/并行上限。
+- 确定性路由后按需暴露的 OpenSandbox 文件、文档和命令工具。
+- 由父模型选择的 `delegate_parallel_tasks`，以及持久化任务状态、上下文隔离、工具 profile、有界并发和结果回收。
 
 没有可用工具时，Provider bridge 将 Provider 的流式结果转换为 Pi 消息事件；Ark 默认使用 Responses Provider 托管缓存，显式 Context 仅为 Endpoint ID 部署的可选模式。存在当轮工具时，Ark/OpenAI/Anthropic 改走 Pi 原生 tool-capable stream；Mock 用确定性桥接器验证同一事件合同。工具请求由模型决定，但记忆工具是否按需暴露、作用域、调用预算，以及外部能力是否允许和执行结果是否成功，均由服务端决定。
 
 Skill ZIP 当前是受控声明式包：`skill.json` 可声明 template 或 HTTP 工具并附带 `SKILL.md`，不会加载或执行 ZIP 内任意 JavaScript/Python。MCP 使用官方 TypeScript Client 执行 `tools/list / tools/call`；HTTP 受主机白名单约束，stdio 默认关闭且受命令白名单约束。`AGENT_RUNTIME=legacy` 可用于紧急回退，但 legacy 不执行动态能力。
 
-这里的运行架构是 ReAct 式工具循环，不是独立 Plan-Execute，也不是 Deep Agent。`AGENT_TOOL_EXECUTION=sequential|parallel` 只控制同一批工具如何执行；`AGENT_THINKING_LEVEL` 只控制支持该能力的模型推理强度。若要 Plan-Execute，需要在 Pi 外增加持久化计划、Planner/Executor 状态机和重规划节点；若要 Deep Agent，还要增加子 Agent、工作区/文件、任务树、检查点和跨任务调度。
+`0.8.0` 同时保留三种执行形态：当前请求内的 Pi ReAct、深度固定为 1 的有界并行 Subagent，以及跨请求的持久 Plan-Execute Deep Agent。复杂任务可由 `start_durable_workflow` 登记经过服务端无环与预算校验的 DAG，独立 Worker 通过租约执行，并支持检查点恢复、审批、受限重规划和不可幂等写入对账。因此可以准确称为当前产品的 **单机持久 Deep Agent Runtime**；但尚不包含多机分布式队列、递归子团队、Agent 间实时通信或 Codex/Claude Code 级编码工作流。`AGENT_TOOL_EXECUTION=sequential|parallel` 只控制同一批普通工具；Subagent 和持久 Worker 使用各自的并发预算。`AGENT_THINKING_LEVEL` 只控制支持该能力的模型推理强度。
+
+沙箱和并行任务的安全合同见 [沙箱、并行 Subagent 与持久 Deep Agent Runtime](sandbox-subagent-runtime.md)；持久状态机、恢复和审批语义见 [持久 Deep Agent Runtime](deep-agent-runtime.md)。
 
 ## 保留的既有功能
 
@@ -117,6 +124,14 @@ AGENT_THINKING_LEVEL=off
 AGENT_TOOL_EXECUTION=sequential
 AGENT_MAX_TOOL_CALLS=6
 AGENT_MAX_MODEL_TURNS=6
+SUBAGENT_RUNTIME_ENABLED=true
+SUBAGENT_MAX_CONCURRENCY=3
+SUBAGENT_MAX_TASKS_PER_CALL=4
+SUBAGENT_MAX_DEPTH=1
+SANDBOX_RUNTIME_ENABLED=false
+SANDBOX_PROVIDER=opensandbox
+SANDBOX_IMAGE=open-character-memory/sandbox:0.1.0
+OPEN_SANDBOX_DOMAIN=127.0.0.1:8080
 CAPABILITY_RUNTIME_ENABLED=true
 CAPABILITY_HTTP_ALLOWED_HOSTS=mcp.example.com
 MCP_ALLOW_STDIO=false

@@ -128,10 +128,13 @@
               <div id="messageList" class="message-list" aria-live="polite"></div>
               <div class="composer-dock">
                 <div class="composer-shortcuts" aria-label="对话快捷操作">
+                  <button id="attachmentButton" class="composer-tool" type="button" title="上传文档到当前会话沙箱" aria-label="上传文档"><i data-lucide="paperclip"></i><span id="attachmentCount" class="tool-count hidden">0</span></button>
+                  <input id="attachmentInput" class="visually-hidden" type="file" multiple accept=".txt,.md,.html,.json,.csv,.pdf,.docx" aria-label="选择附件">
                   <button id="memoryExtractionButton" class="composer-tool progress-tool" type="button" title="立即更新长期记忆" aria-label="立即更新长期记忆"><span id="memoryExtractionProgress" class="progress-ring" style="--progress:0"><i data-lucide="brain-circuit"></i></span></button>
                   <button id="unlockedPropsButton" class="composer-tool" type="button" title="查看道具图鉴" aria-label="查看道具图鉴"><i data-lucide="package-open"></i><span id="unlockedPropsCount" class="tool-count">0</span></button>
                   <button id="unlockedPlotsButton" class="composer-tool" type="button" title="查看剧情图鉴" aria-label="查看剧情图鉴"><i data-lucide="scroll-text"></i><span id="unlockedPlotsCount" class="tool-count">0</span></button>
                 </div>
+                <div id="attachmentTray" class="attachment-tray hidden" aria-live="polite"></div>
                 <form id="composerForm" class="composer">
                   <div class="composer-input-wrap">
                     <textarea id="messageInput" rows="1" placeholder="输入消息…" aria-label="消息内容" aria-describedby="messageLength"></textarea>
@@ -424,6 +427,8 @@
                   <section class="architecture-domain runtime-domain">
                     <header><span>02</span><strong>Agent Runtime</strong><small id="architectureRuntimeName">Pi Agent Core</small></header>
                     <div class="architecture-node" data-phase="generate"><i data-lucide="orbit"></i><span><strong>Pi ReAct Runtime</strong><small id="architecturePiNodeMeta">模型 → 工具 → toolResult → 模型续答</small></span></div>
+                    <div class="architecture-node" data-phase="generate"><i data-lucide="git-fork"></i><span><strong>Bounded Parallel Subagents</strong><small id="architectureSubagentNodeMeta">按多任务意图路由 · 上下文隔离 · 父模型收口</small></span></div>
+                    <div class="architecture-node" data-phase="generate write"><i data-lucide="workflow"></i><span><strong>Persistent Deep Agent Runtime</strong><small id="architectureDeepAgentNodeMeta">持久 DAG · 检查点 · 审批 · 重规划 · 独立 Worker</small></span></div>
                     <div class="architecture-node" data-phase="pre generate write"><i data-lucide="route"></i><span><strong>会话锁与 Turn Pipeline</strong><small>同一会话串行，保留现有调度功能</small></span></div>
                     <div class="architecture-node" data-phase="pre generate write input"><i data-lucide="braces"></i><span><strong>Headless Memory Runtime</strong><small id="architectureHeadlessNodeMeta">v1 原子 API · SDK / Pi / MCP</small></span></div>
                     <div class="architecture-node" data-phase="pre generate input"><i data-lucide="layers-3"></i><span><strong>Prompt Compiler</strong><small>硬规则 + 角色属性 + 状态 + 最终召回</small></span></div>
@@ -459,6 +464,9 @@
                     <div class="architecture-node" data-phase="generate input"><i data-lucide="gauge"></i><span><strong>稳定前缀缓存</strong><small>只缓存人设与固定属性；失败回退完整请求</small></span></div>
                     <div class="architecture-node" data-phase="pre write input"><i data-lucide="database"></i><span><strong>SQLite · 主记录库（生产升级：PostgreSQL + pgvector）</strong><small id="architectureSqliteNodeMeta">双时态账本、声明证据链、六视图、语义边、任务与 outbox</small></span></div>
                     <div class="architecture-node" data-phase="pre write"><i data-lucide="share-2"></i><span><strong>Neo4j · 可重建图投影</strong><small id="architectureNeo4jNodeMeta">事实图 + 语义关联图；失败回退 SQLite</small></span></div>
+                    <div class="architecture-node" data-phase="generate write"><i data-lucide="box"></i><span><strong>OpenSandbox · 执行隔离</strong><small id="architectureSandboxNodeMeta">网络 deny · 非 root · 命令白名单</small></span></div>
+                    <div class="architecture-node" data-phase="generate write"><i data-lucide="server-cog"></i><span><strong>Deep Agent Worker · 长任务执行</strong><small id="architectureDeepWorkerNodeMeta">租约调度 · 重启恢复 · 多进程抢占</small></span></div>
+                    <div class="architecture-node" data-phase="generate write"><i data-lucide="file-archive"></i><span><strong>Artifact Store · 附件与产物</strong><small id="architectureArtifactNodeMeta">用户/角色/会话隔离 · 下载可审计</small></span></div>
                   </section>
                 </div>
                 <div class="memory-ownership-strip" aria-label="三类记忆所有权">
@@ -549,6 +557,38 @@
                 <div class="retrieval-architecture-step graph grid-col-7 has-arrow" data-phase="generate write"><span>06</span><strong>真实执行</strong><small>MCP tools/call 或已审核 Skill template / HTTP</small></div>
                 <div class="retrieval-architecture-step merge grid-col-8 has-arrow" data-phase="generate"><span>07</span><strong>toolResult</strong><small>结果标记为外部数据并写执行回执</small></div>
                 <div class="retrieval-architecture-step planner grid-col-9" data-phase="generate"><span>08 · MODEL</span><strong>模型续答</strong><small>结合结果二次推理；失败不得声称成功</small></div>
+              </section>
+
+              <section class="timeline-grid swimlane capability-lane" aria-label="并行子任务与沙箱执行机制">
+                <div class="lane-label">
+                  <i data-lucide="git-fork"></i>
+                  <strong>Subagent 与沙箱</strong>
+                  <span>有界并行 · 隔离执行</span>
+                </div>
+                <div class="retrieval-architecture-step grid-col-2 has-arrow" data-phase="pre"><span>01 · ROUTER</span><strong>多任务意图门</strong><small>只有显式并行、编号多任务、复合独立工作或多附件请求才暴露派发工具</small></div>
+                <div class="retrieval-architecture-step planner grid-col-3 has-arrow" data-phase="generate"><span>02 · PARENT</span><strong>父模型决策</strong><small>判断是否值得拆分；普通闲聊与强依赖任务不派发</small></div>
+                <div class="retrieval-architecture-step gate grid-col-4 has-arrow" data-phase="generate"><span>03 · CONTRACT</span><strong>子任务合同</strong><small>名称、角色、单一目标、tool profile 与公共背景</small></div>
+                <div class="retrieval-architecture-step graph grid-col-5 has-arrow" data-phase="generate"><span>04 · SCHEDULER</span><strong>有界并发</strong><small id="architectureSubagentLaneMeta">单次最多 4 项 · 并发 3 · 深度 1</small></div>
+                <div class="retrieval-architecture-step grid-col-6 has-arrow" data-phase="generate"><span>05 · CHILD</span><strong>隔离上下文</strong><small>不继承整段聊天，不可递归派生，模型轮次与输出有预算</small></div>
+                <div class="retrieval-architecture-step gate grid-col-7 has-arrow" data-phase="generate write"><span>06 · SANDBOX</span><strong>受限工作区</strong><small>附件只读导入；输出目录隔离；Bash/文档工具按用户原始意图授权</small></div>
+                <div class="retrieval-architecture-step merge grid-col-8 has-arrow" data-phase="generate"><span>07 · RESULT</span><strong>结构化回执</strong><small>任务状态、证据、沙箱执行、产物 ID 回到父 Agent</small></div>
+                <div class="retrieval-architecture-step planner grid-col-9" data-phase="generate"><span>08 · PARENT</span><strong>审核与合并</strong><small>父模型处理冲突、失败和限制，再向用户给出最终答案</small></div>
+              </section>
+
+              <section class="timeline-grid swimlane capability-lane" aria-label="持久 Deep Agent 执行机制">
+                <div class="lane-label">
+                  <i data-lucide="workflow"></i>
+                  <strong>持久 Deep Agent</strong>
+                  <span>DAG · 跨请求续跑</span>
+                </div>
+                <div class="retrieval-architecture-step grid-col-2 has-arrow" data-phase="generate"><span>01 · ROUTER</span><strong>复杂任务意图门</strong><small>仅多阶段、长任务、需审批或需断点恢复时暴露 start_durable_workflow</small></div>
+                <div class="retrieval-architecture-step planner grid-col-3 has-arrow" data-phase="generate"><span>02 · PLANNER</span><strong>模型提出 DAG</strong><small>目标、节点、依赖、角色、工具 profile、审批与副作用级别</small></div>
+                <div class="retrieval-architecture-step gate grid-col-4 has-arrow" data-phase="generate write"><span>03 · VALIDATOR</span><strong>服务端裁决</strong><small>节点上限、依赖存在、无环、作用域锁定与风险策略</small></div>
+                <div class="retrieval-architecture-step graph grid-col-5 has-arrow" data-phase="write"><span>04 · LEDGER</span><strong>持久化计划</strong><small>Run / Node / Edge / Event / Checkpoint 写入 SQLite 主记录库</small></div>
+                <div class="retrieval-architecture-step grid-col-6 has-arrow" data-phase="generate write"><span>05 · WORKER</span><strong id="architectureDeepWorkerLaneMeta">租约领取可运行节点 · 独立于 HTTP 请求</strong><small>安全节点租约超时后自动恢复；不可幂等写转入对账</small></div>
+                <div class="retrieval-architecture-step gate grid-col-7 has-arrow" data-phase="generate write"><span>06 · APPROVAL</span><strong>人工审批与沙箱执行</strong><small>高风险节点暂停；批准后才进入 OpenSandbox / 工具循环</small></div>
+                <div class="retrieval-architecture-step planner grid-col-8 has-arrow" data-phase="generate write"><span>07 · RECOVERY</span><strong>检查点与动态重规划</strong><small>失败可重试、替换节点、跳过或终止；计划补丁再次验环</small></div>
+                <div class="retrieval-architecture-step merge grid-col-9" data-phase="generate"><span>08 · RESULT</span><strong>汇总与 Trace</strong><small>节点证据、产物、审批、回执和最终结果可重连查看</small></div>
               </section>
 
               <section class="timeline-grid swimlane retrieval-lane" aria-label="纠正式与主模型主动记忆召回机制">
@@ -798,7 +838,7 @@
                         <div><dt>temperature</dt><dd>0.7</dd></div>
                         <div><dt>max_output_tokens</dt><dd>1200</dd></div>
                         <div><dt>stream</dt><dd>有工具 true · 无工具沿用 Provider bridge</dd></div>
-                        <div><dt>tools</dt><dd>按需系统记忆工具 + 已解锁 Skill/MCP · 0..16</dd></div>
+                        <div><dt>tools</dt><dd>按需记忆 + Skill/MCP + 沙箱 + Subagent；当轮路由后再暴露</dd></div>
                       </dl>
                       <div class="model-target"><i data-lucide="bot"></i><span><strong>Configured Text Provider</strong><small>返回文本或 tool call；toolResult 后继续推理</small></span></div>
                     </section>

@@ -4,9 +4,13 @@
 
 Open Character Memory is an open-source role-user memory runtime and visual studio for role-play companions and tutoring agents. It remembers user facts, character commitments, shared stories, corrections, relationship state, and narrative branches without treating every semantically similar memory as current truth.
 
-Version `0.7.0` combines a Pi Agent Core ReAct loop with multi-granularity, corrective, and agentic memory retrieval, a bitemporal SQLite source of truth, replayable Neo4j fact/semantic graph projections, and controlled Skill/MCP execution.
+Version `0.8.0` combines a Pi Agent Core ReAct loop and persistent Plan-Execute Deep Agent with multi-granularity, corrective, and agentic memory retrieval, a bitemporal SQLite source of truth, replayable Neo4j fact/semantic graph projections, and controlled Skill/MCP execution.
 
-![Open Character Memory architecture](docs/assets/overall-architecture-v0.7.0.png)
+Version `0.8.0` keeps bounded parallel Subagents for work that should finish inside the current turn and adds a durable cross-request DAG runtime for long work. Model-proposed plans are validated and persisted by the server, then executed by an independent leased Worker with checkpoints, human approvals, bounded replanning, and reconciliation for uncertain non-idempotent writes.
+
+![Open Character Memory v0.8.0 architecture](docs/assets/overall-architecture-v0.8.0.png)
+
+[Open the interactive architecture diagram](docs/memory-agent-deep-runtime-v2.architecture.html)
 
 ## Highlights
 
@@ -16,6 +20,8 @@ Version `0.7.0` combines a Pi Agent Core ReAct loop with multi-granularity, corr
 - Six rebuildable retrieval views per canonical event, entropy-aware routing, semantic associations, bounded PPR, pre-answer corrective retrieval, and in-generation read-only memory tools.
 - Configurable structured fields, extraction cadence, prompts, retrieval policy, plots, and low-code triggers.
 - Scope-locked `memory_search` / `memory_expand`, controlled Skill/MCP exposure, execution receipts, and Pi `toolResult` continuation turns.
+- Intent-gated sandboxed file, document, Bash/Python/Node tools plus context-isolated parallel Subagents whose results return to the parent model.
+- Persistent Deep Agent runs with validated DAGs, checkpoint resume, worker leases, human approval, cancellation, bounded plan replacement, and side-effect receipts visible in Trace.
 - Inspectable Trace views for prompts, injected memory, retrieval evidence, model/tool calls, and post-turn writes.
 - A headless `memory-runtime/v1` contract with `observe / recall / expand / mutate / forget`, a persistent extraction queue, a typed JavaScript/TypeScript SDK, Pi and generic adapters, and a read-only MCP server.
 
@@ -32,6 +38,9 @@ See the [2026 agent-memory comparison](docs/market-memory-comparison-2026.md) fo
 - Bitemporal `valid_*` and `transaction_*` intervals with `valid_at` / `known_at` as-of queries.
 - Neo4j fact and semantic-association graph projections with scope keys, idempotent replacement, outbox replay, and SQLite fallback.
 - Pi Agent Core state, lifecycle events, and a ReAct-style tool loop. Read-only memory tools are routed only for memory-relevant turns and cannot accept client/model scope keys. Unlocked scoped props are exposed separately; validated declarative Skill tools and allowlisted MCP tools execute through the server gateway and return `toolResult` before the model continues.
+- File and command tools use deterministic intent routing before model choice. Routine role-play turns see no sandbox tools. Production accepts only an external OpenSandbox control plane; uploads enter read-only `input`, generated files stay under `output`, and downloadable artifacts retain user, agent, conversation, Trace, and optional subagent scope.
+- `delegate_parallel_tasks` can dispatch independent work to `researcher`, `analyst`, `writer`, `verifier`, or `general-purpose` child agents. Defaults are four tasks, three concurrent workers, and depth one. Children receive a reduced context, cannot recurse, and use scoped tool profiles and output directories. Chat streaming and Trace expose live task, sandbox-run, and artifact status.
+- `start_durable_workflow` is exposed only for multi-stage, long-running, approval-gated, or resumable work. The model proposes the objective, nodes, dependencies, and risk class; the server owns cycle validation, scope, and budgets. Safe expired leases are resumed from persisted state, while uncertain non-idempotent writes enter `reconciling` instead of being retried blindly.
 - User memory plus role/user shared-story events, entities, claims, and evidence-backed relations.
 - Post-turn extraction uses two focused model calls in parallel: one for structured fields and the event graph, and one for standalone semantic state. A server-side atomic evidence guard fills explicit titles/names, completed monetary transactions, and current/planned location states when a model omits them; it also preserves concrete methods, options, or recommendations from numbered character utterances. New current locations use a canonical slot and supersede prior values, while planned targets stay separate. Recommendations, budgets, and hypothetical prices cannot become completed transactions. Every guarded claim remains linked to its source message; character utterances stay provisional and cannot masquerade as user facts. The server validates evidence, retries malformed JSON once, merges both outputs, and keeps the extraction checkpoint unchanged on failure.
 - Explicit preferences need one direct user message; only inferred preferences require at least two user messages. Assistant-only information remains a provisional shared-story utterance usable for "what did you say" recall, then upgrades across extraction cycles only after user acceptance.
@@ -76,6 +85,10 @@ ADMIN_PASSWORD='replace-with-a-strong-secret' \
 NEO4J_PASSWORD='replace-with-a-different-strong-secret' \
 docker compose up --build
 ```
+
+The application Compose file does not bundle an OpenSandbox control plane. Keep `SANDBOX_RUNTIME_ENABLED=false` until one is deployed, its sandbox image is built, and the server-side connection variables are configured. See [Sandbox, parallel Subagents, and the Deep Agent Runtime](docs/sandbox-subagent-runtime.md).
+
+Local development defaults to an inline worker. Production separates the web process from durable execution: set `DEEP_AGENT_WORKER_MODE=external`, run `npm run worker:deep-agent`, or use the supplied systemd/Compose worker service. The validated DAG, lease, checkpoint, approval, replan, and side-effect reconciliation contracts are documented in [Persistent Deep Agent Runtime](docs/deep-agent-runtime.md).
 
 ## Headless Memory Runtime
 

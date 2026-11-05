@@ -1,6 +1,6 @@
 {
   "name": "open-character-memory",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -16,6 +16,7 @@
   "scripts": {
     "dev": "node --watch server.js",
     "start": "node server.js",
+    "worker:deep-agent": "node scripts/deep-agent-worker.js",
     "start:mock": "node scripts/start-mock.js",
     "test": "node --test",
     "eval": "node scripts/run-memory-evals.js",
@@ -28,6 +29,7 @@
     "node": ">=24"
   },
   "dependencies": {
+    "@alibaba-group/opensandbox": "^0.1.11",
     "@earendil-works/pi-agent-core": "0.84.2",
     "@earendil-works/pi-ai": "0.84.2",
     "@modelcontextprotocol/client": "^2.0.0",

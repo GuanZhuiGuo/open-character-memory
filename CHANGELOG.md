@@ -4,6 +4,46 @@
 
 ## Unreleased
 
+## [0.8.0](https://github.com/GuanZhuiGuo/open-character-memory/releases/tag/v0.8.0) - 2026-08-31
+
+### Added
+
+- 新增 OpenSandbox 执行平面：按明确意图暴露文件读取、文档生成/渲染与 Bash/Python/Node 工具；上传附件只读导入，生成产物按用户、角色、会话和 Trace 隔离并提供受权下载。
+- 新增有界并行 Subagent 编排：主 Pi 模型可将 2-N 个独立任务派发给 `researcher / analyst / writer / verifier / general-purpose` 子 Agent，独立上下文和工具 profile 在并发池中运行，结果以 `toolResult` 回到主模型综合。
+- 对话流与 Trace 新增实时工具活动、并行任务状态、沙箱审计运行及产物入口；系统架构图同步展示主 Agent、Subagent、OpenSandbox 与 Artifact Store 的协作链路。
+- 新增持久 Deep Agent Runtime：模型可为复杂任务提出 DAG，服务端校验依赖和无环后持久化 Run、Node、Edge、Event、Checkpoint、Approval 与 Effect Receipt。
+- 新增独立长任务 Worker、节点租约和重启恢复；安全节点租约过期后回到队列，不可幂等写入转入 `reconciling`，避免在结果未知时盲目重试。
+- 新增动态重规划和人工审批：失败节点可在预算内重试、被新子图替换、跳过或终止；计划补丁再次通过服务端校验，高风险节点批准前不会执行。
+- Trace 新增持久 DAG、节点状态、依赖边、审批按钮、检查点和最终汇总；系统架构图新增 Durable Plan-Execute 与外部 Worker 全链路。
+
+### Changed
+
+- 工具暴露升级为“确定性意图路由 + 模型自主选择”：普通陪聊不携带沙箱/Subagent 工具，明确文件、命令或多任务意图才将对应白名单交给主模型。
+- Runtime 定位升级为 `Pi ReAct + bounded parallel Subagents + persistent Plan-Execute Deep Agent + sandbox workspace`：简单任务仍在当前 Turn 收口，长任务由持久 DAG 和独立 Worker 跨请求执行。
+- 生产 systemd 拆分为 Web 服务与 `memory-agent-deep-worker.service`；Compose 同样运行独立 Worker。SQLite WAL 仍是当前单机主记录库，不宣称已经具备跨主机分布式调度。
+
+### Security
+
+- 生产环境拒绝本地命令 provider，只允许独立 OpenSandbox；默认无网络、无宿主目录、无应用密钥，并限制程序白名单、超时、输出、文件大小、模型轮数、任务数、并发数和递归深度。
+- 附件和产物下载执行登录用户校验，已绑定角色/会话的文件不能跨作用域复用；HTML 文档生成对用户内容进行实体转义。
+
+### Resolved Bad Cases
+
+- **普通陪聊误触危险工具**：例如角色聊天中出现“运行”或“文件”等泛化词，不再让模型默认看到 Bash 和写文件能力；只有确定性路由确认明确任务后才暴露。
+- **并行任务共享完整上下文并相互污染**：例如两个调研方向都看到全部对话和彼此草稿；现在每个子 Agent 只收到精简公共背景和自己的指令，并写入独立输出目录。
+- **上传附件已绑定角色却没有绑定会话**：例如上传后首次发送消息，文件角色归属已存在但会话为空；现在逐字段补全作用域且不会覆盖已有归属。
+- **代码存在就被误认为生产沙箱已开启**：架构状态明确区分代码支持、运行时开关和 OpenSandbox control plane 连接，未部署时保持关闭。
+- **长任务绑定 HTTP 请求，断线或重启后整批丢失**：例如“调研 → 实现 → 测试 → 发布”在浏览器关闭后中断；现在计划和节点状态先落库，Worker 可从检查点继续领取未完成节点。
+- **外部写入超时后被重复执行**：例如工具已经提交业务动作但回包丢失，自动重试造成重复；现在不可幂等节点进入 `reconciling`，只有核对业务回执或人工裁决后才继续。
+- **一个节点失败导致整项工作只能从头再来**：现在受限 Planner 可用验证过的计划补丁替换失败节点并保留上下游依赖，Trace 记录每次计划版本和原因。
+- **模型把“任务已入队”说成“任务已完成”**：Prompt 与工具回执明确区分 queued/running/succeeded，最终结果只在所有有效节点完成并汇总后产生。
+- **独立 Worker 启动后立即退出**：轮询计时器曾不保持 Node 事件循环，内联模式会掩盖这个问题；现在独立进程会持续运行至收到停机信号，并有进程级回归测试。
+
+### Validation
+
+- Node 24 自动化测试 `82/82` 通过，新增 DAG 无环校验、依赖释放、审批阻塞、租约心跳与迟到结果拒绝、汇总/重规划恢复、不可幂等对账、失败节点子图替换和独立 Worker 生命周期专项测试。
+- 离线记忆回归 `5/5` 通过，开源发布预检 `116` 个文件通过，`git diff --check` 无空白错误。
+
 ## [0.7.0](https://github.com/GuanZhuiGuo/open-character-memory/releases/tag/v0.7.0) - 2026-08-25
 
 ### Added

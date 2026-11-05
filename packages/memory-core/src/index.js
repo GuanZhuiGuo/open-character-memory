@@ -17,7 +17,7 @@ export class MemoryContractError extends Error {
   }
 }
 
-function text(value, field, { required = false, max = 160 } = {}) {
+function text(value, field, { required = false, max = 160, allowLines = false } = {}) {
   const output = String(value ?? '').normalize('NFKC').trim();
   if (required && !output) {
     throw new MemoryContractError(`${field} is required`, 'MEMORY_FIELD_REQUIRED', { field });
@@ -27,7 +27,7 @@ function text(value, field, { required = false, max = 160 } = {}) {
       field, max, actual: output.length
     });
   }
-  if (/\p{Cc}/u.test(output)) {
+  if ((allowLines ? /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u : /\p{Cc}/u).test(output)) {
     throw new MemoryContractError(`${field} contains control characters`, 'MEMORY_FIELD_INVALID', { field });
   }
   return output;
@@ -81,7 +81,7 @@ function normalizeMessage(message, index) {
   return Object.freeze({
     id: text(message.id || '', `messages[${index}].id`, { max: 160 }),
     role,
-    content: text(message.content, `messages[${index}].content`, { required: true, max: 50000 }),
+    content: text(message.content, `messages[${index}].content`, { required: true, max: 50000, allowLines: true }),
     createdAt: text(message.createdAt ?? message.created_at ?? '', `messages[${index}].createdAt`, { max: 80 }),
     metadata: message.metadata && typeof message.metadata === 'object' && !Array.isArray(message.metadata)
       ? structuredClone(message.metadata)
@@ -119,7 +119,7 @@ export function normalizeRecallRequest(input = {}, defaults = {}) {
   return Object.freeze({
     contractVersion: MEMORY_CONTRACT_VERSION,
     scope: normalizeMemoryScope(input.scope, defaults),
-    query: text(input.query, 'query', { required: true, max: 12000 }),
+    query: text(input.query, 'query', { required: true, max: 12000, allowLines: true }),
     includePinned: options.includePinned !== false,
     includePromptText: options.includePromptText !== false,
     validAt: text(options.validAt ?? options.valid_at ?? '', 'options.validAt', { max: 80 }),

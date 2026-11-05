@@ -15,6 +15,7 @@ COPY --chown=node:node CHANGELOG.md ./
 COPY --chown=node:node lib ./lib
 COPY --chown=node:node public ./public
 COPY --chown=node:node scripts ./scripts
+COPY --chown=node:node sandbox ./sandbox
 COPY --chown=node:node evals ./evals
 COPY --chown=node:node openapi ./openapi
 

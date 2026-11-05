@@ -2,6 +2,8 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const appBasePath = $('meta[name="app-base-path"]')?.content || '';
 const CHAT_MESSAGE_MAX_CHARACTERS = 1000;
+const DEFAULT_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
+const DEFAULT_ATTACHMENT_MAX_FILES = 4;
 const CONTEXT_SWITCHABLE_PAGES = new Set(['chat', 'memory', 'persona', 'automation']);
 
 const state = {
@@ -50,7 +52,9 @@ const state = {
   feedback: [],
   sending: false,
   extractingMemory: false,
-  extractionStatus: null
+  extractionStatus: null,
+  uploadingAttachments: false,
+  pendingAttachments: []
 };
 
 const pageTitles = {
@@ -136,6 +140,24 @@ function formatValue(value) {
   if (Array.isArray(value)) return value.length ? value.join('、') : '未设置';
   if (typeof value === 'object') return Object.keys(value).length ? JSON.stringify(value) : '未设置';
   return String(value);
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function messageArtifacts(message) {
+  const metadata = message?.metadata || parseJson(message?.metadata_json, {}) || {};
+  return Array.isArray(metadata.attachments) ? metadata.attachments
+    : Array.isArray(metadata.artifacts) ? metadata.artifacts : [];
+}
+
+function artifactChipsMarkup(items = []) {
+  if (!items.length) return '';
+  return `<div class="message-artifacts">${items.map((item) => `<a href="${escapeHtml(item.downloadUrl || '#')}" target="_blank" rel="noopener noreferrer" title="下载 ${escapeHtml(item.fileName || '文件')}"><i data-lucide="file-down"></i><span><strong>${escapeHtml(item.fileName || '文件')}</strong><small>${escapeHtml(formatBytes(item.sizeBytes))}</small></span></a>`).join('')}</div>`;
 }
 
 async function api(path, options = {}) {
@@ -453,6 +475,11 @@ async function loadBootstrap() {
   localStorage.setItem('memory_studio_scene', state.currentSceneId);
   const providerName = state.bootstrap.models?.textProvider || 'model';
   setModelConnectionStatus(providerName === 'mock' ? 'Mock 模式' : `${providerName.toUpperCase()} 已配置`);
+  const sandboxEnabled = state.bootstrap.sandbox?.enabled === true;
+  $('#attachmentButton').disabled = !sandboxEnabled;
+  $('#attachmentButton').title = sandboxEnabled
+    ? '上传文档到当前会话沙箱'
+    : '沙箱 Runtime 尚未启用，管理员需配置 SANDBOX_RUNTIME_ENABLED';
   renderSelectors();
   renderAgentHeader();
   applyRoleUi();
@@ -590,6 +617,8 @@ async function switchContext() {
   state.graphData = null;
   state.graphNetwork?.destroy();
   state.graphNetwork = null;
+  state.pendingAttachments = [];
+  renderPendingAttachments();
   localStorage.setItem('memory_studio_user', state.currentUserId);
   localStorage.setItem('memory_studio_agent', state.currentAgentId);
   state.currentSceneId = sceneForAgent()?.id || state.currentSceneId;
@@ -664,6 +693,7 @@ function renderMessages(extraHtml = '') {
       <span class="message-avatar" style="background:${escapeHtml(message.role === 'assistant' ? (agent?.avatar_color || '#2563eb') : (user?.avatar_color || '#2563eb'))}">${escapeHtml(message.role === 'assistant' ? (agent?.name?.slice(0, 1) || '角') : (user?.display_name?.slice(0, 1) || '你'))}</span>
       <div class="message-body">
         <div class="message-bubble markdown-body">${renderMarkdown(message.content)}</div>
+        ${artifactChipsMarkup(messageArtifacts(message))}
         <div class="message-meta"><time>${formatDate(message.created_at)}</time>${String(message.id).startsWith('local_') ? '' : `<button class="message-feedback-button" data-feedback-message="${escapeHtml(message.id)}" title="对这条消息提反馈" aria-label="对这条消息提反馈"><i data-lucide="message-square-warning"></i></button>`}</div>
       </div>
     </div>`).join('') + extraHtml;
@@ -703,11 +733,92 @@ function updateMessageLength() {
 }
 
 function updateComposerAvailability() {
-  const frozen = state.sending || state.extractingMemory;
+  const frozen = state.sending || state.extractingMemory || state.uploadingAttachments;
   $('#sendButton').disabled = frozen;
   $('#messageInput').disabled = state.extractingMemory;
   $('#memoryExtractionButton').disabled = frozen || !state.extractionStatus?.canExtract;
+  $('#attachmentButton').disabled = frozen || state.bootstrap?.sandbox?.enabled !== true
+    || state.pendingAttachments.length >= Number(state.bootstrap?.artifactUpload?.maxFilesPerMessage || DEFAULT_ATTACHMENT_MAX_FILES);
   $('#composerForm').classList.toggle('frozen', state.extractingMemory);
+}
+
+function renderPendingAttachments() {
+  const root = $('#attachmentTray');
+  const count = state.pendingAttachments.length;
+  $('#attachmentCount').textContent = count;
+  $('#attachmentCount').classList.toggle('hidden', count === 0);
+  root.classList.toggle('hidden', count === 0 && !state.uploadingAttachments);
+  root.innerHTML = [
+    ...state.pendingAttachments.map((item) => `<span class="pending-attachment"><i data-lucide="file-text"></i><span><strong>${escapeHtml(item.fileName)}</strong><small>${escapeHtml(formatBytes(item.sizeBytes))}</small></span><button type="button" data-remove-attachment="${escapeHtml(item.id)}" title="移除附件" aria-label="移除 ${escapeHtml(item.fileName)}"><i data-lucide="x"></i></button></span>`),
+    ...(state.uploadingAttachments ? ['<span class="pending-attachment uploading"><i data-lucide="loader-circle"></i><span><strong>正在上传</strong><small>完成后可随消息发送</small></span></span>'] : [])
+  ].join('');
+  $$('[data-remove-attachment]', root).forEach((button) => button.addEventListener('click', () => {
+    state.pendingAttachments = state.pendingAttachments.filter((item) => item.id !== button.dataset.removeAttachment);
+    renderPendingAttachments();
+    updateComposerAvailability();
+  }));
+  refreshIcons();
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function uploadAttachments(fileList) {
+  const files = [...fileList];
+  if (!files.length || state.uploadingAttachments) return;
+  if (state.bootstrap?.sandbox?.enabled !== true) {
+    toast('沙箱 Runtime 尚未启用，当前不能上传文档', 'error');
+    return;
+  }
+  const contract = state.bootstrap.artifactUpload || {};
+  const maximumFiles = Number(contract.maxFilesPerMessage || DEFAULT_ATTACHMENT_MAX_FILES);
+  const maximumBytes = Number(contract.maxBytes || DEFAULT_ATTACHMENT_MAX_BYTES);
+  const allowedExtensions = new Set(contract.allowedExtensions || []);
+  if (state.pendingAttachments.length + files.length > maximumFiles) {
+    toast(`每条消息最多附带 ${maximumFiles} 个文件`, 'error');
+    return;
+  }
+  state.uploadingAttachments = true;
+  renderPendingAttachments();
+  updateComposerAvailability();
+  try {
+    for (const file of files) {
+      const extension = `.${String(file.name).split('.').at(-1)?.toLowerCase() || ''}`;
+      if (file.size <= 0 || file.size > maximumBytes) {
+        throw new Error(`${file.name} 超过 ${Math.ceil(maximumBytes / 1024 / 1024)}MB 上限`);
+      }
+      if (allowedExtensions.size && !allowedExtensions.has(extension)) {
+        throw new Error(`${file.name} 的文件类型不受支持`);
+      }
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const artifact = await api('/api/artifacts/upload', {
+        method: 'POST',
+        body: {
+          user_id: state.currentUserId,
+          agent_id: state.currentAgentId,
+          conversation_id: state.currentConversationId,
+          file_name: file.name,
+          mime_type: file.type || 'application/octet-stream',
+          data_base64: bytesToBase64(bytes)
+        }
+      });
+      state.pendingAttachments.push(artifact);
+      renderPendingAttachments();
+    }
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    state.uploadingAttachments = false;
+    $('#attachmentInput').value = '';
+    renderPendingAttachments();
+    updateComposerAvailability();
+  }
 }
 
 function renderExtractionStatus() {
@@ -823,7 +934,7 @@ function openUnlockedPlots() {
 
 async function sendMessage(text) {
   const message = text.trim();
-  if (state.sending || state.extractingMemory || !message) return;
+  if (state.sending || state.extractingMemory || state.uploadingAttachments || !message) return;
   const messageCharacters = Array.from(message).length;
   if (messageCharacters > CHAT_MESSAGE_MAX_CHARACTERS) {
     toast(`单条消息最多 ${CHAT_MESSAGE_MAX_CHARACTERS} 字，当前为 ${messageCharacters} 字`, 'error');
@@ -839,12 +950,24 @@ async function sendMessage(text) {
     id: `local_${Date.now()}`,
     role: 'user',
     content: message,
-    created_at: new Date().toISOString()
+    created_at: new Date().toISOString(),
+    metadata: { attachments: [...state.pendingAttachments] }
   };
   state.messages.push(optimistic);
   const agent = currentAgent();
-  renderMessages(`<div class="message-row assistant" id="streamingRow"><span class="message-avatar" style="background:${escapeHtml(agent?.avatar_color || '#2563eb')}">${escapeHtml(agent?.name?.slice(0, 1) || '角')}</span><div class="message-body"><div class="message-bubble thinking" id="streamingBubble"><i></i><i></i><i></i></div></div></div>`);
+  renderMessages(`<div class="message-row assistant" id="streamingRow"><span class="message-avatar" style="background:${escapeHtml(agent?.avatar_color || '#2563eb')}">${escapeHtml(agent?.name?.slice(0, 1) || '角')}</span><div class="message-body"><div id="streamingActivities" class="streaming-activities hidden"></div><div class="message-bubble thinking" id="streamingBubble"><i></i><i></i><i></i></div></div></div>`);
   let streamedText = '';
+  const activity = { tools: new Map(), tasks: [], workflows: [] };
+  const renderActivities = () => {
+    const root = $('#streamingActivities');
+    if (!root) return;
+    const toolRows = [...activity.tools.values()].map((item) => `<div class="streaming-tool ${escapeHtml(item.phase)} ${item.isError ? 'error' : ''}"><i data-lucide="${item.phase === 'end' ? (item.isError ? 'circle-x' : 'circle-check') : 'loader-circle'}"></i><span><strong>${escapeHtml(item.toolName || '运行时工具')}</strong><small>${item.phase === 'start' ? '开始执行' : item.phase === 'update' ? '执行中' : item.isError ? '执行失败' : '执行完成'}</small></span></div>`).join('');
+    const taskRows = activity.tasks.length ? `<section class="streaming-subagents"><header><span><i data-lucide="git-fork"></i><strong>并行子任务</strong></span><small>${activity.tasks.filter((item) => item.status === 'success').length}/${activity.tasks.length} 完成</small></header>${activity.tasks.map((item) => `<div class="streaming-subagent ${escapeHtml(item.status || 'queued')}"><i data-lucide="${item.status === 'success' ? 'circle-check' : item.status === 'error' ? 'circle-x' : item.status === 'running' ? 'loader-circle' : 'clock-3'}"></i><span><strong>${escapeHtml(item.taskName || '子任务')}</strong><small>${escapeHtml(item.role || 'general-purpose')}${item.durationMs ? ` · ${Number(item.durationMs)}ms` : ''}</small></span></div>`).join('')}</section>` : '';
+    const workflowRows = activity.workflows.length ? `<section class="streaming-subagents deep"><header><span><i data-lucide="git-branch"></i><strong>持久 Deep Agent</strong></span><small>已交给独立 Worker</small></header>${activity.workflows.map((item) => `<div class="streaming-subagent ${escapeHtml(item.status || 'queued')}"><i data-lucide="database-zap"></i><span><strong>${escapeHtml(item.runId || '工作流')}</strong><small>${Number(item.nodes?.length || 0)} 个 DAG 节点 · ${escapeHtml(item.status || 'queued')}</small></span></div>`).join('')}</section>` : '';
+    root.innerHTML = toolRows + taskRows + workflowRows;
+    root.classList.toggle('hidden', !root.innerHTML);
+    refreshIcons();
+  };
   const renderStreamedText = () => {
     const bubble = $('#streamingBubble');
     if (!bubble) return;
@@ -869,7 +992,8 @@ async function sendMessage(text) {
         agent_id: state.currentAgentId,
         conversation_id: state.currentConversationId,
         previous_conversation_id: state.previousConversationId,
-        message
+        message,
+        attachment_ids: state.pendingAttachments.map((item) => item.id)
       }
     }, (event) => {
       if (event.type === 'turn_start') {
@@ -880,10 +1004,26 @@ async function sendMessage(text) {
         streamedText += event.delta;
         renderStreamedText();
       }
+      if (event.type === 'tool_activity') {
+        activity.tools.set(event.toolCallId || event.toolName, event);
+        renderActivities();
+      }
+      if (event.type === 'subagent_update') {
+        activity.tasks = Array.isArray(event.tasks) ? event.tasks : [];
+        renderActivities();
+      }
+      if (event.type === 'deep_agent_update') {
+        const index = activity.workflows.findIndex((item) => item.runId === event.runId);
+        if (index >= 0) activity.workflows[index] = event;
+        else activity.workflows.push(event);
+        renderActivities();
+      }
     });
     streamedText = String(result.message?.content || streamedText);
     renderStreamedText();
     state.currentConversationId = result.conversation.id;
+    state.pendingAttachments = [];
+    renderPendingAttachments();
     state.extractionStatus = result.memoryExtraction || state.extractionStatus;
     renderExtractionStatus();
     if (result.diagnostics?.previousMemoryFlushStatus !== 'degraded') state.previousConversationId = '';
@@ -952,7 +1092,7 @@ async function loadArchitectureOverview() {
   state.architectureOverview = await api(`/api/architecture/overview?scene_id=${encodeURIComponent(sceneId)}`);
   const {
     thresholds, compression, timing, index, scene, runtime = {}, capabilities = {}, graphStore = {}, temporal = {},
-    graphOntology = {}, headlessMemory = {}
+    graphOntology = {}, headlessMemory = {}, sandbox = {}, subagents = {}, deepAgent = {}, artifactUpload = {}
   } = state.architectureOverview;
   const main = thresholds.mainModel;
   const extraction = thresholds.extraction;
@@ -968,6 +1108,23 @@ async function loadArchitectureOverview() {
   $('#architecturePiNodeMeta').textContent = runtime.name === 'pi-agent-core'
     ? `ReAct 工具循环已启用 · 最多 ${Number(runtime.maxToolCalls || 0)} 次工具 / ${Number(runtime.maxModelTurns || 0)} 次模型请求 · ${capabilities.mcpClient || 'MCP Client'}`
     : 'Legacy 模式 · 可通过 AGENT_RUNTIME=pi 启用';
+  $('#architectureSubagentNodeMeta').textContent = subagents.enabled
+    ? `按多任务意图动态暴露 · 并发 ${Number(subagents.maxConcurrency || 0)} · 单次 ${Number(subagents.maxTasksPerCall || 0)} 项 · 深度 ${Number(subagents.maxDepth || 1)}`
+    : '当前部署已关闭 · 设置 SUBAGENT_RUNTIME_ENABLED=true 启用';
+  $('#architectureSubagentLaneMeta').textContent = subagents.enabled
+    ? `单次最多 ${Number(subagents.maxTasksPerCall || 0)} 项 · 并发 ${Number(subagents.maxConcurrency || 0)} · 深度 ${Number(subagents.maxDepth || 1)}`
+    : '当前部署未启用 Subagent';
+  const deepWorker = deepAgent.worker || {};
+  const deepLimits = deepAgent.limits || {};
+  $('#architectureDeepAgentNodeMeta').textContent = deepAgent.enabled
+    ? `持久 DAG + 检查点 + 审批 + 重规划 · Worker ${deepAgent.workerMode || 'inline'} · 活跃 ${Number(deepAgent.runs?.active || 0)}`
+    : '当前部署已关闭 · 设置 DEEP_AGENT_RUNTIME_ENABLED=true 启用';
+  $('#architectureDeepWorkerNodeMeta').textContent = deepAgent.enabled
+    ? `${deepWorker.running ? '正在运行' : '等待外部进程'} · ${deepAgent.workerMode || 'inline'} · 并发 ${Number(deepLimits.maxConcurrency || 0)} · 租约 ${Number(deepLimits.leaseSeconds || 0)}s`
+    : '当前部署未启用 Deep Agent Worker';
+  $('#architectureDeepWorkerLaneMeta').textContent = deepAgent.enabled
+    ? `${deepAgent.workerMode || 'inline'} Worker · 并发 ${Number(deepLimits.maxConcurrency || 0)} · 节点上限 ${Number(deepLimits.maxNodesPerRun || 0)}`
+    : 'Worker 已关闭，计划可记录但不会执行';
   const memoryModeCount = Array.isArray(headlessMemory.extractionModes)
     ? headlessMemory.extractionModes.length
     : 3;
@@ -992,6 +1149,10 @@ async function loadArchitectureOverview() {
     : (graphStore.mode === 'sqlite'
       ? 'SQLite 降级模式 · 设置 GRAPH_STORE=neo4j 后投影事实图与语义关联图'
       : '运行态未连接 · Compose/生产环境默认启用 Neo4j');
+  $('#architectureSandboxNodeMeta').textContent = sandbox.enabled
+    ? `${sandbox.provider || 'sandbox'} · ${sandbox.productionReady ? '生产隔离已就绪' : '开发仿真'} · 网络默认 ${sandbox.networkDefault || 'deny'} · ${Number(sandbox.sessions?.ready || 0)} 个就绪工作区`
+    : '当前部署已关闭 · 生产需 OpenSandbox，不能回退宿主机命令执行';
+  $('#architectureArtifactNodeMeta').textContent = `用户/角色/会话隔离 · 单文件 ${Math.ceil(Number(artifactUpload.maxBytes || DEFAULT_ATTACHMENT_MAX_BYTES) / 1024 / 1024)}MB · 每轮 ${Number(artifactUpload.maxFilesPerMessage || DEFAULT_ATTACHMENT_MAX_FILES)} 个`;
   $('#architectureExtractionNodeTitle').textContent = `长期记忆更新（每 ${extractionInterval} 轮）`;
   $('#architectureExtractionStepTitle').textContent = '长期记忆更新';
   $('#architectureCompressionStatus').textContent = compression.rollingSummaryEnabled ? '滚动摘要已启用' : '滚动摘要未启用';
@@ -3496,6 +3657,37 @@ function traceMs(value, prefix = '') {
   return Number.isFinite(number) ? `${prefix}${number} ms` : '—';
 }
 
+function deepAgentRunHtml(run) {
+  const nodes = Array.isArray(run.nodes) ? run.nodes : [];
+  const edges = Array.isArray(run.edges) ? run.edges : [];
+  const approvals = Array.isArray(run.approvals) ? run.approvals : [];
+  const pendingApprovals = approvals.filter((item) => item.status === 'pending');
+  const nodeIcon = (status) => ({
+    succeeded: 'circle-check', running: 'loader-circle', failed: 'circle-x',
+    waiting_approval: 'shield-question', reconciling: 'scan-search', skipped: 'circle-slash-2',
+    superseded: 'replace', cancelled: 'ban'
+  })[status] || 'clock-3';
+  const edgeText = edges.length
+    ? edges.map((edge) => `${edge.fromNodeKey} → ${edge.toNodeKey}`).join(' · ')
+    : '单节点工作流';
+  return `<article class="trace-deep-run ${escapeHtml(run.status)}" data-deep-run-id="${escapeHtml(run.id)}">
+    <header>
+      <span><i data-lucide="git-branch"></i><strong>${escapeHtml(run.objective)}</strong></span>
+      <span class="badge ${run.status === 'succeeded' ? 'blue' : ['failed', 'reconciling'].includes(run.status) ? 'amber' : ''}">${escapeHtml(run.status)}</span>
+    </header>
+    <div class="trace-deep-meta"><code>${escapeHtml(run.id)}</code><span>plan v${Number(run.planVersion || 1)}</span><span>重规划 ${Number(run.replanCount || 0)}/${Number(run.maxReplans || 0)}</span></div>
+    <div class="trace-deep-dag" aria-label="Deep Agent DAG">
+      ${nodes.map((node) => `<div class="trace-deep-node ${escapeHtml(node.status)}"><i data-lucide="${nodeIcon(node.status)}"></i><span><strong>${escapeHtml(node.title)}</strong><small>${escapeHtml(node.nodeKey)} · ${escapeHtml(node.role)} · ${escapeHtml(node.toolProfile)} · ${Number(node.attempt || 0)}/${Number(node.maxAttempts || 0)}</small>${node.error ? `<em>${escapeHtml(node.error)}</em>` : ''}</span></div>`).join('')}
+    </div>
+    <div class="trace-deep-edges"><i data-lucide="route"></i><span>${escapeHtml(edgeText)}</span></div>
+    ${pendingApprovals.map((approval) => {
+      const node = nodes.find((item) => item.id === approval.nodeId);
+      return `<div class="trace-deep-approval"><span><i data-lucide="shield-question"></i><span><strong>等待审批：${escapeHtml(node?.title || approval.nodeId)}</strong><small>${escapeHtml(approval.reason)}</small></span></span><div><button class="button secondary compact" data-deep-approval="rejected" data-approval-id="${escapeHtml(approval.id)}">拒绝</button><button class="button primary compact" data-deep-approval="approved" data-approval-id="${escapeHtml(approval.id)}">批准</button></div></div>`;
+    }).join('')}
+    ${run.resultText ? `<details class="trace-deep-result"><summary>最终结果</summary><div class="markdown-body">${renderMarkdown(run.resultText)}</div></details>` : ''}
+  </article>`;
+}
+
 function traceCollaborationHtml(trace, modelSpan, modelOutput) {
   const runtime = modelOutput.runtime || {};
   const bridge = runtime.providerBridge || {};
@@ -3556,7 +3748,13 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
   const systemMemoryTools = Array.isArray(capabilityOutput.systemMemory?.exposedTools)
     ? capabilityOutput.systemMemory.exposedTools
     : (Array.isArray(modelInput.systemMemoryTools) ? modelInput.systemMemoryTools : []);
-  const unlockedTools = exposedTools.filter((tool) => tool.sourceType !== 'system_memory');
+  const sandboxTools = Array.isArray(capabilityOutput.sandbox?.exposedTools)
+    ? capabilityOutput.sandbox.exposedTools : [];
+  const subagentTools = Array.isArray(capabilityOutput.subagents?.exposedTools)
+    ? capabilityOutput.subagents.exposedTools : [];
+  const deepAgentTools = Array.isArray(capabilityOutput.deepAgent?.exposedTools)
+    ? capabilityOutput.deepAgent.exposedTools : [];
+  const unlockedTools = exposedTools.filter((tool) => !['system_memory', 'sandbox', 'subagent', 'deep_agent'].includes(tool.sourceType));
   const toolExecutions = lifecycle.filter((event) => event.type === 'tool_execution_end');
   const callCount = Number(bridge.requestCount || providerCalls.length || (bridge.status ? 1 : 0));
   const gateStatus = answerabilityOutput.status || '未记录';
@@ -3573,6 +3771,18 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
   const lifecycleHtml = lifecycle.length
     ? lifecycle.map((event) => `<span><b>${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[event.type] || event.type)}</b><small>${traceMs(event.atMs, '+')}</small></span>`).join('')
     : '<span><b>无生命周期事件</b><small>legacy runtime</small></span>';
+  const subagentTasks = Array.isArray(trace.subagentTasks) ? trace.subagentTasks : [];
+  const deepAgentRuns = Array.isArray(trace.deepAgentRuns) ? trace.deepAgentRuns : [];
+  const sandboxRuns = Array.isArray(trace.sandboxRuns) ? trace.sandboxRuns : [];
+  const artifacts = Array.isArray(trace.artifacts) ? trace.artifacts : [];
+  const executionPlaneHtml = (deepAgentRuns.length || subagentTasks.length || sandboxRuns.length || artifacts.length) ? `
+    <section class="trace-execution-plane">
+      <header><span><i data-lucide="workflow"></i><strong>执行工作区</strong></span><small>${deepAgentRuns.length} 个持久工作流 · ${subagentTasks.length} 个子任务 · ${sandboxRuns.length} 次沙箱调用 · ${artifacts.length} 个产物</small></header>
+      ${deepAgentRuns.length ? `<div class="trace-task-group"><span class="trace-lifecycle-label">持久 Deep Agent</span>${deepAgentRuns.map(deepAgentRunHtml).join('')}</div>` : ''}
+      ${subagentTasks.length ? `<div class="trace-task-group"><span class="trace-lifecycle-label">并行 Subagent</span>${subagentTasks.map((task) => `<div class="trace-task-row ${escapeHtml(task.status)}"><i data-lucide="${task.status === 'success' ? 'circle-check' : task.status === 'error' ? 'circle-x' : task.status === 'running' ? 'loader-circle' : 'clock-3'}"></i><span><strong>${escapeHtml(task.taskName)}</strong><small>${escapeHtml(task.role)} · ${escapeHtml(task.toolProfile)} · depth ${Number(task.depth || 1)}</small></span><time>${traceMs(task.durationMs)}</time></div>`).join('')}</div>` : ''}
+      ${sandboxRuns.length ? `<div class="trace-task-group"><span class="trace-lifecycle-label">沙箱工具</span>${sandboxRuns.map((run) => `<div class="trace-task-row ${escapeHtml(run.status)}"><i data-lucide="${run.status === 'success' ? 'terminal-square' : 'circle-x'}"></i><span><strong>${escapeHtml(run.tool_name)}</strong><small>${escapeHtml(run.provider || 'sandbox')} · ${escapeHtml(run.image || 'runtime image')}${run.exit_code === null ? '' : ` · exit ${Number(run.exit_code)}`}</small></span><time>${traceMs(run.duration_ms)}</time></div>`).join('')}</div>` : ''}
+      ${artifacts.length ? `<div class="trace-artifact-group"><span class="trace-lifecycle-label">可下载产物</span><div>${artifacts.map((item) => `<a href="${escapeHtml(item.downloadUrl)}" target="_blank" rel="noopener noreferrer"><i data-lucide="file-down"></i><span><strong>${escapeHtml(item.fileName)}</strong><small>${escapeHtml(formatBytes(item.sizeBytes))}</small></span></a>`).join('')}</div></div>` : ''}
+    </section>` : '';
 
   return `
     <section class="trace-collaboration" aria-label="Runtime 与模型协作视图">
@@ -3592,11 +3802,12 @@ function traceCollaborationHtml(trace, modelSpan, modelOutput) {
       <div class="trace-sequence">
         <div><span class="trace-sequence-index">01</span><strong>召回、前提校验与输入组装</strong><small>${escapeHtml(assemblyNote)} 证据门：${escapeHtml(gateStatus)}。</small><time>${traceMs((retrievalSpan?.duration_ms || 0) + (answerabilitySpan?.duration_ms || 0) + (promptSpan?.duration_ms || 0))}</time></div>
         <div><span class="trace-sequence-index">02</span><strong>${escapeHtml(runtimeName)} 接管本轮</strong><small>${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[firstEvent.type] || firstEvent.type || '启动')} → ${escapeHtml(TRACE_RUNTIME_EVENT_LABELS[lastEvent.type] || lastEvent.type || '收口')}，维护 Agent state 与消息生命周期。</small><time>${traceMs(firstEvent.atMs, '+')}</time></div>
-        <div><span class="trace-sequence-index">03</span><strong>暴露 ${exposedTools.length} 个当轮工具</strong><small>${exposedTools.length ? `系统只读记忆 ${systemMemoryTools.length} 个，已解锁 Skill / MCP ${unlockedTools.length} 个：${escapeHtml(exposedTools.map((tool) => tool.name).join('、'))}` : '本轮没有可调用工具，模型直接生成文本。'}</small><time>${traceMs(capabilitySpan?.duration_ms)}</time></div>
-        <div><span class="trace-sequence-index">04</span><strong>Provider Bridge 发起 ${callCount} 次模型请求</strong><small>${toolLoopEnabled ? '模型可按证据缺口调用 memory_search / memory_expand，或选择已解锁能力；执行结果作为 toolResult 回灌 Pi，再由模型继续推理。' : `Pi 将统一消息请求交给 ${escapeHtml(model)}，模型直接返回最终文本。`}</small><time>${traceMs(bridge.responseAtMs, '+')}</time></div>
+        <div><span class="trace-sequence-index">03</span><strong>暴露 ${exposedTools.length} 个当轮工具</strong><small>${exposedTools.length ? `系统记忆 ${systemMemoryTools.length} · Skill/MCP ${unlockedTools.length} · 沙箱 ${sandboxTools.length} · Subagent ${subagentTools.length} · Deep Agent ${deepAgentTools.length}：${escapeHtml(exposedTools.map((tool) => tool.name).join('、'))}` : '本轮没有可调用工具，模型直接生成文本。'}</small><time>${traceMs(capabilitySpan?.duration_ms)}</time></div>
+        <div><span class="trace-sequence-index">04</span><strong>Provider Bridge 发起 ${callCount} 次模型请求</strong><small>${toolLoopEnabled ? '模型可补召回记忆、选择已解锁能力，或在路由允许时派发并行子任务与沙箱工具；所有结果作为 toolResult 回灌 Pi，再由父模型审核续答。' : `Pi 将统一消息请求交给 ${escapeHtml(model)}，模型直接返回最终文本。`}</small><time>${traceMs(bridge.responseAtMs, '+')}</time></div>
         <div><span class="trace-sequence-index">05</span><strong>Turn Pipeline 完成轮后处理</strong><small>长期记忆更新：${noShortTermReplay ? '调试禁用' : escapeHtml(memoryOutput.status || '未触发')}${extractionPipelineSummary ? `；${escapeHtml(extractionPipelineSummary)}` : ''}；本轮召回 ${Number.isFinite(selectedMemories) ? selectedMemories : 0} 条候选记忆。</small><time>${traceMs(memorySpan?.duration_ms)}</time></div>
       </div>
       ${toolLoopEnabled ? `<div class="trace-react-loop"><span class="trace-lifecycle-label">ReAct 调用链</span><div>${reactLoopHtml || '<span>本轮暴露了工具，但模型没有调用。</span>'}</div></div>` : ''}
+      ${executionPlaneHtml}
       <div class="trace-lifecycle"><span class="trace-lifecycle-label">Pi 生命周期</span><div>${lifecycleHtml}</div></div>
     </section>`;
 }
@@ -3648,6 +3859,21 @@ async function loadTraceDetail(id) {
       const output = parseJson(span.output_json, {});
       return `<details class="span-item"><summary><span class="span-status ${span.status === 'error' ? 'error' : ''}"></span><span><b>${index + 1}. ${escapeHtml(traceSpanLabel(span.name))}</b><code>${escapeHtml(span.name)}</code></span><time>${span.duration_ms} ms</time></summary><div class="span-body"><span class="code-label">Input</span><pre class="code-block">${escapeHtml(JSON.stringify(input, null, 2))}</pre><span class="code-label">Output</span><pre class="code-block">${escapeHtml(JSON.stringify(output, null, 2))}</pre></div></details>`;
     }).join('')}</div></details>`;
+  $$('[data-deep-approval]', $('#traceDetail')).forEach((button) => button.addEventListener('click', async () => {
+    const decision = button.dataset.deepApproval;
+    button.disabled = true;
+    try {
+      await api(`/api/deep-agent/approvals/${encodeURIComponent(button.dataset.approvalId)}/decision`, {
+        method: 'POST',
+        body: { decision }
+      });
+      toast(decision === 'approved' ? '已批准，Worker 将继续执行' : '已拒绝，工作流已停止');
+      await loadTraceDetail(id);
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message, 'error');
+    }
+  }));
   refreshIcons();
 }
 
@@ -3759,11 +3985,15 @@ $('#newConversationButton').addEventListener('click', () => {
   if (state.currentConversationId) state.previousConversationId = state.currentConversationId;
   state.currentConversationId = '';
   state.extractionStatus = null;
+  state.pendingAttachments = [];
+  renderPendingAttachments();
   renderConversations();
   renderWelcome();
   $('#messageInput').focus();
 });
 $('#composerForm').addEventListener('submit', (event) => { event.preventDefault(); sendMessage($('#messageInput').value); });
+$('#attachmentButton').addEventListener('click', () => $('#attachmentInput').click());
+$('#attachmentInput').addEventListener('change', (event) => uploadAttachments(event.target.files));
 $('#memoryExtractionButton').addEventListener('click', extractMemoryNow);
 $('#unlockedPropsButton').addEventListener('click', openUnlockedProps);
 $('#unlockedPlotsButton').addEventListener('click', openUnlockedPlots);

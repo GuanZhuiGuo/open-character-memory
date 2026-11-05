@@ -10,7 +10,7 @@ Group=memory-agent
 WorkingDirectory=/opt/memory-agent-studio
 Environment=NODE_ENV=production
 EnvironmentFile=-/etc/memory-agent.env
-ExecStart=/usr/bin/env PORT=4180 BASE_PATH=/memory-agent DATABASE_PATH=/opt/memory-agent-studio/data/memory-agent.db /opt/node-v24/bin/node /opt/memory-agent-studio/server.js
+ExecStart=/usr/bin/env PORT=4180 BASE_PATH=/memory-agent DATABASE_PATH=/opt/memory-agent-studio/data/memory-agent.db DEEP_AGENT_WORKER_MODE=external /opt/node-v24/bin/node /opt/memory-agent-studio/server.js
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

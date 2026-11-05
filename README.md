@@ -6,9 +6,13 @@
 
 Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的开源记忆 Agent 参考实现和可视化工作台。它不只“记得用户”，也会管理角色说过的话、双方共同经历、事件更正、关系状态与剧情分支。系统将管理员定义的结构化字段、用户明确偏好、事件图谱、当前有效状态和混合召回分层管理。
 
-当前 `0.7.0` 采用 **Pi Agent Core ReAct runtime + 多粒度/纠正式/Agentic 记忆召回 + SQLite 双时态主账本 + Neo4j 可重建事实图与语义关联图投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
+当前 `0.8.0` 采用 **Pi Agent Core ReAct runtime + 持久 Plan-Execute Deep Agent + 多粒度/纠正式/Agentic 记忆召回 + SQLite 双时态主账本 + Neo4j 可重建事实图与语义关联图投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
 
-![Open Character Memory 总体架构](docs/assets/overall-architecture-v0.7.0.png)
+`0.8.0` 同时保留两种协作路径：当前 Turn 内的 **有界并行 Subagent** 用于短小独立任务；跨请求的 **持久 Deep Agent** 将模型提出的 DAG 交给服务端校验和独立 Worker，支持检查点、租约恢复、人工审批、受限重规划和不可幂等写入对账。文件、文档和命令继续只在 OpenSandbox 中运行。
+
+![Open Character Memory v0.8.0 总体架构](docs/assets/overall-architecture-v0.8.0.png)
+
+[打开可交互架构图](docs/memory-agent-deep-runtime-v2.architecture.html)
 
 ## 项目特点
 
@@ -18,6 +22,8 @@ Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的�
 - **多粒度与 Agentic 召回**：同一规范事件生成六类可重建检索视图；动态 Router、语义关联图和有界 PPR 发现候选，回复前 Corrective Planner 与生成中只读记忆工具继续补齐证据。
 - **可配置记忆契约**：管理员可定义结构化字段、抽取节奏、提示词、召回策略和基于状态的剧情/道具触发。
 - **受控 Agent 能力**：已解锁的 Skill/MCP 才会当轮暴露，工具结果回传 Pi 后再由主模型续答，并保留确认、白名单和执行回执。
+- **沙箱与并行协作**：明确文件/命令任务可进入 OpenSandbox；主模型可将独立任务派发给上下文隔离、工具受限的并行 Subagent，再综合结果。
+- **持久 Deep Agent**：复杂任务以 Run/Node/Edge DAG 落库，独立 Worker 跨请求执行；检查点、审批、重规划、取消、租约恢复和副作用回执都可在 Trace 审计。
 - **可观测与可评测**：Trace 展示完整 Prompt、记忆注入、召回证据、模型/工具循环与轮后写入，仓库附带离线回归评测。
 - **Headless 记忆契约**：新增 `observe / recall / expand / mutate / forget` 原子 API、持久化抽取队列、TypeScript SDK、Pi/通用适配器和只读 MCP Server，现有 Studio 功能保持兼容。
 
@@ -82,6 +88,9 @@ await memory.observe({
 - 单条聊天消息最多 1000 个 Unicode 字符，客户端即时拦截且服务端再次校验；用户总数达到 15 后关闭自助注册并提示联系韩康获取体验账户。
 - 文本 Provider 支持 Ark、OpenAI、Anthropic 和离线 Mock；Embedding 支持 Ark、OpenAI 和本地确定性降级，可独立选择。
 - 主回复由 `@earendil-works/pi-agent-core` 承担 ReAct 式 turn 状态、生命周期与工具循环。服务端按记忆意图/已有证据路由只读 `memory_search / memory_expand`，并按解锁资格、工具白名单、确认策略、主机/命令白名单和次数上限额外暴露 Skill/MCP；两类结果都以标准 `toolResult` 返回 Pi 后触发模型二次推理。记忆工具不能写状态，也不能接受模型传入 user/agent/story/branch。
+- 文件、文档与命令能力采用“确定性意图路由 + 模型自主选择”：普通陪聊不暴露沙箱工具；明确任务才提供只读、文档或完整工作区 profile。生产环境只允许独立 OpenSandbox，上传文件进入只读 `input`，生成物进入 `output` 并登记为作用域化 Artifact。
+- 多项独立任务可通过 `delegate_parallel_tasks` 派发给 `researcher / analyst / writer / verifier / general-purpose` 子 Agent；默认最多 4 项、并发 3、深度 1。子 Agent 不继承完整主对话、不递归派生，并可按 profile 使用自己的沙箱目录。对话流和 Trace 会实时展示状态、耗时、沙箱运行和产物。
+- 多阶段、长任务、需审批或需断点恢复的请求可通过 `start_durable_workflow` 创建持久 DAG。模型提出目标、节点、依赖和风险级别，服务端负责无环校验、作用域和预算；独立 Worker 按租约领取就绪节点。安全节点可从检查点恢复，不可幂等写入在结果未知时进入 `reconciling`，不会盲目重试。
 - Neo4j 保存当前实体、事件、声明、证据关系、六类 MemoryView 和 `ASSOCIATED_WITH` 语义边的只读投影；SQLite 提交成功后按 scope 合并 outbox，投影失败不丢主记录，可由 `POST /api/admin/graph/replay` 重放。
 - 主模型 Input 分为稳定前缀与动态上下文：角色人设、通用硬规则和角色固定属性可缓存；服务器当前时间、结构化记忆、剧情、召回结果与短期对话逐轮重新编译。Ark 默认只展示 Responses usage 中的 Provider 托管缓存；`cached_tokens=0` 表示上游未报告命中或本次未命中，不能推断为本地缓存故障。只有配置兼容的 Endpoint ID 并显式设置 `ARK_PREFIX_CACHE_MODE=common_prefix` 时才使用 Context API。
 
@@ -112,6 +121,8 @@ npm start
 打开 `http://127.0.0.1:4173`。当前本地实例的管理员密码由 `.env.local` 中的 `ADMIN_PASSWORD` 控制。
 
 挂载到 Nginx 子路径时设置 `BASE_PATH=/memory-agent`；本地根路径运行时留空。
+
+本地单进程默认使用 `DEEP_AGENT_WORKER_MODE=inline`。生产环境将 Web 与长任务拆开：Web 设置 `DEEP_AGENT_WORKER_MODE=external`，并运行 `npm run worker:deep-agent`；仓库提供 [`deploy/memory-agent-deep-worker.service`](deploy/memory-agent-deep-worker.service)，Compose 会自动启动对应 Worker。
 
 测试：
 
@@ -156,12 +167,16 @@ docker compose up --build
   -> Prompt 编译
   -> 当轮工具路由：记忆问题按需暴露只读 memory_search / memory_expand
                   + 已解锁 Skill 清单 / MCP tools/list -> 当轮能力白名单
+                  + 明确文件/命令意图 -> OpenSandbox 工具白名单
+                  + 明确多项独立任务 -> delegate_parallel_tasks
   -> Pi ReAct turn -> Text Provider 第 1 次推理
      -> 无需工具：直接生成角色回复
      -> 证据不足：tool call -> 服务端锁定作用域的长期记忆检索/图谱展开
                   -> active-only 证据 -> toolResult -> Text Provider 续答
      -> 需要能力：tool call -> 能力网关 -> Skill / MCP tools/call
                   -> 外部结果标记 + 执行回执 -> toolResult -> Text Provider 续答
+     -> 需要并行：tool call -> 有界并发池 -> 隔离 Subagents
+                  -> 可选 OpenSandbox 文件/文档/命令 -> 汇总 toolResult -> 主模型续答
   -> 持久化助手消息（语义轮结束，完整轮次计数 +1）
   -> 未达到 X 轮：保留原始消息并直接进入后置触发
   -> 达到 X 轮：合并水位后的待抽取批次
@@ -177,6 +192,8 @@ docker compose up --build
 当前运行模式是 `blocking_after_assistant`：系统在每条 assistant 消息落库后检查会话抽取水位，累计达到场景配置的 X 个完整轮次才启动抽取；如果未满 X 轮就切换或新建对话，则在下一次跨对话发送前先提交上一对话的尾批次。阈值轮会并行调用事件图谱与语义状态两条抽取管线，因此会产生两次文本模型请求；任一管线返回非法 JSON 时最多约束重试一次。抽取与记忆写入都在 `/api/chat` 请求内，调用方会阻塞等待模型、Embedding 和数据库操作完成；连续对话的非阈值轮不调用抽取模型。抽取成功后才推进水位，失败则保留批次等待后续重试。服务端按用户与角色串行化聊天请求，避免跨对话尾批次与当前回复并发改写同一记忆作用域；该锁不提供通用的数据库读取隔离。
 
 当前缓存只优化主模型稳定前缀，不缓存动态记忆，也不参与记忆是否有效的判断。Ark 默认使用 Responses 的 Provider 托管缓存；`common_prefix` 仅作为需要兼容 Endpoint ID 的显式可选模式。存在当轮工具时由 Pi 原生 tool-capable stream 执行，无工具时由内置 Provider bridge 执行，两条路径都保留真实 usage 和缓存命中统计。具体边界见 [`docs/cache-design.md`](docs/cache-design.md)。
+
+沙箱镜像、OpenSandbox 部署、工具权限和并行 Subagent 合同见 [`docs/sandbox-subagent-runtime.md`](docs/sandbox-subagent-runtime.md)；持久 DAG、Worker、检查点、审批与恢复语义见 [`docs/deep-agent-runtime.md`](docs/deep-agent-runtime.md)。仓库的 `compose.yaml` 不内置 OpenSandbox control plane；生产启用工具前必须独立部署并设置 `SANDBOX_RUNTIME_ENABLED=true`。
 
 主模型当前把最近 16 条消息（约 8 轮）作为短期记忆直接装配进 Input，未实现 token 阈值或滚动摘要。长期记忆更新默认每 8 轮执行一次，可按场景调低为 1-8 轮，但不能超过短期记忆容量；用户明确提出的长期回复规则仍走即时快通道。陪伴场景的抽取辅助上下文默认读取待抽取批次之前 2 轮、最多 4 条只读消息，只用来理解“它、那件事、还是改到银座”等代词、省略或承接关系，不会把这些历史内容重复写入长期记忆，可按场景配置为 1-10 轮。
 
@@ -217,7 +234,7 @@ OpenSearch 不应替换当前主记录库或 Neo4j。它更适合作为未来的
 
 ## 当前取舍
 
-现有 Studio 达到 X 轮阈值时仍同步抽取，保证下一轮一定看到已提交批次。Headless `observe` 另外支持 `none / sync / async`；`async` 使用 SQLite 持久化任务、幂等键、指数退避和 dead 状态，但仍是单机 worker，不冒充分布式队列。用户明确的称呼、风格和戏外更正在两条链路都保持同步通道。
+现有 Studio 达到 X 轮阈值时仍同步抽取，保证下一轮一定看到已提交批次。Headless `observe` 另外支持 `none / sync / async`；Deep Agent 任务使用持久 DAG 和独立 Worker。两者目前都以单机 SQLite WAL 为主记录库和抢占协调点，不冒充分布式队列；需要多主机水平扩展时仍应迁移 PostgreSQL 队列/租约实现。用户明确的称呼、风格和戏外更正在记忆链路中保持同步通道。
 
 Neo4j 投影的失败策略与主记忆抽取不同：主 SQLite 写入不会回滚，outbox 保留待重放 scope，当前请求可降级使用 SQLite 图关系继续回答。Compose 默认启动 Neo4j；直接运行 `npm start` 时可设置 `GRAPH_STORE=sqlite`，或提供 Neo4j 配置后设置 `GRAPH_STORE=neo4j`。
 
