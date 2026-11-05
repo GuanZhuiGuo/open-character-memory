@@ -10,6 +10,10 @@
 
 - Docker 构建上下文包含运行时总体架构图，容器可读取 `/api/architecture/diagram` 所需 HTML。
 
+### Resolved Bad Cases
+
+- Dockerfile 复制架构图时，整个文档目录被 `.dockerignore` 排除，导致镜像构建失败。构建上下文现在显式包含该运行时 HTML。
+
 ### Validation
 
 - 依赖安装、Node 24 测试 `125/125`、离线记忆回归 `5/5` 和开源预检通过。容器构建由 GitHub CI 验证。
