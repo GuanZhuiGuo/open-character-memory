@@ -377,9 +377,9 @@
               <button data-timeline-view="pre" role="tab" aria-selected="false">上下文与阈值</button>
               <button data-timeline-view="input" role="tab" aria-selected="false">模型 Input</button>
               <button data-timeline-view="write" role="tab" aria-selected="false">写入与重算</button>
+              <button data-timeline-view="care" role="tab" aria-selected="false">回顾与纠错</button>
             </div>
             <div class="architecture-toolbar-actions">
-              <a class="button secondary compact" href="__APP_BASE_PATH__/api/architecture/diagram" target="_blank" rel="noopener noreferrer">总体架构图</a>
               <div class="timeline-legend" aria-label="执行方式图例">
                 <span><i class="legend-mark sync"></i>本轮同步</span>
                 <span><i class="legend-mark demand"></i>按需 / 阈值</span>
@@ -422,6 +422,7 @@
                     <header><span>01</span><strong>产品入口</strong><small>Browser</small></header>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="messages-square"></i><span><strong>用户角色对话</strong><small>POST /api/chat</small></span></div>
                     <div class="architecture-node" data-phase="pre write"><i data-lucide="settings-2"></i><span><strong>管理员控制台</strong><small>角色、场景、记忆、触发器</small></span></div>
+                    <a class="architecture-node config-source" href="#memoryReadinessStrip" data-config-link data-jump-page="memory" data-jump-tab="reviews" data-jump-target="#memoryReadinessStrip" data-phase="care"><i data-lucide="list-checks"></i><span><strong>记忆处理状态</strong><small id="architectureReadinessNodeMeta">原文保存 · 抽取队列 · 检索视图 · 图谱投影</small></span></a>
                     <button type="button" class="architecture-node architecture-ai-node" data-open-architecture-assistant data-phase="input"><i data-lucide="bot"></i><span><strong>系统代码问答</strong><small>仅回答当前代码逻辑</small></span><i data-lucide="arrow-up-right"></i></button>
                   </section>
 
@@ -434,7 +435,8 @@
                     <div class="architecture-node" data-phase="generate write"><i data-lucide="workflow"></i><span><strong>Persistent Deep Agent Runtime</strong><small id="architectureDeepAgentNodeMeta">持久 DAG · 检查点 · 审批 · 重规划 · 独立 Worker</small></span></div>
                     <div class="architecture-node" data-phase="pre generate write"><i data-lucide="route"></i><span><strong>会话锁与 Turn Pipeline</strong><small>同一会话串行，保留现有调度功能</small></span></div>
                     <div class="architecture-node" data-phase="pre generate write input"><i data-lucide="braces"></i><span><strong>Headless Memory Runtime</strong><small id="architectureHeadlessNodeMeta">v1 原子 API · SDK / Pi / MCP</small></span></div>
-                    <div class="architecture-node" data-phase="pre generate input"><i data-lucide="layers-3"></i><span><strong>Prompt Compiler</strong><small>硬规则 + 角色属性 + 状态 + 最终召回</small></span></div>
+                    <div class="architecture-node" data-phase="pre input"><i data-lucide="layers"></i><span><strong>历史对话辅助摘要</strong><small id="architectureContextNodeMeta">历史软预算 · 来源水位 · 近期完整轮次</small></span></div>
+                    <div class="architecture-node" data-phase="pre generate input"><i data-lucide="layers-3"></i><span><strong>Prompt Compiler</strong><small>稳定前缀 + 当前有效记忆 + 辅助摘要；近期原文独立传入</small></span></div>
                     <div class="architecture-node" data-phase="pre generate write"><i data-lucide="plug-zap"></i><span><strong>Capability Gateway</strong><small>解锁过滤、白名单、确认、Skill/MCP 执行回执</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="brain-circuit"></i><span><strong>Corrective Recall Planner</strong><small>轻量目录 → 证据判断 → 改写 Query 跨 active 事件与声明检索</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="waypoints"></i><span><strong>Multi-Granularity Router</strong><small id="architectureRouterNodeMeta">六视图 · Shadow / Dynamic / A-B</small></span></div>
@@ -454,6 +456,8 @@
                     <div class="architecture-node" data-phase="pre"><i data-lucide="user-round"></i><span><strong>用户记忆</strong><small>结构化状态 + 独立事实/偏好/状态 + 双时态事件</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="book-heart"></i><span><strong>我们的故事</strong><small>被用户承接的角色言行 + 共同承诺，双证据隔离</small></span></div>
                     <div class="architecture-node" data-phase="pre write"><i data-lucide="layers-3"></i><span><strong>六类检索视图</strong><small>原话 / 事件 / 声明 / 片段 / 摘要 / 实体关键词；均指回规范事件</small></span></div>
+                    <a class="architecture-node config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="reviews" data-jump-target="#memoryContent" data-phase="care"><i data-lucide="book-open"></i><span><strong>跨事件周期回顾</strong><small id="architectureReviewNodeMeta">按需选择周 / 月与主题 · 来源变更待重算</small></span></a>
+                    <a class="architecture-node config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="graph" data-jump-target="#memoryContent" data-phase="care write"><i data-lucide="git-compare-arrows"></i><span><strong>实体身份纠错</strong><small id="architectureRepairNodeMeta">合并 / 拆分 · 双时态版本 · 幂等审计 · 投影恢复</small></span></a>
                     <div class="architecture-node" data-phase="pre write"><i data-lucide="package-open"></i><span><strong>剧情与道具资格</strong><small>条件命中后解锁；当轮通过能力网关暴露给 Pi</small></span></div>
                     <div class="architecture-node" data-phase="write"><i data-lucide="scan-text"></i><span><strong id="architectureExtractionNodeTitle">长期记忆更新（每 X 轮）</strong><small id="architectureTemporalNodeMeta">抽取 → 双时态版本 → 图投影 → 触发</small></span></div>
                   </section>
@@ -467,8 +471,6 @@
                     <div class="architecture-node" data-phase="generate input"><i data-lucide="gauge"></i><span><strong>稳定前缀缓存</strong><small>只缓存人设与固定属性；失败回退完整请求</small></span></div>
                     <div class="architecture-node" data-phase="pre write input"><i data-lucide="database"></i><span><strong>SQLite · 主记录库（生产升级：PostgreSQL + pgvector）</strong><small id="architectureSqliteNodeMeta">双时态账本、声明证据链、六视图、语义边、任务与 outbox</small></span></div>
                     <div class="architecture-node" data-phase="pre write"><i data-lucide="share-2"></i><span><strong>Neo4j · 可重建图投影</strong><small id="architectureNeo4jNodeMeta">事实图 + 语义关联图；失败回退 SQLite</small></span></div>
-                    <div class="architecture-node" data-phase="pre input"><i data-lucide="layers"></i><span><strong>对话摘要快照</strong><small id="architectureContextNodeMeta">容量预算 · 覆盖水位 · 近期完整轮次</small></span></div>
-                    <div class="architecture-node" data-phase="write"><i data-lucide="book-open"></i><span><strong>周期回顾与实体纠错</strong><small>来源指纹 · 变更待重算 · 事务版本与审计</small></span></div>
                     <div class="architecture-node" data-phase="generate write"><i data-lucide="box"></i><span><strong>OpenSandbox · 执行隔离</strong><small id="architectureSandboxNodeMeta">网络 deny · 非 root · 命令白名单</small></span></div>
                     <div class="architecture-node" data-phase="generate write"><i data-lucide="server-cog"></i><span><strong>Deep Agent Worker · 长任务执行</strong><small id="architectureDeepWorkerNodeMeta">租约调度 · 重启恢复 · 多进程抢占</small></span></div>
                     <div class="architecture-node" data-phase="generate write"><i data-lucide="file-archive"></i><span><strong>Artifact Store · 附件与产物</strong><small id="architectureArtifactNodeMeta">用户/角色/会话隔离 · 下载可审计</small></span></div>
@@ -524,8 +526,8 @@
                 </div>
                 <div class="flow-node grid-col-6 has-arrow" data-phase="pre">
                   <span class="step-number">05</span><i data-lucide="layers-3"></i>
-                  <strong>上下文编译</strong>
-                  <small>稳定前缀 + 动态记忆，冲突消解与预算装配</small>
+                  <strong>历史整理与上下文编译</strong>
+                  <small>工具资格确定后整理历史；辅助摘要进入动态 system，近期原文独立传入</small>
                   <span class="timing sync">同步</span>
                 </div>
                 <div class="flow-node grid-col-7 has-arrow" data-phase="generate">
@@ -695,19 +697,20 @@
                 </div>
               </section>
 
-              <section class="timeline-grid swimlane compression-lane" aria-label="上下文压缩机制">
+              <section class="timeline-grid swimlane compression-lane" aria-label="上下文装配与事实优先级">
                 <div class="lane-label">
                   <i data-lucide="filter"></i>
                   <strong>上下文装配</strong>
-                  <span>当前按消息条数</span>
+                  <span>位置与可信级别</span>
                 </div>
                 <div class="context-pool grid-col-2 span-2" data-phase="pre">
-                  <div class="block-title"><span>候选上下文池</span><b>P0-P3</b></div>
+                  <div class="block-title"><span>候选上下文池</span><b>P0-P3 + AUX</b></div>
                   <div class="context-tiers">
                     <span><b>P0</b>安全边界 · 角色人设与固定属性 · 常驻控制</span>
                     <span><b>P1</b>当前关系 · 当前场景 · Active Claims</span>
                     <span><b>P2</b>纠正式展开事件 · 图谱证据 · 已解锁剧情</span>
-                    <span><b>P3</b><i id="architectureRecentContext">历史辅助摘要 + 近期完整轮次</i> · 当前消息已包含</span>
+                    <span><b>P3</b><i id="architectureRecentContext">近期完整轮次原文</i> · 当前消息已包含</span>
+                    <span><b>AUX</b>历史辅助摘要仅衔接话题；当前有效记忆与本轮更正优先</span>
                   </div>
                 </div>
                 <div class="compress-step grid-col-4 has-arrow" data-phase="pre">
@@ -728,21 +731,34 @@
                     <li>硬规则 / 人设</li>
                     <li>常驻控制 / 当前状态</li>
                     <li>相关图谱 / 历史事件</li>
+                    <li>辅助摘要 · dynamic system</li>
                     <li>近期对话 / 当前消息</li>
                   </ol>
                 </div>
-                <div class="rolling-summary grid-col-8 span-2" data-phase="write">
-                  <div class="block-title"><span>历史对话容量整理</span><b>SNAPSHOT</b></div>
+                <div class="rolling-summary grid-col-8 span-2" data-phase="pre input">
+                  <div class="block-title"><span>回复前历史整理</span><b>SNAPSHOT</b></div>
                   <div class="rollup-flow">
                     <span>容量或轮次阈值</span><i data-lucide="arrow-right"></i>
                     <span>合并辅助摘要</span><i data-lucide="arrow-right"></i>
                     <span>保留近期完整轮次</span>
                   </div>
-                  <small>快照绑定原文 ID、SHA256 与作用域；模型失败保留未整理原文，确定性事实问答跳过摘要。</small>
+                  <small id="architectureContextPolicy">历史软预算约 6000 token，近期保留目标约 16 条；完整轮次、失败回退与批次上限允许超预算。确定性事实问答和诊断回放跳过摘要。</small>
                 </div>
               </section>
 
-              <section class="timeline-grid swimlane request-slice-lane" aria-label="第 N 次模型请求完整输入切片">
+              <section id="architectureContextLane" class="timeline-grid swimlane context-history-lane" aria-label="回复前历史对话辅助摘要流程">
+                <div class="lane-label"><i data-lucide="layers"></i><strong>历史辅助摘要</strong><span>回复前 · 按需</span></div>
+                <div class="retrieval-architecture-step gate grid-col-2 has-arrow" data-phase="pre input"><span>01 · ROUTE</span><strong>判断调用路径</strong><small>确定性事实问答与无短期诊断回放跳过摘要。</small></div>
+                <div class="retrieval-architecture-step grid-col-3 has-arrow" data-phase="pre input"><span>02 · SOURCE</span><strong>读取原文与快照</strong><small>会话及四级作用域锁定，核对已覆盖原文指纹。</small></div>
+                <div class="retrieval-architecture-step gate grid-col-4 has-arrow" data-phase="pre input"><span>03 · BUDGET</span><strong>计算整理范围</strong><small id="architectureContextBudgetStep">约 6000 token 历史软预算，保留约 16 条近期消息的完整轮次。</small></div>
+                <div class="retrieval-architecture-step grid-col-5 has-arrow" data-phase="pre input"><span>04 · LEASE</span><strong>领取生成租约</strong><small>本进程串行与 SQLite 租约限制并发；生成中保持心跳。</small></div>
+                <div class="retrieval-architecture-step planner grid-col-6 has-arrow" data-phase="pre input"><span>05 · MODEL</span><strong>合并旧摘要与新批次</strong><small id="architectureContextBatchStep">摘要目标 1000 token，每次最多整理 4 批，按完整轮次切分。</small></div>
+                <div class="retrieval-architecture-step graph grid-col-7 has-arrow" data-phase="pre input"><span>06 · COMMIT</span><strong>核验来源后提交</strong><small>记录覆盖消息 ID、SHA256、作用域、模型与用量，拒绝迟到或来源变化结果。</small></div>
+                <div class="retrieval-architecture-step merge grid-col-8 has-arrow" data-phase="pre input"><span>07 · INPUT</span><strong>编译辅助上下文</strong><small>摘要进入 dynamic system；未覆盖原文保留 role，组成近期 messages。</small></div>
+                <div class="retrieval-architecture-step gate grid-col-9" data-phase="pre input"><span>08 · FALLBACK</span><strong>失败保留原文</strong><small>保留有效旧摘要及未整理原文，本批水位不推进；Trace 报告软预算状态。</small></div>
+              </section>
+
+              <section id="architectureInputLane" class="timeline-grid swimlane request-slice-lane" aria-label="第 N 次模型请求完整输入切片">
                 <div class="lane-label">
                   <i data-lucide="brackets"></i>
                   <strong>模型 Input 切片</strong>
@@ -758,7 +774,7 @@
                     <div class="request-facts">
                       <code>Provider API</code>
                       <code>context = system + messages + tools</code>
-                      <code id="architectureInputLimit">0 &lt; X &le; 16</code>
+                      <code id="architectureInputLimit">历史软预算 ≈ 6000 token</code>
                     </div>
                   </div>
 
@@ -766,45 +782,60 @@
                     <section class="input-envelope system-envelope" aria-label="System 输入组成">
                       <header><div><code>input[0]</code><strong>system</strong></div><span>Prompt Compiler</span></header>
                       <div class="input-source-stack">
-                        <div class="input-source locked-source">
-                          <span class="source-order">01</span>
-                          <div><strong>产品通用硬规则</strong><small>安全边界与记忆可信级别</small></div>
-                          <span class="source-readonly"><i data-lucide="gauge"></i>稳定前缀</span>
-                        </div>
                         <a class="input-source config-source" href="#personaPrompt" data-config-link data-jump-page="persona" data-jump-target="#personaPrompt">
-                          <span class="source-order">02</span>
-                          <div><strong>角色人设与固定属性</strong><small>agent.system_prompt + fixed_attributes_json</small></div>
+                          <span class="source-order">01</span>
+                          <div><strong>角色人设</strong><small>agent.system_prompt</small></div>
                           <span class="source-jump">稳定前缀 · 角色设置<i data-lucide="external-link"></i></span>
                         </a>
                         <div class="input-source locked-source">
+                          <span class="source-order">02</span>
+                          <div><strong>产品通用硬规则</strong><small>记忆可信级别、工具权限、摘要辅助用途</small></div>
+                          <span class="source-readonly"><i data-lucide="gauge"></i>稳定前缀</span>
+                        </div>
+                        <a class="input-source config-source" href="#personaPrompt" data-config-link data-jump-page="persona" data-jump-target="#personaPrompt">
                           <span class="source-order">03</span>
-                          <div><strong>当前请求命名空间</strong><small>user / agent / story / branch 动态隔离</small></div>
+                          <div><strong>角色固定属性</strong><small>agents.fixed_attributes_json</small></div>
+                          <span class="source-jump">稳定前缀 · 角色设置<i data-lucide="external-link"></i></span>
+                        </a>
+                        <div class="input-source locked-source">
+                          <span class="source-order">04</span>
+                          <div><strong>当前命名空间与服务器时间</strong><small>user / agent / story / branch，当前请求时间锚点</small></div>
                           <span class="source-readonly"><i data-lucide="refresh-cw"></i>逐轮编译</span>
                         </div>
                         <a class="input-source config-source" href="#schemaTable" data-config-link data-jump-page="schemas" data-jump-target="#schemaTable">
-                          <span class="source-order">04</span>
+                          <span class="source-order">05</span>
                           <div><strong>结构化字段注入模板</strong><small>pinned 字段的 prompt_template</small></div>
                           <span class="source-jump">结构化字段<i data-lucide="external-link"></i></span>
                         </a>
                         <a class="input-source config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="values" data-jump-target="#memoryContent">
-                          <span class="source-order">05</span>
+                          <span class="source-order">06</span>
                           <div><strong>当前结构化记忆值</strong><small>称呼、回复契约、关系状态与用户边界</small></div>
                           <span class="source-jump">结构化记忆<i data-lucide="external-link"></i></span>
                         </a>
                         <a class="input-source config-source" href="#storyTreeView" data-config-link data-jump-page="automation" data-jump-tab="story" data-jump-target="#storyTreeView">
-                          <span class="source-order">06</span>
+                          <span class="source-order">07</span>
                           <div><strong>已解锁剧情指令</strong><small>当前 story / branch 下的 active plot</small></div>
                           <span class="source-jump">剧情与道具<i data-lucide="external-link"></i></span>
                         </a>
                         <a class="input-source config-source" href="#automationContent" data-config-link data-jump-page="automation" data-jump-tab="props" data-jump-target="#automationContent">
-                          <span class="source-order">07</span>
+                          <span class="source-order">08</span>
                           <div><strong>已解锁道具与能力资格</strong><small>只声明资格；不把尚未执行的外部动作写成已完成</small></div>
                           <span class="source-jump">剧情与道具<i data-lucide="external-link"></i></span>
                         </a>
+                        <div class="input-source locked-source">
+                          <span class="source-order">09</span>
+                          <div><strong>本轮附件与系统执行面</strong><small>附件元信息，沙箱 / Subagent / 持久任务的当轮暴露结果</small></div>
+                          <span class="source-readonly"><i data-lucide="lock-keyhole"></i>服务端编译</span>
+                        </div>
                         <a class="input-source config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="retrieval" data-jump-target="#memoryContent">
-                          <span class="source-order">08</span>
+                          <span class="source-order">10</span>
                           <div><strong>本轮最终展开记忆</strong><small>严格门通过的 Active Claims + 事件详情 + 图谱证据事件</small></div>
                           <span class="source-jump">召回测试<i data-lucide="external-link"></i></span>
+                        </a>
+                        <a id="architectureSummaryInputSource" class="input-source config-source" href="#architectureContextLane" data-config-link data-jump-page="timeline" data-jump-target="#architectureContextLane">
+                          <span class="source-order">11</span>
+                          <div><strong>历史对话辅助摘要</strong><small>conversationContext.summaryText；由当前有效快照编译</small></div>
+                          <span class="source-jump">回复前历史整理<i data-lucide="external-link"></i></span>
                         </a>
                       </div>
                     </section>
@@ -812,12 +843,12 @@
                     <div class="slice-join" aria-hidden="true"><i data-lucide="plus"></i></div>
 
                     <section class="input-envelope messages-envelope" aria-label="最近对话输入组成">
-                      <header><div><code>input[1..X]</code><strong>messages</strong></div><span id="architectureMessageLimit">X &le; 16</span></header>
+                      <header><div><code>input[1..X]</code><strong>messages</strong></div><span id="architectureMessageLimit">近期完整轮次</span></header>
                       <div class="message-window-note">第 1 次请求按时间升序保留 role 与原文；本轮用户消息已包含在 X 条之内。</div>
                       <a class="message-slice config-source" href="#messageList" data-config-link data-jump-page="chat" data-jump-target="#messageList">
                         <span>messages[0..X-2]</span>
-                        <strong>最近历史消息</strong>
-                        <small id="architectureHistoryLimit">最多 15 条 user / assistant 原文</small>
+                        <strong>未被快照覆盖的近期原文</strong>
+                        <small id="architectureHistoryLimit">保留完整轮次；失败时保留未整理原文</small>
                         <b>角色对话<i data-lucide="external-link"></i></b>
                       </a>
                       <a class="message-slice current-message config-source" href="#messageList" data-config-link data-jump-page="chat" data-jump-target="#messageList">
@@ -912,6 +943,38 @@
                 <div class="action-node grid-col-9" data-phase="write"><i data-lucide="scan-search"></i><strong>Trace 留痕</strong><small>条件、输入、结果</small></div>
               </section>
 
+              <section id="architectureReviewLane" class="timeline-grid swimlane memory-care-lane" aria-label="按需周期回顾独立请求流程">
+                <div class="lane-label"><i data-lucide="book-open"></i><strong>周期回顾</strong><span>独立 API · 按需</span></div>
+                <a class="retrieval-architecture-step grid-col-2 has-arrow config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="reviews" data-jump-target="#memoryContent" data-phase="care"><span>01 · REQUEST</span><strong>选择回顾范围</strong><small id="architectureReviewRangeStep">周 / 月为聚合范围，可选日期与主题；由用户发起生成。</small></a>
+                <div class="retrieval-architecture-step gate grid-col-3 has-arrow" data-phase="care"><span>02 · SCOPE</span><strong>锁定记忆空间</strong><small>登录用户、角色、故事与分支校验；按日期和主题过滤。</small></div>
+                <div class="retrieval-architecture-step grid-col-4 has-arrow" data-phase="care"><span>03 · SOURCE</span><strong>读取当前事件</strong><small>仅 active 当前版本，保留事件及声明中的事实、计划和角色视角。</small></div>
+                <div class="retrieval-architecture-step graph grid-col-5 has-arrow" data-phase="care"><span>04 · EVIDENCE</span><strong>绑定版本与原文</strong><small>事件版本、有效声明、原文引用共同生成来源指纹。</small></div>
+                <div class="retrieval-architecture-step grid-col-6 has-arrow" data-phase="care"><span>05 · LEASE</span><strong>复用或领取租约</strong><small>来源相同且结果有效时复用；强制重算或来源变化时按租约生成。</small></div>
+                <div class="retrieval-architecture-step planner grid-col-7 has-arrow" data-phase="care"><span>06 · MODEL</span><strong>生成跨事件回顾</strong><small>只根据服务端提供的事件与原文写回顾，保持时间顺序和状态归属。</small></div>
+                <div class="retrieval-architecture-step gate grid-col-8 has-arrow" data-phase="care write"><span>07 · FRESHNESS</span><strong>重新核对来源</strong><small>生成结束和下次读取均校验指纹；更正、撤回或新事件可使旧回顾失效。</small></div>
+                <div class="retrieval-architecture-step merge grid-col-9" data-phase="care write"><span>08 · RESULT</span><strong>显示结果与证据</strong><small>就绪 / 待重算 / 生成失败 / 空范围分别显示；失败保留正文并标记状态。</small></div>
+              </section>
+
+              <section id="architectureRepairLane" class="timeline-grid swimlane memory-care-lane" aria-label="实体合并拆分与投影恢复独立请求流程">
+                <div class="lane-label"><i data-lucide="git-compare-arrows"></i><strong>实体身份纠错</strong><span>独立 API · 人工确认</span></div>
+                <a class="retrieval-architecture-step grid-col-2 has-arrow config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="graph" data-jump-target="#memoryContent" data-phase="care"><span>01 · INSPECT</span><strong>查看实体与证据</strong><small>从图谱实体详情查看事件、关系、声明及对应原文。</small></a>
+                <div class="retrieval-architecture-step grid-col-3 has-arrow" data-phase="care"><span>02 · SELECT</span><strong>确认合并或拆分</strong><small>合并选保留实体；拆分选择证据和区分名称，填写原因及幂等键。</small></div>
+                <div class="retrieval-architecture-step gate grid-col-4 has-arrow" data-phase="care"><span>03 · VALIDATE</span><strong>校验证据归属</strong><small>逐条校验四级空间、实体类型和有效版本；跨空间引用拒绝写入。</small></div>
+                <div class="retrieval-architecture-step graph grid-col-5 has-arrow" data-phase="care write"><span>04 · TRANSACTION</span><strong>写纠正版本</strong><small>事务内关闭旧认知期并创建事件、声明和关系的新版本，保留历史证据。</small></div>
+                <div class="retrieval-architecture-step graph grid-col-6 has-arrow" data-phase="care write"><span>05 · AUDIT</span><strong>保存审计与回执</strong><small>记录操作、原因、前后映射及幂等回执；同请求重放复用回执。</small></div>
+                <div class="retrieval-architecture-step grid-col-7 has-arrow" data-phase="care write"><span>06 · VIEWS</span><strong>刷新派生检索</strong><small id="architectureRepairRebuildStep">六视图更新文本并复用事件向量，声明向量按纠正后的内容重算。</small></div>
+                <div class="retrieval-architecture-step planner grid-col-8 has-arrow" data-phase="care write"><span>07 · RECOVERY</span><strong>重放失败投影</strong><small id="architectureRepairRetryStep">审计记录保留 pending，Web 启动及每 30 秒重试；图谱通过 outbox 同步。</small></div>
+                <div class="retrieval-architecture-step merge grid-col-9" data-phase="care"><span>08 · READ</span><strong>读取当前视图</strong><small>召回采用纠正版本；旧回顾下次读取时核对来源指纹并标记待重算。</small></div>
+              </section>
+
+              <section id="architectureReadinessLane" class="timeline-grid swimlane memory-care-lane" aria-label="记忆处理状态只读汇总">
+                <div class="lane-label"><i data-lucide="list-checks"></i><strong>记忆处理状态</strong><span>只读汇总</span></div>
+                <a class="retrieval-architecture-step grid-col-2 span-2 config-source" href="#memoryReadinessStrip" data-config-link data-jump-page="memory" data-jump-tab="reviews" data-jump-target="#memoryReadinessStrip" data-phase="care"><span>SAVED · 原文</span><strong>会话与接入原文分开统计</strong><small>messages 与 observation 原文分别展示，避免把同一输入的不同记录相加。</small></a>
+                <div class="retrieval-architecture-step grid-col-4 span-2" data-phase="care"><span>EXTRACTION · 抽取</span><strong>队列与未抽取消息</strong><small>区分等待、运行、重试和失败；Studio 阈值批次与 Headless 持久队列分别解释。</small></div>
+                <div class="retrieval-architecture-step grid-col-6 span-2" data-phase="care"><span>SEARCH · 检索</span><strong>可检索与向量索引分开</strong><small id="architectureReadinessIndexStep">可检索事件可包含词法召回；缺少持久化记录时，向量索引失败数为未知。</small></div>
+                <div class="retrieval-architecture-step grid-col-8 span-2" data-phase="care"><span>PROJECTION · 图谱</span><strong>查看待同步与待重试</strong><small id="architectureReadinessGraphStep">当前作用域 outbox 汇总图谱状态；模型配置就绪与实际连接验证分开呈现。</small></div>
+              </section>
+
               <footer class="timeline-footer">
                 <div><i class="status-dot active"></i><strong>当前回答视图</strong><span>仅 active</span></div>
                 <div><i class="status-dot superseded"></i><strong>已被新版本替代</strong><span>仅历史留痕，不参与回答</span></div>
@@ -954,7 +1017,9 @@
     <div id="architectureSuggestions" class="architecture-suggestions" aria-label="示例问题">
       <button type="button" data-architecture-question="一轮对话什么时候结束，下一轮什么时候解锁？">一轮什么时候结束？</button>
       <button type="button" data-architecture-question="结构化记忆重新计算和事件记忆抽取是同一个时间点吗？">重算和抽取同时吗？</button>
-      <button type="button" data-architecture-question="主模型超过 16 条消息后，旧对话怎么处理？">超过 16 条会怎样？</button>
+      <button type="button" data-architecture-question="历史对话辅助摘要何时触发，进入system还是messages，失败后原文与水位如何处理？">辅助摘要如何进入 Input？</button>
+      <button type="button" data-architecture-question="周月回顾是按需生成还是自动定时，事件更正后旧回顾如何失效？">回顾何时生成与失效？</button>
+      <button type="button" data-architecture-question="实体拆分与合并如何保留双时态历史、幂等审计与失败投影恢复？">实体纠错如何保留历史？</button>
       <button type="button" data-architecture-question="系统如何避免旧事实和干扰事件进入最终回答？">怎样过滤旧事实？</button>
     </div>
     <form id="architectureAssistantForm" class="architecture-assistant-composer">

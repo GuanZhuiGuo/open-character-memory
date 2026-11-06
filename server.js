@@ -752,6 +752,57 @@ function architectureOverview(sceneId) {
     1,
     Number(extraction?.extraction_interval_turns || DEFAULT_LONG_TERM_MEMORY_UPDATE_INTERVAL_TURNS)
   );
+  const conversationContext = {
+    rollingSummaryEnabled: true,
+    tokenThreshold: DEFAULT_CONVERSATION_CONTEXT_OPTIONS.maxContextTokens,
+    keepRecentMessages: DEFAULT_CONVERSATION_CONTEXT_OPTIONS.keepRecentMessages,
+    summaryMaxTokens: DEFAULT_CONVERSATION_CONTEXT_OPTIONS.maxSummaryTokens,
+    sourceMaxTokens: DEFAULT_CONVERSATION_CONTEXT_OPTIONS.maxSourceTokens,
+    minBatchMessages: DEFAULT_CONVERSATION_CONTEXT_OPTIONS.minBatchMessages,
+    maxPasses: DEFAULT_CONVERSATION_CONTEXT_OPTIONS.maxCompactionPasses,
+    budgetUnit: 'estimated_history_tokens',
+    trigger: {
+      mode: 'before_prompt_when_compactable_history_exists',
+      condition: '存在可压缩的完整旧轮次，且待处理消息达到批次门槛或历史上下文超出容量预算',
+      tokenEstimate: 'ASCII 字符约 4 字符/token，其他 Unicode 字符约 1.5 token/字符，每条消息另计 6 token',
+      budgetIncludes: ['retained_messages', 'summary_with_auxiliary_notice'],
+      wholePromptBudgetEnforced: false
+    },
+    position: {
+      after: ['hybrid_memory_retrieval', 'memory_answerability_gate', 'capability_resolution'],
+      before: 'prompt_compilation',
+      execution: 'awaited_in_chat_request'
+    },
+    retention: {
+      completeTurns: true,
+      currentUserMessage: true,
+      minimumCompletedExchange: 1,
+      recentWindowMayShrinkUnderBudgetPressure: true,
+      originalMessagesPreserved: true,
+      summaryBoundary: 'after_assistant_message'
+    },
+    leaseMs: 120_000,
+    heartbeatMs: 30_000,
+    concurrency: 'per_conversation_process_queue_and_sqlite_lease',
+    provenance: {
+      scope: ['conversation_id', 'user_id', 'agent_id', 'story_id', 'branch_id'],
+      fields: ['coveredMessageIds', 'sourceFingerprint', 'previousSnapshotId', 'model', 'usage'],
+      fingerprint: 'sha256_scope_and_source_id_role_content_timestamp',
+      sourceChanges: 'invalidate_snapshot_and_rebuild_from_originals',
+      commit: 'sqlite_transaction_with_source_fingerprint_and_lease_check'
+    },
+    failurePolicy: {
+      preserveValidPreviousSummary: true,
+      preserveAllUncompressedMessages: true,
+      failedBatchAdvancesWatermark: false,
+      reportBudgetExceeded: true,
+      reportRemainingCompactionMessages: true
+    },
+    skipModes: ['deterministic_grounding', 'no_short_term_memory_replay', 'explicitly_disabled'],
+    authority: 'auxiliary_conversation_context',
+    writesCanonicalMemory: false,
+    currentBehavior: '历史摘要与近期完整对话组成辅助上下文；模型失败保留未压缩原文并报告超预算'
+  };
   return {
     scene: { id: scene.id, name: scene.name, scenarioType: scene.scenario_type },
     thresholds: {
@@ -875,18 +926,110 @@ function architectureOverview(sceneId) {
     deepAgent: getDeepAgentRuntimeStatus(),
     artifactUpload: artifactUploadContract(),
     graphStore: getGraphStoreStatus(),
-    compression: {
-      rollingSummaryEnabled: true,
-      tokenThreshold: DEFAULT_CONVERSATION_CONTEXT_OPTIONS.maxContextTokens,
-      keepRecentMessages: DEFAULT_CONVERSATION_CONTEXT_OPTIONS.keepRecentMessages,
-      summaryMaxTokens: DEFAULT_CONVERSATION_CONTEXT_OPTIONS.maxSummaryTokens,
-      budgetUnit: 'estimated_history_tokens',
-      currentBehavior: '历史摘要与近期完整对话组成辅助上下文；模型失败保留未压缩原文并报告超预算'
-    },
+    compression: conversationContext,
     memoryLifecycle: {
-      reviews: { periods: ['weekly', 'monthly'], freshness: 'source_version_and_content_fingerprint' },
-      entityRepair: { operations: ['merge', 'split'], history: 'bitemporal_versions', projection: 'replayable' },
-      readiness: { stages: ['saved', 'extraction', 'index', 'searchable'], connectionVerified: false }
+      conversationContext,
+      reviews: {
+        periods: ['weekly', 'monthly'],
+        generationMode: 'on_demand',
+        automaticSchedule: false,
+        runsInChatTurn: false,
+        dateBounds: {
+          calendar: 'UTC_date',
+          weekStart: 'monday',
+          weekEnd: 'sunday',
+          month: 'calendar_month',
+          inclusive: true,
+          customRange: true,
+          customRangeRequiresBothBounds: true,
+          maxDays: 367,
+          eventDatePriority: ['date_formatted_story_time', 'valid_from', 'created_at']
+        },
+        topicFilter: {
+          optional: true,
+          maxCharacters: 160,
+          fields: ['title', 'summary'],
+          matching: 'NFKC_case_insensitive_substring'
+        },
+        sourceLimits: { maxEvents: 1000, maxSerializedCharacters: 100000 },
+        sources: ['active_events', 'current_event_claims', 'scoped_original_messages'],
+        independentClaimsIncluded: false,
+        leaseMs: 300000,
+        reuse: 'same_scope_period_date_bounds_topic_and_unchanged_sources_unless_force',
+        freshness: 'source_version_and_content_fingerprint',
+        freshnessChecks: ['on_read', 'before_generation', 'after_generation'],
+        stalePolicy: '源事件、声明或原文变化后标记 stale，可按需重新生成',
+        failurePolicy: '失败保留已有正文并标记 failed；租约超时后可重新生成',
+        statuses: ['empty', 'generating', 'ready', 'stale', 'failed'],
+        usableWhen: 'ready_and_fresh_and_not_generating',
+        output: 'derived_review_with_source_references',
+        writesCanonicalMemory: false
+      },
+      entityRepair: {
+        operations: ['merge', 'split'],
+        runsInChatTurn: false,
+        scope: ['user_id', 'agent_id', 'story_id', 'branch_id'],
+        selection: {
+          merge: {
+            sourceEntityLimit: 20,
+            sameEntityTypeRequired: true,
+            survivorRequired: true,
+            evidence: 'all_current_references_to_source_entities'
+          },
+          split: {
+            fields: ['eventIds', 'edgeIds', 'claimIds'],
+            atLeastOneEvidenceRequired: true,
+            perFieldLimit: 200,
+            eventSelectionIncludes: 'matching_claims_relations_and_links_in_selected_event',
+            individualSelection: 'move_selected_claim_or_edge_and_version_its_event_evidence'
+          }
+        },
+        transaction: {
+          mode: 'BEGIN_IMMEDIATE_COMMIT_OR_ROLLBACK',
+          includes: ['entity_mapping', 'event_claim_edge_versions', 'audit_receipt', 'graph_outbox'],
+          derivedIndexRefresh: 'after_commit'
+        },
+        history: 'bitemporal_versions',
+        versionPolicy: '旧事件、声明和关系关闭 transaction_to，新版本递增并保留 valid 时间与原文证据',
+        idempotency: { key: 'scope_and_idempotencyKey', payloadConflictHttpStatus: 409 },
+        audit: {
+          tables: ['entity_repairs', 'entity_repair_redirects'],
+          fields: ['request_json', 'before_json', 'result_json', 'projection_status', 'projection_error'],
+          mergeRedirects: true
+        },
+        rebuild: {
+          eventEmbeddings: 'reuse_existing_event_vectors',
+          claimEmbeddings: 'recompute_current_repaired_claim_vectors',
+          memoryViews: 'six_view_texts_with_canonical_reuse_vectors',
+          associations: 'rebuild_affected_event_associations',
+          graph: 'queue_scope_projection_outbox',
+          completionMeaning: 'derived_indexes_refreshed_and_graph_projection_queued'
+        },
+        projection: 'replayable',
+        retryIntervalMs: 30000,
+        retryOnServerStart: true,
+        retryScopeLimit: 8,
+        recoveryExecution: 'single_web_process_serial_replay',
+        failurePolicy: '主记录事务保留；衍生索引失败记录 pending 与错误，后台继续重试'
+      },
+      readiness: {
+        stages: ['saved', 'extraction', 'index', 'searchable'],
+        stageDetails: [
+          { key: 'saved', label: '原文保存', source: 'source', meaning: '当前作用域聊天消息与外部 observation 消息的保存数量' },
+          { key: 'extraction', label: '记忆抽取', source: 'extraction', meaning: '持久任务的等待、运行、失败和重试数量，以及聊天抽取水位后的消息数量' },
+          { key: 'index', label: '向量与图索引', source: 'index_and_graph', meaning: '当前有效事件的非空向量覆盖、缺失数量、本地降级向量和图投影待办状态' },
+          { key: 'searchable', label: '可检索记录', source: 'index.searchable', meaning: '当前有效事件数量，包含可按词法检索的记录；实际命中还需查询验证' }
+        ],
+        observedScope: 'user_agent_story_branch',
+        vectorCoverageUnit: 'active_event',
+        connectionVerified: false,
+        indexFailureCount: null,
+        knownUnknowns: [
+          '向量失败次数尚无持久计数，index.failed 返回 null',
+          '配置存在仅表示已配置；该状态接口不调用文本或向量模型验证连接',
+          '可检索事件数量不证明某个问题会命中，也不覆盖独立声明和六视图向量的完整性'
+        ]
+      }
     },
     timing: {
       sameTimePoint: false,
@@ -895,6 +1038,32 @@ function architectureOverview(sceneId) {
       conversationBoundaryFlush: 'before_first_message_after_conversation_switch',
       extractionIntervalTurns,
       executionMode: extraction?.execution_mode || 'blocking_after_assistant',
+      stepsScope: 'post_assistant_memory_commit',
+      turnFlags: {
+        summaryAfterLongTermRetrieval: true,
+        summaryAfterCapabilityResolution: true,
+        summaryBeforePrompt: true,
+        summaryWritesLongTermFacts: false,
+        longTermExtractionAfterAssistantPersistence: true,
+        reviewsAndEntityRepairsUseSeparateRequests: true
+      },
+      turnSteps: [
+        { order: 1, key: 'previous_conversation_memory_flush', phase: 'before_current_turn', label: '切换会话时先提交上一会话待抽取尾批次', conditional: true },
+        { order: 2, key: 'user_message_persist', phase: 'before_model', label: '保存当前用户原文' },
+        { order: 3, key: 'control_memory_fast_path', phase: 'before_model', label: '显式称呼、风格和禁止项快速写入' },
+        { order: 4, key: 'trigger_evaluation_pre_response', phase: 'before_model', label: '执行回复前条件触发器' },
+        { order: 5, key: 'pinned_memory_load', phase: 'before_model', label: '加载当前作用域常驻结构化记忆' },
+        { order: 6, key: 'hybrid_memory_retrieval', phase: 'before_model', label: '多粒度召回、纠正式规划与证据保护过滤' },
+        { order: 7, key: 'memory_answerability_gate', phase: 'before_model', label: '检查问题前提和长期记忆证据充分性' },
+        { order: 8, key: 'capability_resolution', phase: 'before_model', label: '确定记忆工具、已解锁能力、沙箱与编排工具资格' },
+        { order: 9, key: 'conversation_context', phase: 'before_model', label: '按预算整理历史摘要与近期完整轮次；确定性记忆回答和无短期回放跳过', conditional: true },
+        { order: 10, key: 'prompt_compilation', phase: 'before_model', label: '编译角色固定属性、有效记忆与辅助对话上下文' },
+        { order: 11, key: 'model_response', phase: 'generation', label: 'Pi 模型与工具循环，或服务端直接返回确定性统计结果' },
+        { order: 12, key: 'assistant_message_persist', phase: 'after_model', label: '保存助手回复，完成当前语义轮次' },
+        { order: 13, key: 'post_turn_memory_commit', phase: 'after_model', label: `累计达到 ${extractionIntervalTurns} 个完整轮次后抽取并写入长期记忆`, conditional: true },
+        { order: 14, key: 'trigger_evaluation_post_commit', phase: 'after_model', label: '执行轮后条件触发器' },
+        { order: 15, key: 'response_complete', phase: 'complete', label: '结束请求并释放用户与角色的对话串行锁' }
+      ],
       steps: [
         { order: 1, key: 'extract', label: `累计 ${extractionIntervalTurns} 个完整轮次，或跨对话发送前，记忆抽取模型返回结构化操作` },
         { order: 2, key: 'structured', label: '写入 structured_updates 和 relationship_deltas' },

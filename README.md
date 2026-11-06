@@ -6,9 +6,9 @@
 
 Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的开源记忆 Agent 参考实现和可视化工作台。它不只“记得用户”，也会管理角色说过的话、双方共同经历、事件更正、关系状态与剧情分支。系统将管理员定义的结构化字段、用户明确偏好、事件图谱、当前有效状态和混合召回分层管理。
 
-当前 `0.9.1` 采用 **Pi Agent Core ReAct runtime + 持久 Plan-Execute Deep Agent + 多粒度/纠正式/Agentic 记忆召回 + SQLite 双时态主账本 + Neo4j 可重建事实图与语义关联图投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
+当前 `0.9.2` 采用 **Pi Agent Core ReAct runtime + 持久 Plan-Execute Deep Agent + 多粒度/纠正式/Agentic 记忆召回 + SQLite 双时态主账本 + Neo4j 可重建事实图与语义关联图投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
 
-`0.9.1` 同时保留两种协作路径：当前 Turn 内的 **有界并行 Subagent** 用于短小独立任务；跨请求的 **持久 Deep Agent** 将模型提出的 DAG 交给服务端校验和独立 Worker，支持检查点、租约恢复、人工审批、受限重规划和不可幂等写入对账。文件、文档和命令继续只在 OpenSandbox 中运行。
+`0.9.2` 同时保留两种协作路径：当前 Turn 内的 **有界并行 Subagent** 用于短小独立任务；跨请求的 **持久 Deep Agent** 将模型提出的 DAG 交给服务端校验和独立 Worker，支持检查点、租约恢复、人工审批、受限重规划和不可幂等写入对账。文件、文档和命令继续只在 OpenSandbox 中运行。
 
 ![Open Character Memory v0.9.0 总体架构](docs/assets/overall-architecture-v0.9.0.png)
 

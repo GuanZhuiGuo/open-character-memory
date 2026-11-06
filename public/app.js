@@ -557,7 +557,7 @@ async function openReleaseNotes() {
               <span>${release.isUnreleased ? '待发布' : `v${escapeHtml(release.version)}`}${release.isCurrent ? '<b>当前</b>' : ''}</span>
               <small>${release.isUnreleased ? `${release.itemCount} 项开发中` : escapeHtml(release.date)}${release.badCaseCount ? ` · ${release.badCaseCount} cases` : ''}</small>
             </button>`).join('')}</div>
-          <footer><i data-lucide="git-branch"></i><span>${unreleasedCount ? `${unreleasedCount} 项更新尚未进入正式版本` : '当前工作区与正式版本一致'}</span></footer>
+          <footer><i data-lucide="git-branch"></i><span>${unreleasedCount ? `${unreleasedCount} 项更新尚未进入正式版本` : '暂无待发布条目'}</span></footer>
         </nav>
         <article id="releaseDetail" class="release-detail" aria-live="polite">${releaseDetailHtml(current, notes)}</article>
       </div>`;
@@ -1095,15 +1095,27 @@ async function loadArchitectureOverview() {
   state.architectureOverview = await api(`/api/architecture/overview?scene_id=${encodeURIComponent(sceneId)}`);
   const {
     thresholds, compression, timing, index, scene, runtime = {}, capabilities = {}, graphStore = {}, temporal = {},
-    graphOntology = {}, headlessMemory = {}, sandbox = {}, subagents = {}, deepAgent = {}, artifactUpload = {}
+    graphOntology = {}, headlessMemory = {}, sandbox = {}, subagents = {}, deepAgent = {}, artifactUpload = {},
+    memoryLifecycle = {}
   } = state.architectureOverview;
   const main = thresholds.mainModel;
   const extraction = thresholds.extraction;
   const retrieval = thresholds.retrieval || {};
   const extractionInterval = Math.max(1, Number(extraction.intervalTurns || 1));
+  const contextPolicy = memoryLifecycle.conversationContext || compression;
+  const reviewPolicy = memoryLifecycle.reviews || {};
+  const repairPolicy = memoryLifecycle.entityRepair || {};
   $('#pageMeta').textContent = `${scene.name} · runtime / memory / retrieval`;
-  $('#architectureMainWindow').textContent = `约 ${compression.tokenThreshold || 6000} token 历史预算 · 近期完整轮次`;
-  $('#architectureContextNodeMeta').textContent = `约 ${compression.tokenThreshold || 6000} token 历史预算 · 摘要覆盖水位 · 近期原文`;
+  $('#architectureMainWindow').textContent = `约 ${contextPolicy.tokenThreshold || 6000} token 历史软预算 · 保留完整轮次`;
+  $('#architectureContextNodeMeta').textContent = `回复前 · 约 ${contextPolicy.tokenThreshold || 6000} token 历史软预算 · 辅助摘要与近期原文`;
+  $('#architectureReviewNodeMeta').textContent = `按需周 / 月回顾 · ${reviewPolicy.automaticSchedule ? '周期调度' : '用户触发'} · 事件版本与原文指纹`;
+  $('#architectureRepairNodeMeta').textContent = `合并 / 拆分 · 双时态纠正 · 幂等审计 · ${Math.round(Number(repairPolicy.retryIntervalMs || 30000) / 1000)}s 投影恢复`;
+  $('#architectureReadinessNodeMeta').textContent = '原文 / 抽取 / 检索 / 图谱只读汇总 · 配置与连接验证分开';
+  $('#architectureContextBudgetStep').textContent = `历史与摘要合计约 ${contextPolicy.tokenThreshold || 6000} token 软预算，近期目标约 ${contextPolicy.keepRecentMessages || 16} 条，按完整轮次保留。`;
+  $('#architectureContextBatchStep').textContent = `摘要目标 ${contextPolicy.summaryMaxTokens || 1000} token；单批输入约 ${contextPolicy.sourceMaxTokens || 12000} token，每次最多 ${contextPolicy.maxPasses || 4} 批。`;
+  $('#architectureContextPolicy').textContent = `历史与辅助摘要软预算约 ${contextPolicy.tokenThreshold || 6000} token；近期目标约 ${contextPolicy.keepRecentMessages || 16} 条。失败、超大轮次与批次上限可导致超预算；完整 system 与工具另行计入模型输入。`;
+  $('#architectureReviewRangeStep').textContent = `按需选择周 / 月、日期与主题。${reviewPolicy.dateBounds?.inclusive === false ? '' : '日期包含首尾，'}周一至周日或自然月范围，按 UTC 日期比较。`;
+  $('#architectureRepairRetryStep').textContent = `审计保留 pending，Web 启动及每 ${Math.round(Number(repairPolicy.retryIntervalMs || 30000) / 1000)} 秒重试；图谱通过 outbox 同步。`;
   $('#architectureExtractionWindow').textContent = `批次前 ${extraction.contextTurns} 轮 · 最多 ${extraction.messageLimit} 条`;
   $('#architectureEventThreshold').textContent = `每 ${extractionInterval} 轮 · 双管线并行 · 最多 ${extraction.maxEventsPerBatch} 事件 / ${extraction.maxSemanticClaimsPerBatch || 40} 语义声明`;
   $('#architectureRuntimeExtractionMode').textContent = `阻塞式 · 每 ${extractionInterval} 轮 / 跨对话更新`;
@@ -1160,9 +1172,9 @@ async function loadArchitectureOverview() {
   $('#architectureExtractionNodeTitle').textContent = `长期记忆更新（每 ${extractionInterval} 轮）`;
   $('#architectureExtractionStepTitle').textContent = '长期记忆更新';
   $('#architectureCompressionStatus').textContent = compression.rollingSummaryEnabled ? '滚动摘要已启用' : '滚动摘要未启用';
-  $('#architectureRecentContext').textContent = '历史辅助摘要 + 近期完整轮次';
-  $('#architectureInputLimit').textContent = `约 ${compression.tokenThreshold || 6000} token`;
-  $('#architectureMessageLimit').textContent = '按容量整理';
+  $('#architectureRecentContext').textContent = '近期完整轮次原文';
+  $('#architectureInputLimit').textContent = `历史软预算 ≈ ${contextPolicy.tokenThreshold || 6000} token`;
+  $('#architectureMessageLimit').textContent = '保留完整轮次';
   $('#architectureHistoryLimit').textContent = '保留完整轮次；摘要失败保留原文';
   $('#architectureExtractionTrigger').textContent = `累计 ${extractionInterval} 轮，或跨对话发送前，双管线抽取 + 原子事实 / 状态迁移校验`;
   $('#architectureDerivedRule').textContent = thresholds.relationship.stages
@@ -3525,7 +3537,9 @@ function appendArchitectureAnswer(result) {
     state.architectureSources.set(source.id, source);
     return `<button type="button" class="architecture-source-button" data-architecture-source="${escapeHtml(source.id)}" title="查看召回代码片段"><i data-lucide="file-code-2"></i><span>[证据${source.evidence}] ${escapeHtml(source.sourcePath)} · L${source.startLine}-${source.endLine}</span></button>`;
   }).join('');
-  const meta = result.restricted
+  const meta = result.failed
+    ? '请求失败 · 请稍后重试'
+    : result.restricted
     ? '范围限制 · 未调用文本模型'
     : `${escapeHtml(result.model || 'configured model')} · ${Number(result.durationMs || 0)} ms · ${(result.sources || []).length} 个代码证据`;
   $('#architectureAssistantMessages').insertAdjacentHTML('beforeend', `
@@ -3587,7 +3601,7 @@ async function askArchitectureQuestion(rawQuestion) {
     renderArchitectureIndex(result.index);
   } catch (error) {
     $(`#${loadingId}`)?.remove();
-    appendArchitectureAnswer({ answer: `请求失败：${error.message}`, restricted: true, sources: [] });
+    appendArchitectureAnswer({ answer: `请求失败：${error.message}`, failed: true, sources: [] });
   } finally {
     state.architectureAsking = false;
     $('#askArchitectureButton').disabled = false;
@@ -4247,6 +4261,11 @@ $$('[data-timeline-view]').forEach((button) => button.addEventListener('click', 
     item.classList.toggle('active', active);
     item.setAttribute('aria-selected', String(active));
   });
+  if (state.timelineView === 'care') {
+    $('#architectureReviewLane').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } else if (state.timelineView === 'all') {
+    $('#page-timeline .timeline-frame').scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+  }
 }));
 $$('[data-config-link]').forEach((link) => link.addEventListener('click', async (event) => {
   event.preventDefault();
