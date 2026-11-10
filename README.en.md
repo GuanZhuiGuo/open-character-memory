@@ -4,9 +4,9 @@
 
 Open Character Memory is an open-source role-user memory runtime and visual studio for role-play companions and tutoring agents. It remembers user facts, character commitments, shared stories, corrections, relationship state, and narrative branches without treating every semantically similar memory as current truth.
 
-Version `0.9.2` combines a Pi Agent Core ReAct loop and persistent Plan-Execute Deep Agent with multi-granularity, corrective, and agentic memory retrieval, a bitemporal SQLite source of truth, replayable Neo4j fact/semantic graph projections, and controlled Skill/MCP execution.
+Version `0.10.0` combines a Pi Agent Core ReAct loop and persistent Plan-Execute Deep Agent with multi-granularity, corrective, and agentic memory retrieval, a bitemporal SQLite source of truth, replayable Neo4j fact/semantic graph projections, and controlled Skill/MCP execution.
 
-Version `0.9.2` keeps bounded parallel Subagents for work that should finish inside the current turn and adds a durable cross-request DAG runtime for long work. Model-proposed plans are validated and persisted by the server, then executed by an independent leased Worker with checkpoints, human approvals, bounded replanning, and reconciliation for uncertain non-idempotent writes.
+Version `0.10.0` keeps bounded parallel Subagents for work that should finish inside the current turn and adds a durable cross-request DAG runtime for long work. Model-proposed plans are validated and persisted by the server, then executed by an independent leased Worker with checkpoints, human approvals, bounded replanning, and reconciliation for uncertain non-idempotent writes.
 
 ![Open Character Memory v0.9.0 architecture](docs/assets/overall-architecture-v0.9.0.png)
 
@@ -31,6 +31,7 @@ See the [2026 agent-memory comparison](docs/market-memory-comparison-2026.md) fo
 
 ## What is implemented
 
+- Activity-driven background memory consolidation creates source-linked topics, open items, and reviewable repair proposals. New completed dialogue gates each batch. Defaults are 15 minutes of idle time, 24 new turns, a 24-hour maximum wait, and a one-hour cooldown. SQLite leases, fixed source snapshots, bounded retries, and fenced commits coordinate the work. Entity repairs require confirmation, and fresh derived topics can be read through `memory_search`.
 - Hard isolation by user, agent, story, and branch.
 - Admin-defined structured memory fields with types, scopes, constraints, extraction instructions, and prompt templates.
 - User-defined persistent response rules that pass server-side safety boundaries.

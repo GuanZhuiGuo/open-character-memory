@@ -129,6 +129,11 @@ test('lifecycle code evidence is split by responsibility and keeps generation an
   const index = await refreshArchitectureIndex();
   assert.equal(index.ready, true);
   assert.equal(index.chunks, chunks.length);
+  const maintenance = chunks.filter((chunk) => chunk.sourcePath === 'lib/memory-maintenance.js');
+  assert.ok(maintenance.length >= 8);
+  assert.ok(maintenance.every((chunk) => chunk.content.length <= 5500), 'maintenance evidence must fit the model excerpt');
+  assert.ok(maintenance.some((chunk) => chunk.content.includes('applyMemoryMaintenanceCandidate')));
+  assert.ok(maintenance.some((chunk) => chunk.content.includes('snapshotFresh')));
 });
 
 test('lifecycle shortcut questions reach architecture answers with relevant module evidence', async () => {
@@ -145,6 +150,12 @@ test('lifecycle shortcut questions reach architecture answers with relevant modu
       text: '实体拆分与合并如何保留双时态历史、幂等审计与失败投影恢复？',
       source: 'lib/entity-repair.js',
       expanded: true
+    },
+    {
+      text: '活动记忆整理是否必须有新增对话，水位如何推进，哪些修复需要确认？',
+      source: 'lib/memory-maintenance.js',
+      expanded: true,
+      expansion: /lib\/memory-maintenance\.js discoverMaintenanceActivity/
     }
   ];
   for (const question of questions) {
@@ -156,7 +167,7 @@ test('lifecycle shortcut questions reach architecture answers with relevant modu
     assert.equal(result.retrieval.originalQuery, question.text);
     assert.equal(result.retrieval.expanded, Boolean(question.expanded));
     if (question.expanded) {
-      assert.match(result.retrieval.query, /lib\/entity-repair\.js mergeEntities splitEntity versionRow replayEntityRepairProjections/);
+      assert.match(result.retrieval.query, question.expansion || /lib\/entity-repair\.js mergeEntities splitEntity versionRow replayEntityRepairProjections/);
     } else {
       assert.equal(result.retrieval.query, question.text);
     }

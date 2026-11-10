@@ -456,6 +456,7 @@
                     <div class="architecture-node" data-phase="pre"><i data-lucide="user-round"></i><span><strong>用户记忆</strong><small>结构化状态 + 独立事实/偏好/状态 + 双时态事件</small></span></div>
                     <div class="architecture-node" data-phase="pre"><i data-lucide="book-heart"></i><span><strong>我们的故事</strong><small>被用户承接的角色言行 + 共同承诺，双证据隔离</small></span></div>
                     <div class="architecture-node" data-phase="pre write"><i data-lucide="layers-3"></i><span><strong>六类检索视图</strong><small>原话 / 事件 / 声明 / 片段 / 摘要 / 实体关键词；均指回规范事件</small></span></div>
+                    <a class="architecture-node config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="reviews" data-jump-target="#memoryContent" data-phase="care"><i data-lucide="layers"></i><span><strong>活动记忆整理</strong><small id="architectureMaintenanceNodeMeta">新增对话门控 · 主题与未完成事项 · 修复建议待确认</small></span></a>
                     <a class="architecture-node config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="reviews" data-jump-target="#memoryContent" data-phase="care"><i data-lucide="book-open"></i><span><strong>跨事件周期回顾</strong><small id="architectureReviewNodeMeta">按需选择周 / 月与主题 · 来源变更待重算</small></span></a>
                     <a class="architecture-node config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="graph" data-jump-target="#memoryContent" data-phase="care write"><i data-lucide="git-compare-arrows"></i><span><strong>实体身份纠错</strong><small id="architectureRepairNodeMeta">合并 / 拆分 · 双时态版本 · 幂等审计 · 投影恢复</small></span></a>
                     <div class="architecture-node" data-phase="pre write"><i data-lucide="package-open"></i><span><strong>剧情与道具资格</strong><small>条件命中后解锁；当轮通过能力网关暴露给 Pi</small></span></div>
@@ -860,7 +861,7 @@
                       <div class="message-slice tool-result-message">
                         <span>request #N · N ≥ 2</span>
                         <strong>assistant tool call + toolResult</strong>
-                        <small>Pi 追加实际工具参数、成功/失败与受控结果，再请求模型续答</small>
+                        <small>Pi 追加工具结果；memory_search 可按需读取来源仍有效的主题，再请求模型续答</small>
                         <b>运行时自动装配</b>
                       </div>
                     </section>
@@ -943,6 +944,18 @@
                 <div class="action-node grid-col-9" data-phase="write"><i data-lucide="scan-search"></i><strong>Trace 留痕</strong><small>条件、输入、结果</small></div>
               </section>
 
+              <section id="architectureMaintenanceLane" class="timeline-grid swimlane memory-care-lane" aria-label="由新增对话驱动的记忆整理流程">
+                <div class="lane-label"><i data-lucide="layers"></i><strong>活动记忆整理</strong><span>后台 · 新活动门控</span></div>
+                <div class="retrieval-architecture-step gate grid-col-2 has-arrow" data-phase="care"><span>01 · ACTIVITY</span><strong>检查新增对话</strong><small>按作用域比较活动水位；无新活动直接跳过，摘要与回顾不算新输入。</small></div>
+                <div class="retrieval-architecture-step gate grid-col-3 has-arrow" data-phase="care"><span>02 · ELIGIBLE</span><strong>等待可整理时机</strong><small id="architectureMaintenanceEligibilityStep">空闲、积累量或最大等待时间决定时机；对话占用、冷却与成本边界仍有效。</small></div>
+                <div class="retrieval-architecture-step graph grid-col-4 has-arrow" data-phase="care"><span>03 · SNAPSHOT</span><strong>锁定增量与来源</strong><small>记录固定范围、四级作用域和原文指纹，租约限制重复执行。</small></div>
+                <div class="retrieval-architecture-step planner grid-col-5 has-arrow" data-phase="care"><span>04 · DERIVE</span><strong>生成派生记忆</strong><small>整理主题、未完成事项和修复建议，所有产物关联原文。</small></div>
+                <div class="retrieval-architecture-step gate grid-col-6 has-arrow" data-phase="care"><span>05 · VERIFY</span><strong>校验后推进水位</strong><small>核对来源与输出；失败保留待处理活动，来源变化结果不进入当前视图。</small></div>
+                <a class="retrieval-architecture-step grid-col-7 has-arrow config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="reviews" data-jump-target="#memoryContent" data-phase="care"><span>06 · REVIEW</span><strong>查看主题与原文</strong><small>回忆整理展示状态、主题、未完成事项、运行记录与来源。</small></a>
+                <div class="retrieval-architecture-step graph grid-col-8 has-arrow" data-phase="care write"><span>07 · CONFIRM</span><strong>确认语义修复</strong><small>合并与拆分确认后提交双时态修订，事实冲突交用户核对。</small></div>
+                <div class="retrieval-architecture-step merge grid-col-9" data-phase="care"><span>08 · RECALL</span><strong>按需读取有效主题</strong><small>memory_search 校验来源后提供主题；按问题进入工具结果，携带原文引用与辅助材料标记。</small></div>
+              </section>
+
               <section id="architectureReviewLane" class="timeline-grid swimlane memory-care-lane" aria-label="按需周期回顾独立请求流程">
                 <div class="lane-label"><i data-lucide="book-open"></i><strong>周期回顾</strong><span>独立 API · 按需</span></div>
                 <a class="retrieval-architecture-step grid-col-2 has-arrow config-source" href="#memoryContent" data-config-link data-jump-page="memory" data-jump-tab="reviews" data-jump-target="#memoryContent" data-phase="care"><span>01 · REQUEST</span><strong>选择回顾范围</strong><small id="architectureReviewRangeStep">周 / 月为聚合范围，可选日期与主题；由用户发起生成。</small></a>
@@ -1018,6 +1031,7 @@
       <button type="button" data-architecture-question="一轮对话什么时候结束，下一轮什么时候解锁？">一轮什么时候结束？</button>
       <button type="button" data-architecture-question="结构化记忆重新计算和事件记忆抽取是同一个时间点吗？">重算和抽取同时吗？</button>
       <button type="button" data-architecture-question="历史对话辅助摘要何时触发，进入system还是messages，失败后原文与水位如何处理？">辅助摘要如何进入 Input？</button>
+      <button type="button" data-architecture-question="活动记忆整理是否必须有新增对话，活动水位如何推进，哪些修复需要确认，主题如何按需进入memory_search？">新对话如何驱动整理？</button>
       <button type="button" data-architecture-question="周月回顾是按需生成还是自动定时，事件更正后旧回顾如何失效？">回顾何时生成与失效？</button>
       <button type="button" data-architecture-question="实体拆分与合并如何保留双时态历史、幂等审计与失败投影恢复？">实体纠错如何保留历史？</button>
       <button type="button" data-architecture-question="系统如何避免旧事实和干扰事件进入最终回答？">怎样过滤旧事实？</button>

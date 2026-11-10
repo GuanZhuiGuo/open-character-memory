@@ -6,9 +6,9 @@
 
 Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的开源记忆 Agent 参考实现和可视化工作台。它不只“记得用户”，也会管理角色说过的话、双方共同经历、事件更正、关系状态与剧情分支。系统将管理员定义的结构化字段、用户明确偏好、事件图谱、当前有效状态和混合召回分层管理。
 
-当前 `0.9.2` 采用 **Pi Agent Core ReAct runtime + 持久 Plan-Execute Deep Agent + 多粒度/纠正式/Agentic 记忆召回 + SQLite 双时态主账本 + Neo4j 可重建事实图与语义关联图投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
+当前 `0.10.0` 采用 **Pi Agent Core ReAct runtime + 持久 Plan-Execute Deep Agent + 多粒度/纠正式/Agentic 记忆召回 + SQLite 双时态主账本 + Neo4j 可重建事实图与语义关联图投影 + 受控 Skill/MCP 能力网关**。SQLite 仍是当前单机版本的唯一事实源；Neo4j 由可重放 outbox 同步，故障时召回自动回退 SQLite，不参与裁决哪个版本有效。
 
-`0.9.2` 同时保留两种协作路径：当前 Turn 内的 **有界并行 Subagent** 用于短小独立任务；跨请求的 **持久 Deep Agent** 将模型提出的 DAG 交给服务端校验和独立 Worker，支持检查点、租约恢复、人工审批、受限重规划和不可幂等写入对账。文件、文档和命令继续只在 OpenSandbox 中运行。
+`0.10.0` 同时保留两种协作路径：当前 Turn 内的 **有界并行 Subagent** 用于短小独立任务；跨请求的 **持久 Deep Agent** 将模型提出的 DAG 交给服务端校验和独立 Worker，支持检查点、租约恢复、人工审批、受限重规划和不可幂等写入对账。文件、文档和命令继续只在 OpenSandbox 中运行。
 
 ![Open Character Memory v0.9.0 总体架构](docs/assets/overall-architecture-v0.9.0.png)
 
@@ -29,12 +29,18 @@ Open Character Memory 是一个面向角色陪聊、AI 教育等多轮场景的�
 
 ## 记忆整理与纠错
 
+- **活动记忆巩固**。上次处理后有新的完整对话时，后台按空闲、累计轮次和最长等待时间安排整理，生成带原文引用的跨会话主题、未完成事项和修复建议。自动整理默认空闲 15 分钟、累计 24 轮或最长等待 24 小时，并有 1 小时冷却期。手动整理仍校验新活动、对话占用、来源和每日额度。每批固定来源范围，任务通过租约、来源指纹和提交水位防止重复处理及旧结果覆盖。
+- **修复建议**。实体合并、拆分在“回忆整理”中展示原文、原因和影响，确认后复用双时态纠错事务与幂等回执。事实冲突供人工核对，用户可在对话中明确更正。主题材料由 `memory_search` 按需检索，来源变化后失效。
 - **周期回顾**。在“我们的故事”或“记忆查询 → 回忆整理”中按周、月和主题整理当前有效事件。回顾绑定事件版本、声明证据和原文指纹，来源变化后标记待重算。生成失败保留旧正文并显示失败状态。
 - **实体纠错**。在图谱实体详情中合并重复对象，或将选定事件、关系、声明拆分给带区分名称的新对象。操作通过四级作用域、幂等和事务校验，保存纠正版本与审计，历史认知可回放。六视图更新文本并复用事件向量，声明向量按纠正内容重算。失败投影由 Web 进程每 30 秒扫描重试。
 - **处理状态**。记忆查询展示会话消息与接入原文数量、待抽取消息、队列失败、可检索事件及图谱待同步项。模型配置状态与连接验证分开，索引失败数在缺少持久化记录时返回 `null`。
 - **个人操作权限**。登录用户可整理和纠正自己的记忆。跨用户请求由服务端拒绝，管理员可以在所选用户范围内操作。
 
 Studio API 提供 `GET /api/memory/readiness`、`GET/POST /api/memory/reviews`、`GET /api/memory/reviews/:id`、`GET /api/memory/entities/:id/repair`、`POST /api/memory/entities/merge`、`POST /api/memory/entities/split` 和只读 `GET /api/conversations/:id/context`。各入口使用 `user_id + agent_id + story_id + branch_id`，实体纠错要求 `reason` 与 `idempotencyKey`。
+
+活动整理使用只读 `GET /api/memory/maintenance`、`POST /api/memory/maintenance/run` 和 `POST /api/memory/maintenance/proposals/:id/decision`。决策取 `apply` 或 `dismiss`，其中 `apply` 用于实体合并与拆分。服务端固定候选的幂等标识并记录操作人。后台维护仅处理派生内容，规范事实的修改经现有授权入口提交。
+
+机制参考 Anthropic 的 [The components of agent memory](https://www.anthropic.com/research/components-of-agent-memory)，实现沿用本项目 SQLite 事实源、作用域隔离、原文证据及双时态纠错。
 
 ## Headless Memory Runtime
 

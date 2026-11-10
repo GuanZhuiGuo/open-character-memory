@@ -22,6 +22,8 @@ const state = {
   memoryValues: [],
   memoryReviews: [],
   memoryReadiness: null,
+  memoryMaintenance: null,
+  memoryMaintenanceActionScope: '',
   memoryLoadGeneration: 0,
   memoryTab: 'values',
   events: [],
@@ -1105,12 +1107,20 @@ async function loadArchitectureOverview() {
   const contextPolicy = memoryLifecycle.conversationContext || compression;
   const reviewPolicy = memoryLifecycle.reviews || {};
   const repairPolicy = memoryLifecycle.entityRepair || {};
+  const maintenancePolicy = memoryLifecycle.maintenance;
   $('#pageMeta').textContent = `${scene.name} · runtime / memory / retrieval`;
   $('#architectureMainWindow').textContent = `约 ${contextPolicy.tokenThreshold || 6000} token 历史软预算 · 保留完整轮次`;
   $('#architectureContextNodeMeta').textContent = `回复前 · 约 ${contextPolicy.tokenThreshold || 6000} token 历史软预算 · 辅助摘要与近期原文`;
   $('#architectureReviewNodeMeta').textContent = `按需周 / 月回顾 · ${reviewPolicy.automaticSchedule ? '周期调度' : '用户触发'} · 事件版本与原文指纹`;
   $('#architectureRepairNodeMeta').textContent = `合并 / 拆分 · 双时态纠正 · 幂等审计 · ${Math.round(Number(repairPolicy.retryIntervalMs || 30000) / 1000)}s 投影恢复`;
   $('#architectureReadinessNodeMeta').textContent = '原文 / 抽取 / 检索 / 图谱只读汇总 · 配置与连接验证分开';
+  if (maintenancePolicy) {
+    const duration = (ms) => Number(ms) >= 3600000 ? `${Number((Number(ms) / 3600000).toFixed(1))} 小时`
+      : Number(ms) >= 60000 ? `${Number((Number(ms) / 60000).toFixed(1))} 分钟` : `${Math.round(Number(ms) / 1000)} 秒`;
+    $('#architectureMaintenanceNodeMeta').textContent = `${maintenancePolicy.enabled ? '已开启' : '未开启'} · 新对话门控 · 空闲 ${duration(maintenancePolicy.idleMs)} / 积累 ${Number(maintenancePolicy.minNewTurns)} 轮`;
+    $('#architectureMaintenanceNodeMeta').title = $('#architectureMaintenanceNodeMeta').textContent;
+    $('#architectureMaintenanceEligibilityStep').textContent = `有新活动且对话空闲；空闲 ${duration(maintenancePolicy.idleMs)}、积累 ${Number(maintenancePolicy.minNewTurns)} 轮或等待 ${duration(maintenancePolicy.maxWaitMs)}。冷却 ${duration(maintenancePolicy.cooldownMs)}，仍须通过来源预算。`;
+  }
   $('#architectureContextBudgetStep').textContent = `历史与摘要合计约 ${contextPolicy.tokenThreshold || 6000} token 软预算，近期目标约 ${contextPolicy.keepRecentMessages || 16} 条，按完整轮次保留。`;
   $('#architectureContextBatchStep').textContent = `摘要目标 ${contextPolicy.summaryMaxTokens || 1000} token；单批输入约 ${contextPolicy.sourceMaxTokens || 12000} token，每次最多 ${contextPolicy.maxPasses || 4} 批。`;
   $('#architectureContextPolicy').textContent = `历史与辅助摘要软预算约 ${contextPolicy.tokenThreshold || 6000} token；近期目标约 ${contextPolicy.keepRecentMessages || 16} 条。失败、超大轮次与批次上限可导致超预算；完整 system 与工具另行计入模型输入。`;
@@ -1222,13 +1232,15 @@ async function loadMemory() {
   const requestedScope = scopeQuery().toString();
   const currentRequest = () => requestGeneration === state.memoryLoadGeneration
     && requestedScope === scopeQuery().toString();
-  const [readiness, reviews] = await Promise.all([
+  const [readiness, reviews, maintenance] = await Promise.all([
     api(`/api/memory/readiness?${requestedScope}`),
-    api(`/api/memory/reviews?${requestedScope}`)
+    api(`/api/memory/reviews?${requestedScope}`),
+    api(`/api/memory/maintenance?${requestedScope}`).catch((error) => ({ loadError: error.message }))
   ]);
   if (!currentRequest()) return;
   state.memoryReadiness = readiness;
   state.memoryReviews = reviews;
+  state.memoryMaintenance = maintenance;
   renderMemoryReadiness();
   const userMode = state.portalMode === 'user';
   $('#memoryUserView').classList.toggle('hidden', !userMode);
@@ -1361,6 +1373,12 @@ function renderMemoryReadiness() {
   if (Number(graph.failed || 0)) {
     $('#memoryReadinessStrip').insertAdjacentHTML('beforeend', `<span class="memory-status-warning">图谱 ${Number(graph.failed)} 项待重试</span>`);
   }
+  if (state.memoryMaintenance && !state.memoryMaintenance.loadError) {
+    const maintenance = state.memoryMaintenance.state || {};
+    const pending = Number(maintenance.pendingTurns || 0);
+    const running = maintenance.activeRunId || maintenance.eligibility?.reason === 'running';
+    $('#memoryReadinessStrip').insertAdjacentHTML('beforeend', `<span><i data-lucide="layers"></i>${running ? '活动记忆正在整理' : pending ? `${pending} 轮新对话待整理` : '活动记忆暂无新增对话'}</span>`);
+  }
   refreshIcons();
 }
 
@@ -1368,10 +1386,152 @@ function reviewStatusLabel(review) {
   return ({ ready: '可回顾', stale: '来源已变更', failed: '整理失败', generating: '正在整理', empty: '暂无事件' })[review.status] || review.status;
 }
 
+function maintenanceReasonLabel(reason) {
+  return ({
+    no_new_activity: '暂无新增对话，等待后续活动。',
+    busy: '对话正在进行，结束后再整理新内容。',
+    running: '正在整理新增对话，完成后可刷新查看。',
+    cooldown: '新内容已保留，达到允许的整理间隔后继续。',
+    idle_wait: '新内容已保留，等待空闲或更多对话后整理。',
+    source_budget_exceeded: '待处理内容超出单次整理额度，请管理员检查整理设置。',
+    source_missing: '部分来源已不可读取，请核对来源后重试。',
+    attempts_exhausted: '本批整理已达到重试上限，请管理员检查失败原因。',
+    batch_already_recorded: '这批对话已有整理记录，请刷新状态查看结果。',
+    waiting_extraction: '新对话正在提取记忆，完成后再整理。',
+    extraction_disabled: '当前角色已关闭长期记忆抽取，活动整理同步暂停。',
+    budget_exceeded: '本轮整理额度已用完，新内容保留等待后续处理。',
+    budget: '今日整理额度已用完，新内容保留等待后续处理。',
+    eligible: '有新增对话可以整理。',
+    disabled: '活动整理尚未开启。',
+    failed: '整理未完成，新对话仍然保留，可稍后重试。',
+    stale: '来源在整理期间发生变化，旧结果不会作为当前记忆。'
+  })[reason] || '仅在有新增对话时整理，处理过程保留原始来源。';
+}
+
+function maintenanceStatusLabel(status) {
+  return ({ pending: '待确认', applying: '正在应用', applied: '已应用', rejected: '已忽略', dismissed: '已忽略', stale: '来源已变更',
+    queued: '等待整理', retry: '等待重试', running: '整理中', generating: '整理中', succeeded: '整理完成', completed: '整理完成',
+    ready: '整理完成', failed: '整理失败', dead: '重试已暂停', skipped: '暂未执行', open: '未完成', cancelled: '已取消'
+  })[status] || '待处理';
+}
+
+function maintenanceSourcesHtml(item, { expanded = false } = {}) {
+  const sources = Array.isArray(item.sourceMessages) ? item.sourceMessages : [];
+  const sourceCount = sources.length || item.sourceMessageIds?.length || 0;
+  return `<details class="maintenance-sources" ${expanded ? 'open' : ''}>
+    <summary>查看 ${sourceCount} 条来源原文</summary>
+    ${sources.length ? `<ol>${sources.map((source) => `<li><div><strong>${source.role === 'user' ? '用户' : source.role === 'assistant' ? '角色回复' : '接入原文'}</strong>${source.createdAt ? `<time>${escapeHtml(formatDate(source.createdAt))}</time>` : ''}</div><p>${escapeHtml(source.content || '原文为空')}</p></li>`).join('')}</ol>` : '<p class="form-hint">来源原文暂不可读取，请刷新后查看。</p>'}
+  </details>`;
+}
+
+function maintenanceRepairPreviewHtml(proposal) {
+  const preview = proposal.repairPreview;
+  if (!preview || !['entity_merge', 'entity_split'].includes(proposal.type)) return '';
+  const pair = (label, value) => `<div><dt>${label}</dt><dd>${escapeHtml(value || '待核对')}</dd></div>`;
+  return `<dl class="maintenance-repair-preview">${proposal.type === 'entity_merge'
+    ? pair('保留实体', preview.survivorName) + pair('合并来源', (preview.sourceEntityNames || []).join('、'))
+    : pair('原实体', preview.entityName) + pair('拆分后的名称', preview.canonicalName)
+      + pair('所选事件', (preview.selectedEventTitles || []).join('、') || '未选择整个事件')
+      + pair('其他所选证据', `${Number(preview.relationCount || 0)} 条关系 · ${Number(preview.claimCount || 0)} 条声明`)
+  }</dl>`;
+}
+
+function memoryMaintenanceHtml() {
+  const data = state.memoryMaintenance;
+  if (!data || data.loadError) return `<section class="memory-maintenance-workbench" aria-label="活动记忆整理">
+    <header class="memory-review-toolbar"><div><h4>活动整理</h4><p>整理新对话中的主题、未完成事项和待确认问题。</p></div><button class="button secondary compact" data-refresh-maintenance>重新加载</button></header>
+    <p class="memory-status-warning" role="alert">${escapeHtml(data?.loadError || '整理状态暂不可读取，请重新加载。')}</p>
+  </section>`;
+  const current = data.state || {};
+  const eligibility = current.eligibility || {};
+  const actionBusy = state.memoryMaintenanceActionScope === scopeQuery().toString();
+  const running = Boolean(current.activeRunId) || eligibility.reason === 'running';
+  const topics = Array.isArray(data.topics) ? data.topics : [];
+  const openItems = Array.isArray(data.openItems) ? data.openItems : [];
+  const proposals = Array.isArray(data.proposals) ? data.proposals : [];
+  const pendingProposals = proposals.filter((item) => item.status === 'pending');
+  const runs = Array.isArray(data.runs) ? data.runs : [];
+  const latestRun = runs[0];
+  const activeRun = runs.find((run) => run.id === current.activeRunId);
+  const failed = ['failed', 'dead'].includes(latestRun?.status);
+  const status = running ? maintenanceStatusLabel(activeRun?.status || 'running') : eligibility.reason === 'disabled' ? '未开启' : failed ? maintenanceStatusLabel(latestRun.status) : Number(current.pendingUnits || 0) ? '有新内容' : '暂无新内容';
+  const reasonText = activeRun?.status === 'retry' ? '等待后台重试，原始输入与已有有效记忆仍然保留。'
+    : activeRun?.status === 'queued' ? '新增对话已排队，等待后台整理。' : maintenanceReasonLabel(eligibility.reason);
+  return `<section class="memory-maintenance-workbench" aria-label="活动记忆整理">
+    <header class="memory-review-toolbar"><div><h4>活动整理</h4><p>有新增对话时整理主题与未完成事项，语义修复由你确认。</p></div><div class="maintenance-toolbar-actions"><button class="button ghost compact" data-refresh-maintenance><i data-lucide="refresh-cw"></i>刷新状态</button><button class="button secondary compact" data-run-maintenance ${!eligibility.manualEligible || running || actionBusy ? 'disabled' : ''} aria-busy="${actionBusy}"><i data-lucide="layers"></i>${actionBusy ? '正在整理…' : running ? status : '整理新对话'}</button></div></header>
+    <div class="maintenance-status" role="status"><div><span class="badge ${running || failed ? 'amber' : 'blue'}">${status}</span><p>${escapeHtml(reasonText)}</p></div><small>${Number(current.pendingTurns || 0)} 轮新对话待整理${current.lastCompletedAt ? ` · 最近完成 ${escapeHtml(formatDate(current.lastCompletedAt))}` : ' · 尚无完成记录'}</small></div>
+    ${failed || latestRun?.status === 'retry' ? `<p class="memory-status-warning">${escapeHtml(latestRun.error || '上次整理未完成，已有有效记忆仍然保留。')}</p>` : ''}
+    <div class="maintenance-collections">
+      <section class="maintenance-collection"><header><h5>主题记忆</h5><span>${topics.length} 项</span></header><p class="maintenance-section-note">按来源整理，回答相关问题时按需检索。</p>
+        ${topics.length ? topics.map((topic) => `<article class="maintenance-entry"><strong>${escapeHtml(topic.title || '对话主题')}</strong><p>${escapeHtml(topic.summary || '')}</p>${maintenanceSourcesHtml(topic)}</article>`).join('') : '<p class="maintenance-empty">新的对话积累后，会在这里形成带来源的主题。</p>'}
+      </section>
+      <section class="maintenance-collection"><header><h5>未完成事项</h5><span>${openItems.filter((item) => !item.status || item.status === 'open').length} 项待完成</span></header><p class="maintenance-section-note">保留计划与完成状态，仅供回忆查看。</p>
+        ${openItems.length ? openItems.map((item) => `<article class="maintenance-entry"><div class="maintenance-entry-heading"><strong>${escapeHtml(item.title || '未完成事项')}</strong><span class="badge ${item.status === 'completed' ? 'blue' : 'amber'}">${escapeHtml(item.status === 'completed' ? '已完成' : maintenanceStatusLabel(item.status || 'open'))}</span></div><p>${escapeHtml(item.description || '')}</p>${maintenanceSourcesHtml(item)}</article>`).join('') : '<p class="maintenance-empty">暂无带明确来源的未完成事项。</p>'}
+      </section>
+    </div>
+    <section class="maintenance-proposals"><header><div><h5>待确认的记忆修复</h5><p class="maintenance-section-note">核对原文与影响，确认后应用修复。</p></div><span>${pendingProposals.length} 项待确认</span></header>
+      ${proposals.length ? proposals.map((proposal) => `<article class="maintenance-proposal"><header><div><strong>${escapeHtml(proposal.title || '记忆修复建议')}</strong><small>${escapeHtml(({ entity_merge: '重复实体合并', entity_split: '同名实体拆分', fact_conflict: '事实冲突待核对' })[proposal.type] || '记忆修复')}</small></div><span class="badge ${['pending', 'applying'].includes(proposal.status) ? 'amber' : 'blue'}">${escapeHtml(maintenanceStatusLabel(proposal.status))}</span></header><p>${escapeHtml(proposal.reason || '')}</p>${maintenanceRepairPreviewHtml(proposal)}${maintenanceSourcesHtml(proposal)}
+        ${proposal.status === 'pending' ? `<footer><small>${proposal.type === 'fact_conflict' ? '事实冲突需要核对后在对话中明确更正。' : proposal.type === 'entity_merge' ? '合并所选实体的记忆，保留更正前历史。' : '只拆分所选证据，保留更正前历史。'}</small><div><button class="button ghost compact" data-dismiss-maintenance-proposal="${escapeHtml(proposal.id)}" ${actionBusy ? 'disabled' : ''}>忽略建议</button>${['entity_merge', 'entity_split'].includes(proposal.type) ? `<button class="button secondary compact" data-apply-maintenance-proposal="${escapeHtml(proposal.id)}" ${actionBusy ? 'disabled' : ''}>查看并确认</button>` : ''}</div></footer>` : ''}</article>`).join('') : '<p class="maintenance-empty">暂无需要确认的修复建议。</p>'}
+    </section>
+    ${runs.length ? `<details class="maintenance-run-history"><summary>最近整理记录 · ${runs.length} 次</summary><ol>${runs.slice(0, 10).map((run) => `<li><div><strong>${escapeHtml(maintenanceStatusLabel(run.status))}</strong><time>${escapeHtml(formatDate(run.completedAt || run.createdAt))}</time></div><p>${escapeHtml(['failed', 'dead', 'retry'].includes(run.status) ? run.error || '整理未完成，未推进处理水位。' : run.status === 'skipped' ? maintenanceReasonLabel(run.reason) : `${run.sourceMessageIds?.length || 0} 条来源原文`)}</p></li>`).join('')}</ol></details>` : ''}
+  </section>`;
+}
+
+async function runMemoryMaintenance(renderedScope) {
+  if (renderedScope !== scopeQuery().toString() || state.memoryMaintenanceActionScope === renderedScope) return;
+  state.memoryMaintenanceActionScope = renderedScope;
+  refreshMemoryReviewSurfaces();
+  try {
+    const result = await api('/api/memory/maintenance/run', { method: 'POST', body: Object.fromEntries(new URLSearchParams(renderedScope)) });
+    if (renderedScope !== scopeQuery().toString()) return;
+    if (['failed', 'dead'].includes(result.status)) toast(result.error || '整理未完成，新对话仍然保留', 'error');
+    else if (result.status === 'retry') toast('整理未完成，已保留输入等待后台重试');
+    else if (result.status === 'skipped') toast(maintenanceReasonLabel(result.reason));
+    else toast(['running', 'queued'].includes(result.status) ? '活动整理已开始，请稍后刷新状态' : '活动整理状态已更新');
+    await loadMemory();
+  } catch (error) {
+    if (renderedScope === scopeQuery().toString()) toast(error.message, 'error');
+  } finally {
+    if (state.memoryMaintenanceActionScope === renderedScope) state.memoryMaintenanceActionScope = '';
+    if (renderedScope === scopeQuery().toString()) refreshMemoryReviewSurfaces();
+  }
+}
+
+function refreshMemoryReviewSurfaces() {
+  if (state.page !== 'memory') return;
+  if (state.portalMode === 'user') renderMemoryReviews($('#userMemoryReviews'));
+  else if (state.memoryTab === 'reviews') renderMemoryReviews($('#memoryContent'));
+}
+
+async function decideMaintenanceProposal(proposal, decision, selectedScope) {
+  const renderedScope = new URLSearchParams(selectedScope).toString();
+  if (renderedScope !== scopeQuery().toString()) throw new Error('用户或角色已切换，请重新查看修复建议');
+  const result = await api(`/api/memory/maintenance/proposals/${encodeURIComponent(proposal.id)}/decision`, {
+    method: 'POST', body: { ...selectedScope, decision }
+  });
+  if (renderedScope !== scopeQuery().toString()) return;
+  if (result.status === 'stale' || result.proposal?.status === 'stale') {
+    await loadMemory();
+    throw new Error('来源已变化，请查看更新后的建议');
+  }
+  toast(decision === 'apply' ? '修复已应用，历史证据保留' : '建议已忽略');
+  await loadMemory();
+}
+
+function confirmMaintenanceProposal(proposal, selectedScope) {
+  if (!['entity_merge', 'entity_split'].includes(proposal.type) || proposal.status !== 'pending') return;
+  const merging = proposal.type === 'entity_merge';
+  openModal({
+    title: merging ? '确认合并重复实体' : '确认拆分同名实体', submitLabel: '确认并应用', width: 720,
+    body: `<div class="maintenance-confirmation"><h4>${escapeHtml(proposal.title || '记忆修复建议')}</h4><p>${escapeHtml(proposal.reason || '')}</p>${maintenanceRepairPreviewHtml(proposal)}<p class="form-hint">${merging ? '将建议涉及的重复实体合并，相关事件、关系和声明归入保留实体。' : '将建议选定的事件、关系或声明移入区分后的实体，其他关联保持原归属。'}纠正前的历史和原始证据会保留。</p>${maintenanceSourcesHtml(proposal, { expanded: true })}</div>`,
+    onSubmit: async () => decideMaintenanceProposal(proposal, 'apply', selectedScope)
+  });
+}
+
 function renderMemoryReviews(root) {
   if (!root) return;
-  root.innerHTML = `<section class="memory-review-workbench">
-    <header class="memory-review-toolbar"><div><h4>回忆整理</h4><p>按周或月回顾经历，查看对应事件与来源。</p></div><button class="button secondary compact" data-generate-review><i data-lucide="book-open"></i>整理回忆</button></header>
+  root.innerHTML = `${memoryMaintenanceHtml()}<section class="memory-review-workbench">
+    <header class="memory-review-toolbar"><div><h4>周月回顾</h4><p>按周或月回顾经历，查看对应事件与来源。</p></div><button class="button secondary compact" data-generate-review><i data-lucide="book-open"></i>生成周期回顾</button></header>
     <div class="memory-review-list">${state.memoryReviews.length ? state.memoryReviews.map((review) => `
       <article class="memory-review-card">
         <header><div><strong>${escapeHtml(review.topic || (review.period === 'monthly' ? '月度回顾' : '每周回顾'))}</strong><small>${escapeHtml(review.startDate)} — ${escapeHtml(review.endDate)}</small></div><span class="badge ${review.status === 'ready' ? 'blue' : 'amber'}">${escapeHtml(reviewStatusLabel(review))}</span></header>
@@ -1385,6 +1545,23 @@ function renderMemoryReviews(root) {
   $('[data-generate-review]', root).addEventListener('click', () => openMemoryReviewForm());
   $$('[data-refresh-review]', root).forEach((button) => button.addEventListener('click', () => {
     openMemoryReviewForm(state.memoryReviews.find((review) => review.id === button.dataset.refreshReview));
+  }));
+  const renderedScope = scopeQuery().toString();
+  $('[data-refresh-maintenance]', root)?.addEventListener('click', () => loadMemory().catch((error) => toast(error.message, 'error')));
+  $('[data-run-maintenance]', root)?.addEventListener('click', () => runMemoryMaintenance(renderedScope));
+  $$('[data-apply-maintenance-proposal]', root).forEach((button) => button.addEventListener('click', () => {
+    if (renderedScope !== scopeQuery().toString()) return;
+    const proposal = state.memoryMaintenance?.proposals?.find((item) => item.id === button.dataset.applyMaintenanceProposal);
+    if (proposal) confirmMaintenanceProposal(proposal, Object.fromEntries(new URLSearchParams(renderedScope)));
+  }));
+  $$('[data-dismiss-maintenance-proposal]', root).forEach((button) => button.addEventListener('click', async () => {
+    if (renderedScope !== scopeQuery().toString()) return;
+    const proposal = state.memoryMaintenance?.proposals?.find((item) => item.id === button.dataset.dismissMaintenanceProposal);
+    if (!proposal) return;
+    button.disabled = true;
+    try { await decideMaintenanceProposal(proposal, 'dismiss', Object.fromEntries(new URLSearchParams(renderedScope))); }
+    catch (error) { if (renderedScope === scopeQuery().toString()) toast(error.message, 'error'); }
+    finally { if (button.isConnected) button.disabled = false; }
   }));
   refreshIcons();
 }
@@ -4262,7 +4439,7 @@ $$('[data-timeline-view]').forEach((button) => button.addEventListener('click', 
     item.setAttribute('aria-selected', String(active));
   });
   if (state.timelineView === 'care') {
-    $('#architectureReviewLane').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $('#architectureMaintenanceLane').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } else if (state.timelineView === 'all') {
     $('#page-timeline .timeline-frame').scrollTo({ top: 0, left: 0, behavior: 'smooth' });
   }

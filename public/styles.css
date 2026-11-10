@@ -34,6 +34,55 @@
 .memory-review-card summary { cursor: pointer; }
 .memory-review-card details li { padding: 4px 0; }
 .memory-review-card footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; color: var(--muted); font-size: 11px; }
+.memory-maintenance-workbench { min-width: 0; margin-bottom: 28px; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+.maintenance-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.maintenance-status { padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.maintenance-status > div { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.maintenance-status p { margin: 0; color: var(--text); font-size: 12px; line-height: 1.65; }
+.maintenance-status > small { display: block; margin-top: 8px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.maintenance-collections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 20px; }
+.maintenance-collection { min-width: 0; }
+.maintenance-collection > header, .maintenance-proposals > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.maintenance-collection h5, .maintenance-proposals h5 { margin: 0; font-size: 14px; line-height: 1.5; }
+.maintenance-collection > header > span, .maintenance-proposals > header > span { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+.maintenance-section-note { margin: 6px 0 12px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.maintenance-entry { min-width: 0; padding: 14px 0; border-top: 1px solid var(--line); }
+.maintenance-entry > strong, .maintenance-entry-heading > strong { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.maintenance-entry-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.maintenance-entry-heading .badge { flex: 0 0 auto; }
+.maintenance-entry > p, .maintenance-proposal > p, .maintenance-confirmation > p { margin: 7px 0 12px; font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.maintenance-empty { margin: 0; padding: 18px 0; color: var(--muted); border-top: 1px solid var(--line); font-size: 12px; line-height: 1.7; }
+.maintenance-sources { min-width: 0; color: var(--muted); font-size: 12px; }
+.maintenance-sources summary, .maintenance-run-history > summary { width: fit-content; max-width: 100%; padding: 4px 0; cursor: pointer; line-height: 1.6; }
+.maintenance-sources summary:focus-visible, .maintenance-run-history > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; border-radius: 2px; }
+.maintenance-sources ol { max-height: 320px; margin: 9px 0 0; padding: 0 0 0 20px; overflow-y: auto; }
+.maintenance-sources li { padding: 9px 0; border-top: 1px solid var(--line); }
+.maintenance-sources li > div { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
+.maintenance-sources li strong { color: var(--text); font-size: 11px; }
+.maintenance-sources time { font-size: 10px; }
+.maintenance-sources li p { margin: 6px 0 0; color: var(--text); font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.maintenance-proposals { margin-top: 24px; }
+.maintenance-proposal { min-width: 0; margin-top: 12px; padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.maintenance-proposal > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.maintenance-proposal > header > div { min-width: 0; }
+.maintenance-proposal > header strong { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.maintenance-proposal > header small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+.maintenance-proposal > header .badge { flex: 0 0 auto; }
+.maintenance-repair-preview { display: grid; gap: 8px; margin: 12px 0; padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.maintenance-repair-preview > div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; align-items: baseline; font-size: 12px; line-height: 1.6; }
+.maintenance-repair-preview dt { color: var(--muted); }
+.maintenance-repair-preview dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.maintenance-proposal > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.maintenance-proposal > footer > small { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.maintenance-proposal > footer > div { display: flex; flex-wrap: wrap; flex: 0 0 auto; gap: 8px; }
+.maintenance-confirmation h4 { margin: 0 0 10px; font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
+.maintenance-run-history { margin-top: 20px; color: var(--muted); font-size: 12px; }
+.maintenance-run-history ol { display: grid; gap: 0; margin: 8px 0 0; padding: 0; list-style: none; }
+.maintenance-run-history li { padding: 10px 0; border-top: 1px solid var(--line); }
+.maintenance-run-history li > div { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.maintenance-run-history strong { color: var(--text); font-size: 12px; }
+.maintenance-run-history time { font-size: 11px; }
+.maintenance-run-history p { margin: 5px 0 0; line-height: 1.6; overflow-wrap: anywhere; }
 .entity-repair-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
 .repair-evidence-list { display: grid; gap: 8px; margin: 14px 0; max-height: 340px; overflow-y: auto; }
 .repair-evidence-row { display: flex; align-items: flex-start; gap: 10px; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
@@ -49,6 +98,11 @@
   .memory-review-toolbar { align-items: flex-start; }
   .memory-review-card { padding: 16px; }
   .memory-readiness-strip { gap: 10px 16px; }
+  .memory-maintenance-workbench .memory-review-toolbar { flex-direction: column; }
+  .maintenance-toolbar-actions { width: 100%; justify-content: flex-start; }
+  .maintenance-collections { grid-template-columns: 1fr; gap: 20px; }
+  .maintenance-proposal > footer { align-items: flex-start; flex-direction: column; }
+  .maintenance-proposals > header { align-items: flex-start; }
 }
 
 * { box-sizing: border-box; }

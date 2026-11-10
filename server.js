@@ -24,6 +24,12 @@ import {
 import {
   migrateMemoryReviews, listMemoryReviews, getMemoryReview, generateMemoryReview, getMemoryReadiness
 } from './lib/memory-review.js';
+import {
+  ensureMemoryMaintenanceSchema, discoverMaintenanceActivity, getMemoryMaintenanceStatus, getMemoryMaintenancePolicy,
+  enqueueMemoryMaintenance, processMemoryMaintenanceRun,
+  applyMemoryMaintenanceCandidate, rejectMemoryMaintenanceCandidate,
+  startMemoryMaintenanceWorker, stopMemoryMaintenanceWorker
+} from './lib/memory-maintenance.js';
 import { db, initializeDatabase } from './lib/db.js';
 import {
   cancelDeepAgentRun, createDeepAgentRun, decideDeepAgentApproval, getDeepAgentRun,
@@ -61,6 +67,7 @@ initializeDatabase();
 ensureConversationContextSchema();
 ensureEntityRepairSchema();
 migrateMemoryReviews();
+ensureMemoryMaintenanceSchema();
 await initializeGraphStore();
 
 const projectDir = path.dirname(fileURLToPath(import.meta.url));
@@ -280,6 +287,9 @@ function assertUserAccess(principal, requestedUserId) {
 }
 
 function userMayAccessRoute(pathname, method) {
+  if (pathname === '/api/memory/maintenance' && method === 'GET') return true;
+  if (pathname === '/api/memory/maintenance/run' && method === 'POST') return true;
+  if (/^\/api\/memory\/maintenance\/proposals\/[^/]+\/decision$/.test(pathname) && method === 'POST') return true;
   if (pathname === '/api/memory/reviews' && ['GET', 'POST'].includes(method)) return true;
   if (pathname === '/api/memory/readiness' && method === 'GET') return true;
   if (/^\/api\/memory\/reviews\/[^/]+$/.test(pathname) && method === 'GET') return true;
@@ -929,6 +939,15 @@ function architectureOverview(sceneId) {
     compression: conversationContext,
     memoryLifecycle: {
       conversationContext,
+      maintenance: {
+        ...getMemoryMaintenancePolicy(),
+        activityGate: 'unprocessed_completed_dialogue',
+        execution: 'background_sqlite_leased_worker',
+        output: ['source_linked_topics', 'open_items', 'reviewable_repair_candidates'],
+        retrieval: 'fresh_derived_material_via_memory_search',
+        canonicalWrites: 'human_confirmed_entity_repair',
+        businessTriggers: false
+      },
       reviews: {
         periods: ['weekly', 'monthly'],
         generationMode: 'on_demand',
@@ -1696,6 +1715,7 @@ async function handleApi(request, response, url) {
     sendJson(response, 200, {
       ok: true,
       version: SYSTEM_VERSION,
+      memoryMaintenance: getMemoryMaintenancePolicy(),
       database: { sourceOfTruth: 'sqlite', temporalModel: 'bitemporal' },
       graphStore: getGraphStoreStatus(),
       runtime: getAgentRuntimeStatus(),
@@ -2166,6 +2186,36 @@ async function handleApi(request, response, url) {
     return;
   }
 
+  if (pathname === '/api/memory/maintenance' && method === 'GET') {
+    sendJson(response, 200, getMemoryMaintenanceStatus(memoryScopeFromQuery(principal, url.searchParams)));
+    return;
+  }
+  if (pathname === '/api/memory/maintenance/run' && method === 'POST') {
+    const body = await readBody(request);
+    const scope = memoryScopeWithAccess(principal, body);
+    await discoverMaintenanceActivity({ limit: 200 });
+    const queued = await enqueueMemoryMaintenance(scope, { reason: 'manual' });
+    const result = queued.run?.id ? await processMemoryMaintenanceRun(queued.run.id) : queued;
+    sendJson(response, 200, { ...result, maintenance: getMemoryMaintenanceStatus(scope) });
+    return;
+  }
+  const maintenanceDecision = pathname.match(/^\/api\/memory\/maintenance\/proposals\/([^/]+)\/decision$/);
+  if (maintenanceDecision && method === 'POST') {
+    const body = await readBody(request);
+    const scope = memoryScopeWithAccess(principal, body);
+    const candidateId = decodeURIComponent(maintenanceDecision[1]);
+    const options = { actorId: principal.userId || 'admin', idempotencyKey: `maintenance:${candidateId}` };
+    let result;
+    if (body.decision === 'apply') {
+      result = await applyMemoryMaintenanceCandidate(scope, candidateId, options);
+    } else if (body.decision === 'dismiss') {
+      result = await rejectMemoryMaintenanceCandidate(scope, candidateId, { ...options, note: body.note || '' });
+    } else {
+      throw new HttpError(400, '请选择应用或保留原记录', 'MAINTENANCE_DECISION_INVALID');
+    }
+    sendJson(response, 200, { ...result, maintenance: getMemoryMaintenanceStatus(scope) });
+    return;
+  }
   if (pathname === '/api/memory/readiness' && method === 'GET') {
     const scope = queryScope(url);
     scope.userId = assertUserAccess(principal, scope.userId);
@@ -2515,6 +2565,7 @@ function recoverEntityRepairIndexes() {
 }
 
 server.on('listening', () => {
+  startMemoryMaintenanceWorker();
   startMemoryJobWorker();
   startDeepAgentWorker();
   void recoverEntityRepairIndexes();
@@ -2522,6 +2573,7 @@ server.on('listening', () => {
   entityRepairRecoveryTimer.unref?.();
 });
 server.on('close', () => {
+  stopMemoryMaintenanceWorker();
   clearInterval(entityRepairRecoveryTimer);
   stopMemoryJobWorker();
   void stopDeepAgentWorker();
