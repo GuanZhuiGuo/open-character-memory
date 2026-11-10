@@ -1,6 +1,7 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const appBasePath = $('meta[name="app-base-path"]')?.content || '';
+const platformManaged = document.body.dataset.platform === 'true';
 const CHAT_MESSAGE_MAX_CHARACTERS = 1000;
 const DEFAULT_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_ATTACHMENT_MAX_FILES = 4;
@@ -11,6 +12,8 @@ const state = {
   portalMode: localStorage.getItem('memory_studio_portal') || '',
   role: null,
   session: null,
+  identityChanged: false,
+  historyUser: null,
   bootstrap: null,
   currentUserId: localStorage.getItem('memory_studio_user') || '',
   currentAgentId: localStorage.getItem('memory_studio_agent') || '',
@@ -56,6 +59,8 @@ const state = {
   adminUsers: [],
   feedback: [],
   sending: false,
+  failedChatDraft: '',
+  chatViewGeneration: 0,
   extractingMemory: false,
   extractionStatus: null,
   uploadingAttachments: false,
@@ -167,19 +172,21 @@ function artifactChipsMarkup(items = []) {
 
 async function api(path, options = {}) {
   const response = await fetch(`${appBasePath}${path}`, {
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}),
+      ...(platformManaged && state.session?.platformUserId ? {'X-Platform-Expected-User':state.session.platformUserId} : {}) },
     body: options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const authRequest = ['/api/auth/login', '/api/auth/register', '/api/admin/login'].includes(path);
     if (response.status === 401 && !authRequest) showLogin();
-    const error = new Error(payload.error || `请求失败 (${response.status})`);
+    const error = new Error(typeof payload.error === 'string' ? payload.error : payload.error?.message || `请求失败 (${response.status})`);
     error.status = response.status;
-    error.code = payload.code || 'REQUEST_FAILED';
+    error.code = payload.code || payload.error?.code || 'REQUEST_FAILED';
     error.details = payload.details || null;
+    if (platformManaged && error.code === 'account_changed') showAccountChanged();
     throw error;
   }
   return payload;
@@ -187,23 +194,25 @@ async function api(path, options = {}) {
 
 async function streamApi(path, options = {}, onEvent = () => {}) {
   const response = await fetch(`${appBasePath}${path}`, {
+    ...options,
     credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/x-ndjson',
-      ...(options.headers || {})
+      ...(options.headers || {}),
+      ...(platformManaged && state.session?.platformUserId ? {'X-Platform-Expected-User':state.session.platformUserId} : {})
     },
-    ...options,
     body: options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     const authRequest = ['/api/auth/login', '/api/auth/register', '/api/admin/login'].includes(path);
     if (response.status === 401 && !authRequest) showLogin();
-    const error = new Error(payload.error || `请求失败 (${response.status})`);
+    const error = new Error(typeof payload.error === 'string' ? payload.error : payload.error?.message || `请求失败 (${response.status})`);
     error.status = response.status;
-    error.code = payload.code || 'REQUEST_FAILED';
+    error.code = payload.code || payload.error?.code || 'REQUEST_FAILED';
     error.details = payload.details || null;
+    if (platformManaged && error.code === 'account_changed') showAccountChanged();
     throw error;
   }
   if (!response.body) throw new Error('浏览器不支持流式响应');
@@ -246,7 +255,32 @@ function toast(message, type = 'success') {
   setTimeout(() => element.remove(), 3200);
 }
 
+function showWorkspaceState(title, description, login = false) {
+  $('#startupTitle').textContent = title;
+  $('#startupDescription').textContent = description;
+  $('#startupState').classList.remove('hidden');
+  $('#app').classList.add('hidden');
+  $('#retryStartup').classList.toggle('hidden', login);
+  $('#workspaceLogin').classList.toggle('hidden', !login);
+  $('#workspaceLogin').href = document.body.dataset.platformLoginUrl || '/login';
+}
+
+function showAccountChanged() {
+  clearChatView();
+  state.identityChanged = true;
+  showWorkspaceState('登录账户已变化', '请刷新页面，确认当前登录身份后继续。');
+  closeTraceDrawer();
+  closeArchitectureAssistant();
+  $('#modalRoot').innerHTML = '';
+}
+
 function showLogin() {
+  clearChatView();
+  if (platformManaged) {
+    showWorkspaceState('统一登录已过期', '重新登录后可继续访问你的个人记忆。', true);
+    closeTraceDrawer();
+    return;
+  }
   $('#loginOverlay').classList.remove('hidden');
   $('#app').classList.add('hidden');
   closeTraceDrawer();
@@ -275,7 +309,9 @@ function closeTraceDrawer() {
 }
 
 function showApp() {
-  $('#loginOverlay').classList.add('hidden');
+  if (state.identityChanged) return;
+  $('#loginOverlay')?.classList.add('hidden');
+  $('#startupState').classList.add('hidden');
   $('#app').classList.remove('hidden');
 }
 
@@ -288,6 +324,12 @@ function applyRoleUi() {
     const element = $(selector);
     if (element) element.disabled = !admin;
   });
+  if (platformManaged) {
+    const selector = $('#memoryUserSelect');
+    selector?.classList.add('hidden');
+    $('#memoryIdentityName').classList.remove('hidden');
+    $('#usersAddButton')?.classList.add('hidden');
+  }
   $$('[data-config-form] input, [data-config-form] textarea, [data-config-form] select').forEach((element) => {
     element.disabled = !admin;
   });
@@ -312,22 +354,31 @@ function updateTopbarContextUi() {
   const admin = isAdmin();
   const selectedUser = currentUser();
   const sessionUser = state.session?.user;
-  const accountUser = admin && contextSwitchable ? selectedUser : sessionUser;
+  const identityName = state.session?.identity?.display_name || sessionUser?.display_name || '飞书成员';
+  const guest = state.session?.identity?.type === 'guest';
+  const accountUser = platformManaged ? sessionUser : admin && contextSwitchable ? selectedUser : sessionUser;
   $('#topbarContext')?.classList.toggle('hidden', !contextSwitchable);
-  $('#userSelect')?.classList.toggle('hidden', !admin || !contextSwitchable);
-  $('#accountName')?.classList.toggle('hidden', admin && contextSwitchable);
-  if ($('#accountName')) $('#accountName').textContent = admin ? '管理员' : (sessionUser?.display_name || '普通用户');
+  $('#userSelect')?.classList.toggle('hidden', platformManaged || !admin || !contextSwitchable);
+  $('#accountName')?.classList.toggle('hidden', !platformManaged && admin && contextSwitchable);
+  if ($('#accountName')) $('#accountName').textContent = platformManaged ? identityName : admin ? '管理员' : (sessionUser?.display_name || '普通用户');
   const avatar = $('#userAvatar');
   if (avatar) {
-    avatar.textContent = accountUser?.display_name?.slice(0, 1) || (admin ? '管' : '用');
+    avatar.textContent = platformManaged ? identityName.slice(0,1) : accountUser?.display_name?.slice(0, 1) || (admin ? '管' : '用');
     avatar.style.background = accountUser?.avatar_color || '#2563eb';
   }
-  const accountLabel = admin
+  const accountLabel = platformManaged ? `${identityName} · ${guest ? '访客身份' : '当前飞书账户'}` : admin
     ? (contextSwitchable ? `管理员正在查看 ${selectedUser?.display_name || '未选择用户'}` : '管理员账户')
     : `${sessionUser?.display_name || '普通用户'}账户`;
   $('#accountControl').title = accountLabel;
-  $('#logoutButton').title = `退出${admin ? '管理员' : ''}登录`;
-  $('#logoutButton').setAttribute('aria-label', `退出${admin ? '管理员' : ''}登录`);
+  const logoutLabel = platformManaged ? '退出统一账户' : `退出${admin ? '管理员' : ''}登录`;
+  $('#logoutButton').title = logoutLabel;
+  $('#logoutButton').setAttribute('aria-label', logoutLabel);
+  const legacyGuest = guest && state.session.identity.legacy_subject_id;
+  const historyNotice = state.session?.identity?.history_notice || '';
+  $('#historyBanner').classList.toggle('hidden', !state.historyUser && !legacyGuest && !historyNotice);
+  $('#historyDescription').textContent = historyNotice || (legacyGuest ? `访客档案 · ${sessionUser.display_name} · 当前身份为 ${identityName}`
+    : state.historyUser ? `历史档案查看 · ${state.historyUser.display_name} · 登录身份为 ${identityName}` : '');
+  $('#returnToPersonal').classList.toggle('hidden', guest || !state.historyUser);
 }
 
 function applyPortalUi() {
@@ -443,15 +494,64 @@ function openModal({ title, body, submitLabel = '保存', submitClass = 'primary
 }
 
 async function initialize() {
-  const session = await api('/api/auth/session').catch(() => ({ authenticated: false }));
+  if (platformManaged) {
+    showWorkspaceState('正在连接个人工作空间', '正在读取你的身份与个人记忆。');
+    $('#retryStartup').classList.add('hidden');
+  }
+  const session = await api('/api/auth/session');
   if (!session.authenticated) {
     showLogin();
     return;
   }
   state.session = session;
   state.role = session.role;
+  state.historyUser = null;
+  if (platformManaged) state.currentUserId = session.user.id;
   await loadBootstrap();
   showApp();
+  await openWorkspaceResource();
+}
+
+async function openWorkspaceResource() {
+  if (!platformManaged || !state.session) return;
+  const target = new URLSearchParams(location.hash.slice(1));
+  const conversationId = target.get('conversation');
+  const eventId = target.get('memory-event');
+  if (!conversationId && !eventId) return;
+  const agentId = target.get('agent');
+  const resourceId = conversationId || eventId;
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(resourceId) || !state.bootstrap.agents.some(agent => agent.id === agentId)) {
+    toast('该个人资源当前不可用。', 'error');
+    return;
+  }
+  clearChatView();
+  state.historyUser = null;
+  state.currentUserId = state.session.user.id;
+  state.bootstrap.users = [state.session.user];
+  state.currentAgentId = agentId;
+  state.currentConversationId = '';
+  renderSelectors();
+  renderAgentHeader();
+  await loadConversations();
+  if (conversationId) {
+    if (!state.conversations.some(item => item.id === conversationId)) {
+      toast('该对话不属于当前用户，或已不可用。', 'error');
+      return;
+    }
+    await navigate('chat');
+    await openConversation(conversationId);
+  } else {
+    state.portalMode = 'management';
+    state.memoryTab = 'events';
+    $$('[data-memory-tab]').forEach(item => item.classList.toggle('active', item.dataset.memoryTab === 'events'));
+    await navigate('memory');
+    const row = $$('[data-memory-event-id]').find(item => item.dataset.memoryEventId === eventId);
+    if (row) {
+      row.scrollIntoView({block:'center'});
+      row.tabIndex = -1;
+      row.focus({preventScroll:true});
+    } else toast('该记忆事件不属于当前用户，或已不可用。', 'error');
+  }
 }
 
 async function loadBootstrap() {
@@ -466,7 +566,10 @@ async function loadBootstrap() {
     state.portalMode = state.role === 'admin' ? 'management' : 'user';
     localStorage.setItem('memory_studio_portal', state.portalMode);
   }
-  if (!state.bootstrap.users.some((item) => item.id === state.currentUserId)) {
+  if (platformManaged) {
+    if (state.historyUser && isAdmin()) state.bootstrap.users.push(state.historyUser);
+    state.currentUserId = state.historyUser?.id || state.session.user.id;
+  } else if (!state.bootstrap.users.some((item) => item.id === state.currentUserId)) {
     state.currentUserId = state.bootstrap.users[0]?.id || '';
   }
   if (!state.bootstrap.agents.some((item) => item.id === state.currentAgentId)) {
@@ -475,11 +578,11 @@ async function loadBootstrap() {
   if (!state.bootstrap.scenes?.some((item) => item.id === state.currentSceneId)) {
     state.currentSceneId = sceneForAgent()?.id || state.bootstrap.scenes?.[0]?.id || '';
   }
-  localStorage.setItem('memory_studio_user', state.currentUserId);
+  if (!platformManaged) localStorage.setItem('memory_studio_user', state.currentUserId);
   localStorage.setItem('memory_studio_agent', state.currentAgentId);
   localStorage.setItem('memory_studio_scene', state.currentSceneId);
   const providerName = state.bootstrap.models?.textProvider || 'model';
-  setModelConnectionStatus(providerName === 'mock' ? 'Mock 模式' : `${providerName.toUpperCase()} 已配置`);
+  setModelConnectionStatus(platformManaged ? '平台统一调用' : providerName === 'mock' ? 'Mock 模式' : `${providerName.toUpperCase()} 已配置`);
   const sandboxEnabled = state.bootstrap.sandbox?.enabled === true;
   $('#attachmentButton').disabled = !sandboxEnabled;
   $('#attachmentButton').title = sandboxEnabled
@@ -615,6 +718,7 @@ function renderAgentHeader() {
 }
 
 async function switchContext() {
+  clearChatView();
   state.currentConversationId = '';
   state.previousConversationId = '';
   state.messages = [];
@@ -624,7 +728,7 @@ async function switchContext() {
   state.graphNetwork = null;
   state.pendingAttachments = [];
   renderPendingAttachments();
-  localStorage.setItem('memory_studio_user', state.currentUserId);
+  if (!platformManaged) localStorage.setItem('memory_studio_user', state.currentUserId);
   localStorage.setItem('memory_studio_agent', state.currentAgentId);
   state.currentSceneId = sceneForAgent()?.id || state.currentSceneId;
   localStorage.setItem('memory_studio_scene', state.currentSceneId);
@@ -634,11 +738,15 @@ async function switchContext() {
   await loadCurrentPage();
 }
 
-async function loadConversations() {
+async function loadConversations({ openCurrent = true } = {}) {
   if (!state.currentUserId || !state.currentAgentId) return;
+  const generation = state.chatViewGeneration;
   const params = new URLSearchParams({ user_id: state.currentUserId, agent_id: state.currentAgentId });
-  state.conversations = await api(`/api/conversations?${params}`);
+  const conversations = await api(`/api/conversations?${params}`);
+  if (generation !== state.chatViewGeneration) return;
+  state.conversations = conversations;
   renderConversations();
+  if (!openCurrent) return;
   if (state.currentConversationId && state.conversations.some((item) => item.id === state.currentConversationId)) {
     await openConversation(state.currentConversationId);
   } else if (state.conversations.length) {
@@ -678,10 +786,14 @@ function renderWelcome() {
 }
 
 async function openConversation(id) {
-  if (state.currentConversationId && state.currentConversationId !== id) {
-    state.previousConversationId = state.currentConversationId;
+  if (state.currentConversationId !== id) {
+    const previousId = state.currentConversationId;
+    clearChatView();
+    if (previousId) state.previousConversationId = previousId;
   }
+  const generation = state.chatViewGeneration;
   const payload = await api(`/api/conversations/${encodeURIComponent(id)}?user_id=${encodeURIComponent(state.currentUserId)}`);
+  if (generation !== state.chatViewGeneration) return;
   state.currentConversationId = id;
   state.messages = payload.messages;
   renderConversations();
@@ -937,6 +1049,21 @@ function openUnlockedPlots() {
   });
 }
 
+function clearChatView() {
+  state.chatViewGeneration += 1;
+  state.failedChatDraft = '';
+  $('#messageInput').value = '';
+  updateMessageLength();
+  setChatError();
+}
+
+function setChatError(message = '') {
+  $('#chatErrorMessage').textContent = message;
+  $('#chatError').classList.toggle('hidden', !message);
+  $('#reloadChatResult').disabled = !state.currentConversationId;
+  $('#restoreChatDraft').classList.toggle('hidden', !state.failedChatDraft);
+}
+
 async function sendMessage(text) {
   const message = text.trim();
   if (state.sending || state.extractingMemory || state.uploadingAttachments || !message) return;
@@ -947,6 +1074,9 @@ async function sendMessage(text) {
     return;
   }
   state.sending = true;
+  const generation = state.chatViewGeneration;
+  state.failedChatDraft = '';
+  setChatError();
   updateComposerAvailability();
   $('#messageInput').value = '';
   $('#messageInput').style.height = 'auto';
@@ -962,6 +1092,7 @@ async function sendMessage(text) {
   const agent = currentAgent();
   renderMessages(`<div class="message-row assistant" id="streamingRow"><span class="message-avatar" style="background:${escapeHtml(agent?.avatar_color || '#2563eb')}">${escapeHtml(agent?.name?.slice(0, 1) || '角')}</span><div class="message-body"><div id="streamingActivities" class="streaming-activities hidden"></div><div class="message-bubble thinking" id="streamingBubble"><i></i><i></i><i></i></div></div></div>`);
   let streamedText = '';
+  let turnConversationId = state.currentConversationId;
   const activity = { tools: new Map(), tasks: [], workflows: [] };
   const renderActivities = () => {
     const root = $('#streamingActivities');
@@ -1001,6 +1132,14 @@ async function sendMessage(text) {
         attachment_ids: state.pendingAttachments.map((item) => item.id)
       }
     }, (event) => {
+      if (generation !== state.chatViewGeneration) return;
+      if (event.type === 'conversation' && /^[A-Za-z0-9_-]{1,128}$/.test(event.conversation_id || '')) {
+        state.currentConversationId = event.conversation_id;
+        if (turnConversationId !== event.conversation_id) {
+          turnConversationId = event.conversation_id;
+          loadConversations({ openCurrent: false }).catch(error => toast(error.message, 'error'));
+        }
+      }
       if (event.type === 'turn_start') {
         streamedText = '';
         renderStreamedText();
@@ -1024,6 +1163,7 @@ async function sendMessage(text) {
         renderActivities();
       }
     });
+    if (generation !== state.chatViewGeneration) return;
     streamedText = String(result.message?.content || streamedText);
     renderStreamedText();
     state.currentConversationId = result.conversation.id;
@@ -1034,9 +1174,21 @@ async function sendMessage(text) {
     if (result.diagnostics?.previousMemoryFlushStatus !== 'degraded') state.previousConversationId = '';
     await loadConversations();
   } catch (error) {
+    if (generation !== state.chatViewGeneration) return;
     state.messages = state.messages.filter((item) => item.id !== optimistic.id);
     renderMessages();
-    toast(error.message, 'error');
+    state.failedChatDraft = message;
+    if (!$('#messageInput').value) {
+      $('#messageInput').value = message;
+      updateMessageLength();
+    }
+    setChatError(`${error.message} 本轮输入已保留，请查看会话结果后再决定是否发送。`);
+    if (turnConversationId && !state.identityChanged && error.status !== 401) {
+      try {
+        await openConversation(turnConversationId);
+        if (generation === state.chatViewGeneration) await loadConversations({ openCurrent: false });
+      } catch { /* The visible error and draft remain available during an outage. */ }
+    }
   } finally {
     state.sending = false;
     updateComposerAvailability();
@@ -1202,6 +1354,7 @@ function renderMemoryContext() {
   const scene = sceneForAgent(agent);
   if (!user || !agent) return;
   $('#memoryUserSelect').value = user.id;
+  $('#memoryIdentityName').textContent = user.display_name;
   $('#memoryAgentSelect').value = agent.id;
   $('#memorySceneName').textContent = scene?.name || scenarioLabel(agent.scenario_type);
   $('#memoryInstanceKey').textContent = `${user.id} × ${agent.id}`;
@@ -1718,7 +1871,7 @@ function renderEventList() {
       const primaryTime = state.eventListOrder === 'story'
         ? (item.story_time || '未标注剧情时间')
         : formatDate(item.created_at);
-      return `<article class="event-timeline-row ${item.status !== 'active' ? 'history' : ''}">
+      return `<article data-memory-event-id="${escapeHtml(item.id)}" class="event-timeline-row ${item.status !== 'active' ? 'history' : ''}">
         <div class="event-time-marker"><time>${escapeHtml(primaryTime)}</time><span>${escapeHtml(formatDate(item.created_at))}</span><i>${String(index + 1).padStart(2, '0')}</i></div>
         <div class="event-list-record">
           <header><div><span class="badge blue">${escapeHtml(eventTypeLabel(item.event_type))}</span><span class="badge ${item.memory_space === 'shared_story' ? 'amber' : ''}">${item.memory_space === 'shared_story' ? '我们的故事' : '用户记忆'}</span><span class="badge ${item.canonicality === 'provisional' ? 'amber' : 'blue'}">${item.canonicality === 'provisional' ? '待用户承接' : '已确认'}</span><span class="badge ${item.status === 'active' ? '' : 'red'}" title="${escapeHtml(statusInfo(item.status).detail)}">${escapeHtml(statusLabel(item.status))}</span>${collection ? `<span class="badge">${escapeHtml(collection)}${item.sequence_no !== null ? ` · #${item.sequence_no}` : ''}</span>` : ''}</div><span class="event-importance">importance ${Number(item.importance).toFixed(2)}</span></header>
@@ -3800,20 +3953,25 @@ async function loadAdminUsers() {
   $('#pageMeta').textContent = '账号权限 · 数据所有权';
   $('#usersSummary').innerHTML = metricStripMarkup([
     ['全部用户', state.adminUsers.length],
-    ['可登录账号', state.adminUsers.filter((item) => item.can_login).length],
-    ['仅管理档案', state.adminUsers.filter((item) => !item.can_login).length],
+    [platformManaged ? '平台身份档案' : '可登录账号', state.adminUsers.filter((item) => platformManaged ? item.id.startsWith('platform_') : item.can_login).length],
+    [platformManaged ? '历史档案' : '仅管理档案', state.adminUsers.filter((item) => platformManaged ? !item.id.startsWith('platform_') : !item.can_login).length],
     ['累计反馈', state.adminUsers.reduce((sum, item) => sum + Number(item.feedback_count || 0), 0)]
   ]);
   $('#usersContent').innerHTML = state.adminUsers.length ? `<table class="data-table admin-user-table">
     <thead><tr><th style="width:23%">用户</th><th style="width:17%">登录账号</th><th style="width:12%">账号类型</th><th style="width:10%">对话</th><th style="width:10%">消息</th><th style="width:10%">记忆值</th><th style="width:9%">反馈</th><th style="width:9%;text-align:right">操作</th></tr></thead>
     <tbody>${state.adminUsers.map((user) => `<tr>
       <td><span class="user-cell"><i style="background:${escapeHtml(user.avatar_color)}">${escapeHtml(user.display_name.slice(0, 1))}</i><span><strong>${escapeHtml(user.display_name)}</strong><code>${escapeHtml(user.id)}</code></span></span></td>
-      <td>${user.username ? `<code>${escapeHtml(user.username)}</code>` : '<span class="cell-sub">未开通</span>'}</td>
-      <td><span class="badge ${user.can_login ? 'blue' : ''}">${user.can_login ? '注册账号' : '仅数据档案'}</span></td>
+      <td>${user.username ? `<code>${escapeHtml(user.username)}</code>` : `<span class="cell-sub">${platformManaged ? '飞书身份或历史数据' : '未开通'}</span>`}</td>
+      <td><span class="badge ${user.can_login ? 'blue' : ''}">${platformManaged ? user.id.startsWith('platform_') ? '平台身份档案' : '历史档案' : user.can_login ? '注册账号' : '仅数据档案'}</span></td>
       <td>${user.conversation_count}</td><td>${user.message_count}</td><td>${user.memory_count}</td><td>${user.feedback_count}</td>
       <td><div class="row-actions"><button class="icon-button bordered" data-inspect-user="${escapeHtml(user.id)}" title="查看该用户记忆" aria-label="查看${escapeHtml(user.display_name)}的记忆"><i data-lucide="database"></i></button></div></td>
     </tr>`).join('')}</tbody></table>` : emptyState('users', '尚无用户');
   $$('[data-inspect-user]').forEach((button) => button.addEventListener('click', async () => {
+    if (platformManaged) {
+      state.historyUser = state.adminUsers.find(user => user.id === button.dataset.inspectUser);
+      state.bootstrap.users = state.historyUser?.id === state.session.user.id ? [state.session.user] : [state.session.user, state.historyUser];
+      if (state.historyUser?.id === state.session.user.id) state.historyUser = null;
+    }
     state.currentUserId = button.dataset.inspectUser;
     await switchContext();
     await navigate('memory');
@@ -4239,6 +4397,7 @@ function setAuthMode(mode) {
 }
 
 async function finishAuthentication(result, fallbackRole) {
+  clearChatView();
   state.session = { authenticated: true, role: result.role || fallbackRole, user: result.user || null };
   state.role = state.session.role;
   state.currentConversationId = '';
@@ -4249,7 +4408,7 @@ async function finishAuthentication(result, fallbackRole) {
 
 $$('[data-auth-mode]').forEach((button) => button.addEventListener('click', () => setAuthMode(button.dataset.authMode)));
 
-$('#userLoginForm').addEventListener('submit', async (event) => {
+$('#userLoginForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   $('#loginError').textContent = '';
   try {
@@ -4264,7 +4423,7 @@ $('#userLoginForm').addEventListener('submit', async (event) => {
   }
 });
 
-$('#registerForm').addEventListener('submit', async (event) => {
+$('#registerForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   $('#loginError').textContent = '';
   const password = $('#registerPassword').value;
@@ -4290,7 +4449,7 @@ $('#registerForm').addEventListener('submit', async (event) => {
   }
 });
 
-$('#adminLoginForm').addEventListener('submit', async (event) => {
+$('#adminLoginForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   $('#loginError').textContent = '';
   try {
@@ -4303,7 +4462,13 @@ $('#adminLoginForm').addEventListener('submit', async (event) => {
 });
 
 $('#logoutButton').addEventListener('click', async () => {
-  await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
+  if (platformManaged) {
+    try { await window.PlatformWorkspace.logout(); }
+    catch { toast('暂时无法退出统一账户，请稍后重试。', 'error'); }
+    return;
+  }
+  const result = await api('/api/auth/logout', { method: 'POST' }).catch(() => null);
+  if (result?.platform_logout_url) { location.assign(result.platform_logout_url); return; }
   state.role = null;
   state.session = null;
   state.bootstrap = null;
@@ -4321,6 +4486,7 @@ $('#memoryUserSelect').addEventListener('change', async (event) => { state.curre
 $('#memoryAgentSelect').addEventListener('change', async (event) => { state.currentAgentId = event.target.value; await switchContext(); });
 $('#usersAddButton').addEventListener('click', addUser);
 $('#newConversationButton').addEventListener('click', () => {
+  clearChatView();
   if (state.currentConversationId) state.previousConversationId = state.currentConversationId;
   state.currentConversationId = '';
   state.extractionStatus = null;
@@ -4331,6 +4497,31 @@ $('#newConversationButton').addEventListener('click', () => {
   $('#messageInput').focus();
 });
 $('#composerForm').addEventListener('submit', (event) => { event.preventDefault(); sendMessage($('#messageInput').value); });
+$('#reloadChatResult').addEventListener('click', async (event) => {
+  if (state.sending || !state.currentConversationId) return;
+  const button = event.currentTarget;
+  const generation = state.chatViewGeneration;
+  const conversationId = state.currentConversationId;
+  button.disabled = true;
+  try {
+    await openConversation(conversationId);
+    await loadConversations({ openCurrent: false });
+    if (generation !== state.chatViewGeneration) return;
+    setChatError('已读取当前会话中保存的消息，请确认本轮结果。');
+  } catch (error) {
+    if (generation === state.chatViewGeneration) setChatError(`${error.message} 本轮输入仍保留，可稍后查看会话结果。`);
+  }
+  finally { button.disabled = false; }
+});
+$('#restoreChatDraft').addEventListener('click', () => {
+  if ($('#messageInput').value && $('#messageInput').value !== state.failedChatDraft) {
+    toast('输入框中有新草稿，请先保存或清空后再恢复本轮输入。', 'error');
+    return;
+  }
+  $('#messageInput').value = state.failedChatDraft;
+  updateMessageLength();
+  $('#messageInput').focus();
+});
 $('#attachmentButton').addEventListener('click', () => $('#attachmentInput').click());
 $('#attachmentInput').addEventListener('change', (event) => uploadAttachments(event.target.files));
 $('#memoryExtractionButton').addEventListener('click', extractMemoryNow);
@@ -4471,7 +4662,31 @@ $$('[data-config-link]').forEach((link) => link.addEventListener('click', async 
 $('#addTriggerButton').addEventListener('click', () => editTrigger());
 window.addEventListener('resize', () => requestAnimationFrame(drawStoryTreeEdges));
 
-initialize().then(refreshIcons).catch((error) => {
-  showLogin();
-  $('#loginError').textContent = error.message;
+async function startWorkspace() {
+  if (state.identityChanged) {
+    location.reload();
+    return;
+  }
+  try { await initialize(); refreshIcons(); }
+  catch (error) {
+    if (state.identityChanged) return;
+    if (platformManaged) {
+      if (error.status === 401) showLogin();
+      else showWorkspaceState('暂时无法加载记忆工作空间', error.status === 503 ? '平台连接暂时不可用，请稍后重新加载。' : error.message);
+    } else {
+      showLogin();
+      $('#loginError').textContent = error.message;
+    }
+  }
+}
+
+$('#retryStartup').addEventListener('click', startWorkspace);
+window.addEventListener('hashchange', () => openWorkspaceResource().catch(error => toast(error.message, 'error')));
+$('#returnToPersonal').addEventListener('click', async () => {
+  state.historyUser = null;
+  state.bootstrap.users = [state.session.user];
+  state.currentUserId = state.session.user.id;
+  await switchContext();
+  await navigate('memory');
 });
+startWorkspace();

@@ -10,6 +10,12 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+  <section id="startupState" class="workspace-loading hidden" role="status" aria-live="polite">
+    <div><h1 id="startupTitle">正在连接个人工作空间</h1><p id="startupDescription">正在读取你的身份与个人记忆。</p>
+      <button id="retryStartup" class="button primary hidden" type="button">重新加载</button>
+      <a id="workspaceLogin" class="button primary hidden">前往统一登录</a>
+    </div>
+  </section>
   <div id="loginOverlay" class="modal-backdrop login-backdrop">
     <div class="modal login-modal">
       <div class="brand-mark" aria-hidden="true">M</div>
@@ -107,6 +113,7 @@
         </div>
       </header>
 
+      <div id="historyBanner" class="history-banner hidden" role="status"><span id="historyDescription"></span><button id="returnToPersonal" class="button small" type="button">返回我的记忆</button></div>
       <main class="page-stack">
         <section id="page-chat" class="page active">
           <div class="chat-layout">
@@ -135,6 +142,10 @@
                   <button id="unlockedPlotsButton" class="composer-tool" type="button" title="查看剧情图鉴" aria-label="查看剧情图鉴"><i data-lucide="scroll-text"></i><span id="unlockedPlotsCount" class="tool-count">0</span></button>
                 </div>
                 <div id="attachmentTray" class="attachment-tray hidden" aria-live="polite"></div>
+                <div id="chatError" class="chat-error hidden" role="alert">
+                  <p id="chatErrorMessage"></p>
+                  <div><button id="reloadChatResult" type="button" class="button secondary compact">查看会话结果</button><button id="restoreChatDraft" type="button" class="button secondary compact">恢复本轮输入</button></div>
+                </div>
                 <form id="composerForm" class="composer">
                   <div class="composer-input-wrap">
                     <textarea id="messageInput" rows="1" placeholder="输入消息…" aria-label="消息内容" aria-describedby="messageLength"></textarea>
@@ -161,6 +172,7 @@
                 <label class="instance-party">
                   <span>用户</span>
                   <select id="memoryUserSelect" aria-label="选择记忆所属用户"></select>
+                  <strong id="memoryIdentityName" class="hidden"></strong>
                 </label>
                 <span class="relation-symbol" title="一对一记忆实例"><i data-lucide="arrow-left-right"></i></span>
                 <label class="instance-party">

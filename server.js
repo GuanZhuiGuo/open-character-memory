@@ -1,3 +1,4 @@
+import { platformEnabled, platformPrincipal, platformLoginUrl, platformWorkspaceRequest, platformWorkspaceShell, protectPlatformRequest } from './lib/platform.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -228,6 +229,7 @@ function publicUser(row) {
 }
 
 function getMemoryServicePrincipal(request) {
+  if (platformEnabled()) return null;
   const configuredKey = config.memoryService?.apiKey || '';
   const authorization = String(request.headers.authorization || '');
   if (!configuredKey || !authorization.startsWith('Bearer ')) return null;
@@ -243,6 +245,7 @@ function getMemoryServicePrincipal(request) {
 }
 
 function getPrincipal(request) {
+  if (platformEnabled()) return platformPrincipal(db, request);
   const servicePrincipal = getMemoryServicePrincipal(request);
   if (servicePrincipal) return servicePrincipal;
   const cookies = parseCookies(request);
@@ -292,7 +295,7 @@ function requireMemoryWriterPrincipal(principal, response) {
 function assertUserAccess(principal, requestedUserId) {
   const userId = safeText(requestedUserId, 100).trim();
   if (!userId) throw new HttpError(400, '缺少用户作用域', 'USER_SCOPE_REQUIRED');
-  if (principal.role === 'user' && principal.userId !== userId) {
+  if ((principal.role === 'user' || principal.platformDelegated) && principal.userId !== userId) {
     throw new HttpError(403, '无权访问其他用户的记忆或数据', 'USER_SCOPE_FORBIDDEN');
   }
   return userId;
@@ -309,7 +312,7 @@ function userMayAccessRoute(pathname, method) {
   if (['/api/memory/entities/merge', '/api/memory/entities/split'].includes(pathname) && method === 'POST') return true;
   if (/^\/api\/conversations\/[^/]+\/context$/.test(pathname) && method === 'GET') return true;
   if (pathname === '/v1/memory/capabilities' && method === 'GET') return true;
-  if (['/v1/memory/observe', '/v1/memory/recall', '/v1/memory/expand'].includes(pathname)
+  if (['/v1/memory/bind', '/v1/memory/observe', '/v1/memory/recall', '/v1/memory/expand'].includes(pathname)
     && method === 'POST') return true;
   if (/^\/v1\/memory\/jobs\/[^/]+$/.test(pathname) && method === 'GET') return true;
   if (pathname === '/api/conversations' && ['GET', 'POST'].includes(method)) return true;
@@ -326,7 +329,7 @@ function userMayAccessRoute(pathname, method) {
     && method === 'POST') return true;
   if (method !== 'GET') return false;
   if ([
-    '/api/bootstrap', '/api/agents', '/api/scenes', '/api/memory/schemas', '/api/memory/values',
+    '/api/bootstrap', '/api/platform/resources', '/api/agents', '/api/scenes', '/api/memory/schemas', '/api/memory/values',
     '/api/memory/history', '/api/memory/graph', '/api/memory/events', '/api/plots', '/api/triggers',
     '/api/tools', '/api/props', '/api/traces', '/api/architecture/overview', '/api/artifacts/contract'
   ].includes(pathname)) return true;
@@ -364,7 +367,7 @@ function queryScope(url) {
 
 function memoryScopeWithAccess(principal, scope = {}) {
   const subjectId = scope.subjectId ?? scope.subject_id ?? scope.userId ?? scope.user_id;
-  return {
+  const normalized = {
     ...scope,
     tenantId: scope.tenantId ?? scope.tenant_id ?? config.memoryService.tenantId,
     subjectId: assertUserAccess(principal, subjectId),
@@ -372,6 +375,48 @@ function memoryScopeWithAccess(principal, scope = {}) {
     spaceId: scope.spaceId ?? scope.space_id ?? scope.storyId ?? scope.story_id ?? 'main_story',
     branchId: scope.branchId ?? scope.branch_id ?? 'main'
   };
+  if (principal.platformDelegated) {
+    const purpose = normalized.agentId === 'edu-learning' ? 'learning' : normalized.agentId === 'edu-authoring' ? 'authoring' : null;
+    if (principal.delegationSource !== 'education' || normalized.tenantId !== config.memoryService.tenantId
+        || !purpose || typeof normalized.spaceId !== 'string'
+        || !new RegExp('^' + purpose + '-[a-f0-9]{24}$').test(normalized.spaceId) || normalized.branchId !== 'main') {
+      throw new HttpError(403, '教育记忆作用域不在委托范围内', 'MEMORY_DELEGATION_SCOPE_FORBIDDEN');
+    }
+    validateEducationMemoryAgent(normalized);
+    // Drop aliases and unrecognized scope fields after canonical validation.
+    return Object.fromEntries(['tenantId','subjectId','agentId','spaceId','branchId'].map(key => [key, normalized[key]]));
+  }
+  return normalized;
+}
+
+function validateEducationMemoryAgent(scope, required = false) {
+  const agent = db.prepare('SELECT * FROM agents WHERE id=?').get(scope.agentId);
+  if (!agent && !required) return null;
+  const purpose = scope.agentId === 'edu-learning' ? 'learning' : 'authoring';
+  const stored = (parseJson(agent?.fixed_attributes_json, {}) || {}).platformManagedMemory;
+  if (!agent || agent.scene_id !== 'scene_education' || agent.scenario_type !== 'education' || agent.enabled !== 1
+      || !stored || stored.sourceService !== 'education' || stored.purpose !== purpose || stored.schemaVersion !== 1) {
+    throw new HttpError(409, '教育记忆角色标识已有其他用途或已停用', 'MEMORY_EDUCATION_AGENT_CONFLICT');
+  }
+  return agent;
+}
+
+function bindEducationMemory(principal, scope) {
+  if (!principal.platformDelegated || principal.delegationSource !== 'education') {
+    throw new HttpError(403, '教育记忆绑定需要受限平台委托', 'MEMORY_DELEGATION_REQUIRED');
+  }
+  const purpose = scope.agentId === 'edu-learning' ? 'learning' : 'authoring';
+  const marker = { sourceService:'education', purpose, schemaVersion:1 };
+  const timestamp = nowIso();
+  db.prepare(`INSERT OR IGNORE INTO agents(id,name,scene_id,scenario_type,description,system_prompt,
+    greeting,avatar_color,enabled,fixed_attributes_json,created_at,updated_at)
+    VALUES(?,?,'scene_education','education',?,?,'','#7c3aed',1,?,?,?)`).run(scope.agentId,
+      purpose === 'learning' ? '教育学习记忆' : '教育备课记忆',
+      purpose === 'learning' ? '当前平台用户的学习偏好、知识掌握与稳定错因。' : '当前平台用户的备课偏好、课程目标与内容设计约束。',
+      purpose === 'learning' ? '围绕当前用户的学习记录维护有证据的教育记忆，区分知识掌握、学习偏好与待确认信息。' : '围绕当前用户的备课记录维护有证据的教学设计记忆，区分课程目标、素材约束与待确认信息。',
+      JSON.stringify({ platformManagedMemory:marker }), timestamp, timestamp);
+  const agent = validateEducationMemoryAgent(scope, true);
+  return { bound:true, scope, agent:{ id:agent.id, sceneId:agent.scene_id } };
 }
 
 function memoryScopeFromQuery(principal, searchParams) {
@@ -1597,6 +1642,14 @@ function listAdminFeedback() {
 async function handleApi(request, response, url) {
   const method = request.method || 'GET';
   const pathname = url.pathname;
+  if (platformEnabled() && ['/api/auth/register','/api/auth/login','/api/admin/login'].includes(pathname)) {
+    sendJson(response, 409, { error: '请从应用广场使用统一登录', code: 'PLATFORM_LOGIN_REQUIRED', login_url: platformLoginUrl() });
+    return;
+  }
+  if (platformEnabled() && ['/api/auth/logout','/api/admin/logout'].includes(pathname)) {
+    sendJson(response, 200, { ok: true, platform_logout_url: '/auth/logout' });
+    return;
+  }
   if (getMemoryServicePrincipal(request) && !pathname.startsWith('/v1/memory')) {
     sendJson(response, 403, { error: 'Memory Service Key 仅可访问 v1 记忆契约', code: 'MEMORY_SERVICE_SCOPE_ONLY' });
     return;
@@ -1711,6 +1764,10 @@ async function handleApi(request, response, url) {
     const principal = getPrincipal(request);
     sendJson(response, 200, principal ? {
       authenticated: true,
+      platformManaged: platformEnabled(),
+      platformUserId:principal.platformUserId || null,
+      identity:{type:principal.identityType || 'local',display_name:principal.displayName || principal.user?.display_name || '管理员',
+        legacy_subject_id:principal.legacySubjectId || null,history_notice:principal.historyNotice || ''},
       role: principal.role,
       username: principal.username || null,
       user: principal.user || null
@@ -1745,7 +1802,7 @@ async function handleApi(request, response, url) {
     return;
   }
   if (pathname === '/api/architecture/diagram' && method === 'GET') {
-    const diagram = fs.readFileSync(path.join(projectDir, 'docs/memory-lifecycle-v0.9.architecture.html'));
+    const diagram = platformWorkspaceShell(fs.readFileSync(path.join(projectDir, 'docs/memory-lifecycle-v0.9.architecture.html'), 'utf8'));
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
     response.end(diagram);
     return;
@@ -1753,13 +1810,36 @@ async function handleApi(request, response, url) {
 
   const principal = requirePrincipal(request, response);
   if (!principal) return;
+  if (pathname === '/api/platform/resources' && method === 'GET' && platformEnabled()) {
+    if (url.searchParams.has('user_id') && url.searchParams.get('user_id') !== principal.userId) {
+      throw new HttpError(403, '个人资源仅属于当前飞书用户', 'USER_SCOPE_FORBIDDEN');
+    }
+    const conversations = db.prepare(`SELECT c.id,c.agent_id,c.title,c.updated_at FROM conversations c
+      JOIN agents a ON a.id=c.agent_id AND a.enabled=1
+      WHERE c.user_id=? ORDER BY c.updated_at DESC LIMIT 100`).all(principal.userId);
+    const events = db.prepare(`SELECT e.id,e.agent_id,e.title,e.updated_at,e.status FROM events e
+      JOIN agents a ON a.id=e.agent_id AND a.enabled=1
+      WHERE e.user_id=? AND e.status='active' AND e.story_id='main_story' AND e.branch_id='main'
+      ORDER BY e.updated_at DESC LIMIT 100`).all(principal.userId);
+    const resources = [
+      ...conversations.map(row => ({id:row.id,type:'conversation',title:row.title,updated_at:row.updated_at,status:'active',
+        path:'/#' + new URLSearchParams({conversation:row.id,agent:row.agent_id})})),
+      ...events.map(row => ({id:row.id,type:'memory_event',title:row.title,updated_at:row.updated_at,status:row.status,
+        path:'/#' + new URLSearchParams({'memory-event':row.id,agent:row.agent_id})}))
+    ].sort((a,b) => b.updated_at.localeCompare(a.updated_at)).slice(0,100);
+    sendJson(response, 200, {resources});
+    return;
+  }
+  if (pathname === '/api/users' && method === 'POST' && platformEnabled()) {
+    throw new HttpError(409, '成员档案由飞书身份自动建立', 'PLATFORM_USER_MANAGED');
+  }
   if (principal.role === 'user' && !userMayAccessRoute(pathname, method)) {
     requireAdminPrincipal(principal, response);
     return;
   }
 
   if (pathname === '/api/deep-agent/runs' && method === 'GET') {
-    const requestedUserId = url.searchParams.get('user_id') || (principal.role === 'user' ? principal.userId : '');
+    const requestedUserId = url.searchParams.get('user_id') || (platformEnabled() || principal.role === 'user' ? principal.userId : '');
     const userId = requestedUserId ? assertUserAccess(principal, requestedUserId) : '';
     const conversationId = url.searchParams.get('conversation_id') || '';
     if (conversationId) {
@@ -1846,6 +1926,12 @@ async function handleApi(request, response, url) {
 
   if (pathname === '/v1/memory/capabilities' && method === 'GET') {
     sendJson(response, 200, getMemoryServiceCapabilities());
+    return;
+  }
+  if (pathname === '/v1/memory/bind' && method === 'POST') {
+    const body = await readBody(request);
+    const scope = memoryScopeWithAccess(principal, body.scope);
+    sendJson(response, 200, bindEducationMemory(principal, scope));
     return;
   }
   if (pathname === '/v1/memory/observe' && method === 'POST') {
@@ -1941,7 +2027,7 @@ async function handleApi(request, response, url) {
     sendJson(response, 200, {
       role: 'admin',
       systemVersion: SYSTEM_VERSION,
-      users: db.prepare("SELECT * FROM users WHERE status = 'active' ORDER BY created_at").all(),
+      users: platformEnabled() ? [principal.user] : db.prepare("SELECT * FROM users WHERE status = 'active' ORDER BY created_at").all(),
       agents: db.prepare('SELECT * FROM agents WHERE enabled = 1 ORDER BY created_at').all(),
       scenes: listScenes(),
       database: {
@@ -2173,6 +2259,10 @@ async function handleApi(request, response, url) {
     }
     beginNdjson(response);
     writeNdjson(response, { type: 'ready' });
+    const heartbeat = setInterval(() => writeNdjson(response, { type: 'heartbeat' }), 15_000);
+    heartbeat.unref();
+    const stopHeartbeat = () => clearInterval(heartbeat);
+    response.once('close', stopHeartbeat);
     try {
       const result = await chat({
         ...chatRequest,
@@ -2188,6 +2278,9 @@ async function handleApi(request, response, url) {
           ...(error.details ? { details: error.details } : {})
         }
       });
+    } finally {
+      stopHeartbeat();
+      response.off('close', stopHeartbeat);
     }
     if (!response.writableEnded) response.end();
     return;
@@ -2398,7 +2491,7 @@ async function handleApi(request, response, url) {
     if (url.searchParams.get('user_id')) {
       scope = queryScope(url);
       scope.userId = assertUserAccess(principal, scope.userId);
-    } else if (principal.role === 'user') {
+    } else if (platformEnabled() || principal.role === 'user') {
       scope = {
         userId: principal.userId,
         agentId: url.searchParams.get('agent_id') || '',
@@ -2449,7 +2542,7 @@ async function handleApi(request, response, url) {
   if (pathname === '/api/props' && method === 'GET') {
     const agentId = url.searchParams.get('agent_id') || '';
     let scope = null;
-    if (url.searchParams.get('user_id') || principal.role === 'user') {
+    if (url.searchParams.get('user_id') || platformEnabled() || principal.role === 'user') {
       const userId = assertUserAccess(principal, url.searchParams.get('user_id') || principal.userId);
       scope = {
         userId,
@@ -2513,22 +2606,34 @@ function serveStatic(response, pathname) {
     sendJson(response, 404, { error: '页面不存在' });
     return;
   }
+  const assetOrigin = platformEnabled() && process.env.PLATFORM_PUBLIC_ORIGIN ? new URL(process.env.PLATFORM_PUBLIC_ORIGIN).origin : '';
+  const platformSource = /^https?:\/\//.test(assetOrigin) ? ' ' + assetOrigin : '';
   response.writeHead(200, {
     'Content-Type': mimeTypes[path.extname(filePath)] || 'application/octet-stream',
     'Cache-Control': 'no-cache',
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'same-origin',
-    'Content-Security-Policy': "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+    'Content-Security-Policy': `default-src 'self'; script-src 'self' https://unpkg.com${platformSource}; style-src 'self' 'unsafe-inline'${platformSource}; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'`
   });
   if (filePath === path.join(publicDir, 'index.html')) {
-    const markup = fs.readFileSync(filePath, 'utf8').replaceAll('__APP_BASE_PATH__', config.basePath);
-    response.end(markup);
+    let markup = fs.readFileSync(filePath, 'utf8').replaceAll('__APP_BASE_PATH__', config.basePath);
+    if (platformEnabled()) {
+      const loginUrl = platformLoginUrl().replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
+      markup = markup.replace('<body>', `<body data-platform="true" data-platform-login-url="${loginUrl}">`)
+        .replace(/  <div id="loginOverlay"[\s\S]*?(?=  <div id="app")/, '')
+        .replace('class="workspace-loading hidden"', 'class="workspace-loading"');
+    }
+    response.end(platformWorkspaceShell(markup));
+    return;
+  }
+  if (path.extname(filePath) === '.html') {
+    response.end(platformWorkspaceShell(fs.readFileSync(filePath, 'utf8')));
     return;
   }
   fs.createReadStream(filePath).pipe(response);
 }
 
-export const server = http.createServer(async (request, response) => {
+async function handleRequest(request, response) {
   const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
   try {
     if (config.basePath && url.pathname === config.basePath) {
@@ -2554,6 +2659,23 @@ export const server = http.createServer(async (request, response) => {
       code: error.code || 'REQUEST_FAILED',
       ...(error.details ? { details: error.details } : {})
     });
+  }
+}
+
+export const server = http.createServer(async (request, response) => {
+  const healthPath = (request.url || '').split('?')[0];
+  if (platformEnabled() && [config.basePath + '/api/health', '/api/health'].includes(healthPath)) {
+    sendJson(response, 200, { ok: true, service: 'memory', platform_managed: true });
+    return;
+  }
+  try {
+    await protectPlatformRequest(request, response, async () => {
+      if (await platformWorkspaceRequest(request, response)) return;
+      await handleRequest(request, response);
+    });
+  } catch {
+    if (!response.headersSent) sendJson(response, 503, {error:'平台连接暂时不可用，请稍后重试',code:'PLATFORM_UNAVAILABLE'});
+    else if (!response.writableEnded) response.end();
   }
 });
 
