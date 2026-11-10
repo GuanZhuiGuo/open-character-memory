@@ -1399,6 +1399,7 @@ function maintenanceReasonLabel(reason) {
     batch_already_recorded: '这批对话已有整理记录，请刷新状态查看结果。',
     waiting_extraction: '新对话正在提取记忆，完成后再整理。',
     extraction_disabled: '当前角色已关闭长期记忆抽取，活动整理同步暂停。',
+    authorization_required: '请登录并产生新对话，授权后台整理当前记忆空间。',
     budget_exceeded: '本轮整理额度已用完，新内容保留等待后续处理。',
     budget: '今日整理额度已用完，新内容保留等待后续处理。',
     eligible: '有新增对话可以整理。',

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -733,4 +734,114 @@ test('deleted pending sources are quarantined without advancing success and late
   assert.ok(getMemoryMaintenanceStatus(scope).state.lastSuccessVersion > successfulVersion);
   assert.equal(db.prepare('SELECT processed_run_id FROM memory_maintenance_sources WHERE seq=?').get(validSource.seq).processed_run_id, next.id);
   assert.equal(db.prepare('SELECT processed_run_id FROM memory_maintenance_sources WHERE seq=?').get(quarantined.seq).processed_run_id, '');
+});
+
+test('runtime authorization rejects historical work without capture, queueing, model calls or budget consumption', async () => {
+  const scope = scopeFor('authorization_missing');
+  addTurn(scope);
+  let captures = 0;
+  let calls = 0;
+  maintenance.configureMemoryMaintenanceRuntime({
+    capture() { captures += 1; },
+    canRun() { return false; },
+    run() { assert.fail('unauthorized work must never enter its execution context'); }
+  });
+  try {
+    await scan();
+    const result = await enqueueMemoryMaintenance(scope, { reason: 'manual', now: () => IDLE_TIME });
+    assert.equal(result.status, 'skipped');
+    assert.equal(result.reason, 'authorization_required');
+    assert.equal(result.run, null);
+    const observedTables = ['memory_maintenance_sources', 'memory_maintenance_states', 'memory_maintenance_runs',
+      'memory_maintenance_proposals', 'memory_maintenance_model_calls'];
+    const beforeRead = snapshot(observedTables);
+    assert.equal(getMemoryMaintenanceStatus(scope).state.eligibility.reason, 'authorization_required');
+    getMemoryMaintenanceStatus(scope);
+    assert.deepEqual(snapshot(observedTables), beforeRead);
+    const callsBefore = rowCount('memory_maintenance_model_calls');
+    const runsBefore = rowCount('memory_maintenance_runs');
+    await maintenance.runMemoryMaintenanceTick({ limit: 20, now: () => IDLE_TIME,
+      generate: async () => { calls += 1; return generated(); } });
+    assert.equal(calls, 0);
+    assert.equal(captures, 0);
+    assert.equal(rowCount('memory_maintenance_model_calls'), callsBefore);
+    assert.equal(rowCount('memory_maintenance_runs'), runsBefore);
+    assert.deepEqual(maintenance.listMemoryMaintenanceRuns(scope), []);
+  } finally { maintenance.configureMemoryMaintenanceRuntime({}); }
+});
+
+test('captured scope actors are restored for generation and missing retry authorization consumes no attempt or budget', async () => {
+  const scope = scopeFor('captured_actor');
+  const otherScope = { ...scope, branchId: 'another_branch' };
+  const first = addTurn(scope);
+  const second = addTurn(otherScope);
+  const storage = new AsyncLocalStorage();
+  const captured = new Map();
+  const capturedScopes = [];
+  const scopeKey = (value) => JSON.stringify([value.tenantId, value.subjectId, value.agentId, value.spaceId, value.branchId]);
+  maintenance.configureMemoryMaintenanceRuntime({
+    capture(value) {
+      capturedScopes.push(value);
+      const actor = storage.getStore();
+      if (actor) captured.set(scopeKey(value), actor);
+    },
+    canRun(value) { return captured.has(scopeKey(value)); },
+    run(value, callback) {
+      const actor = captured.get(scopeKey(value));
+      assert.ok(actor, 'execution must have a captured actor');
+      return storage.run(actor, callback);
+    }
+  });
+  try {
+    const token = storage.run({ id: 'actor-first' }, () => beginMemoryMaintenanceTurn(scope, { now: () => IDLE_TIME }));
+    endMemoryMaintenanceTurn(token);
+    storage.run({ id: 'actor-second' }, () => maintenance.captureMemoryMaintenanceContext(otherScope));
+    assert.equal(capturedScopes.length, 2);
+    assert.equal(capturedScopes[0].subjectId, scope.userId);
+    assert.equal(capturedScopes[0].spaceId, scope.storyId);
+    assert.notEqual(scopeKey(capturedScopes[0]), scopeKey(capturedScopes[1]));
+    const run = await queued(scope);
+    const failed = await processMemoryMaintenanceRun(run.id, {
+      now: () => IDLE_TIME,
+      generate: async () => {
+        assert.equal(storage.getStore()?.id, 'actor-first');
+        throw new Error('simulated provider failure');
+      }
+    });
+    assert.equal(failed.status, 'retry');
+    assert.equal(storage.getStore(), undefined);
+    captured.delete(scopeKey(capturedScopes[0]));
+    const before = db.prepare('SELECT * FROM memory_maintenance_runs WHERE id=?').get(run.id);
+    const callsBefore = rowCount('memory_maintenance_model_calls');
+    await processMemoryMaintenanceRun(run.id, {
+      now: () => IDLE_TIME + 60_000,
+      generate() { assert.fail('missing actor must not issue a retry request'); }
+    });
+    assert.deepEqual(db.prepare('SELECT * FROM memory_maintenance_runs WHERE id=?').get(run.id), before);
+    assert.equal(rowCount('memory_maintenance_model_calls'), callsBefore);
+    const readonlyTables = ['memory_maintenance_sources', 'memory_maintenance_states', 'memory_maintenance_runs', 'memory_maintenance_model_calls'];
+    const beforeRead = snapshot(readonlyTables);
+    getMemoryMaintenanceStatus(scope);
+    assert.deepEqual(snapshot(readonlyTables), beforeRead);
+    assert.equal(capturedScopes.length, 2);
+
+    storage.run({ id: 'actor-first-renewed' }, () => maintenance.captureMemoryMaintenanceContext(scope));
+    const resumed = await processMemoryMaintenanceRun(run.id, {
+      now: () => IDLE_TIME + 60_000,
+      generate: async () => {
+        assert.equal(storage.getStore()?.id, 'actor-first-renewed');
+        return generated({ topics: [{ title: '身份恢复后的主题', summary: '计划待确认。', sourceMessageIds: [first.userId] }] });
+      }
+    });
+    assert.equal(resumed.status, 'succeeded');
+    const otherRun = await queued(otherScope, IDLE_TIME + 60_000);
+    assert.equal((await processMemoryMaintenanceRun(otherRun.id, {
+      now: () => IDLE_TIME + 60_000,
+      generate: async () => {
+        assert.equal(storage.getStore()?.id, 'actor-second');
+        return generated({ topics: [{ title: '另一个分支的主题', summary: '独立身份上下文。', sourceMessageIds: [second.userId] }] });
+      }
+    })).status, 'succeeded');
+    assert.equal(storage.getStore(), undefined);
+  } finally { maintenance.configureMemoryMaintenanceRuntime({}); }
 });

@@ -26,6 +26,7 @@ import {
 } from './lib/memory-review.js';
 import {
   ensureMemoryMaintenanceSchema, discoverMaintenanceActivity, getMemoryMaintenanceStatus, getMemoryMaintenancePolicy,
+  configureMemoryMaintenanceRuntime,
   enqueueMemoryMaintenance, processMemoryMaintenanceRun,
   applyMemoryMaintenanceCandidate, rejectMemoryMaintenanceCandidate,
   startMemoryMaintenanceWorker, stopMemoryMaintenanceWorker
@@ -68,6 +69,17 @@ ensureConversationContextSchema();
 ensureEntityRepairSchema();
 migrateMemoryReviews();
 ensureMemoryMaintenanceSchema();
+if (process.env.PLATFORM_ENABLED === 'true') {
+  const { capturePlatformJob, hasPlatformJob, withPlatformJob } = await import('./lib/platform.js');
+  const jobKey = (scope) => `maintenance:${JSON.stringify([
+    scope.tenantId, scope.subjectId, scope.agentId, scope.spaceId, scope.branchId
+  ])}`;
+  configureMemoryMaintenanceRuntime({
+    capture: (scope) => capturePlatformJob(jobKey(scope)),
+    canRun: (scope) => hasPlatformJob(jobKey(scope)),
+    run: (scope, callback) => withPlatformJob(jobKey(scope), callback)
+  });
+}
 await initializeGraphStore();
 
 const projectDir = path.dirname(fileURLToPath(import.meta.url));
