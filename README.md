@@ -257,8 +257,18 @@ Neo4j 投影的失败策略与主记忆抽取不同：主 SQLite 写入不会回
 
 ## Git 与发布
 
-本地源码使用 Git 记录版本，`.env.local`、SQLite 数据和浏览器验收产物不进入仓库。Git 解决的是变更历史、差异审查和版本回退，不会自动把服务器发布变成增量传输。当前云端发布仍使用小型完整代码包做原子替换，但会保留服务器上的 `data/` 和环境变量，并在健康检查失败时回滚。
+本仓库是 Memory 服务的权威源码。协作入口为 [AGENTS.md](AGENTS.md) 与 [platform.integration.json](platform.integration.json)。`.env.local`、SQLite 数据、凭据和浏览器验收产物不进入源码或发布包。
 
-需要增量发布时，应先绑定远程 Git 仓库，然后让服务器按已验证 commit 执行 `git fetch` + `git checkout`；或使用带发布目录与健康检查的 `rsync` 方案。不建议直接在正在运行的目录里逐文件覆盖。
+统一平台目标遵循 `/Users/bytedance/work/项目/demo-platform/docs/platform-contract.md` 的 `contract_version=1`。身份、模型配置、额度和用户归属经平台核验，后台任务保存原用户委托。业务变更先在本仓库提交，再由平台门禁导出完整源码候选。
+
+```bash
+python3 /Users/bytedance/work/项目/demo-platform/scripts/release_service.py prepare \
+  --service memory --source . --node /absolute/path/to/node24 \
+  --output /absolute/path/to/memory-candidate.tar.gz
+```
+
+候选准备完成后，按平台契约执行指定服务的部署与验收。Memory Web 和 worker 使用同一源码版本，保留服务器 `data/`、环境文件、委托数据库和恢复点。源码测试、候选、激活、真实模型及公网链路分别记录结果。
+
+独立开源发行使用独立环境、账户和数据，遵循下方检查清单。每次 Release Note 记录能力对应的 Bad Case、复现输入、旧结果、新结果和评测状态。
 
 首次公开到 GitHub 前，按 [`docs/open-source-release-checklist.md`](docs/open-source-release-checklist.md) 完成密钥扫描、离线测试、五类记忆评测、Docker 构建和安全设置；Headless 契约见 [`docs/headless-memory-runtime.md`](docs/headless-memory-runtime.md)，未完成的 PostgreSQL + pgvector、Python SDK、分布式 worker 与 OpenSearch 决策点见 [`docs/future-storage-sdk-roadmap.md`](docs/future-storage-sdk-roadmap.md)。
