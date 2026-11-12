@@ -4,6 +4,8 @@
 
 平台协作契约位于 `/Users/bytedance/work/项目/demo-platform/docs/platform-contract.md`，当前使用 `contract_version=1`。统一身份、中央模型配置、用户额度、服务委托、个人数据归属及发布门禁按该契约执行。平台文档不可读时，保留改动并报告缺失项。
 
+陪聊底层接口和只读查询边界见 `docs/platform-companion-memory.md`。Voice 与数字人使用稳定角色标识共享记忆，用户画像与角色经历沿核心 schema 的范围分别保存。
+
 ## 开发与数据
 
 - 业务代码和平台适配均在本仓库修改并提交。平台发布目录与 overlay 只保存经审查的交付快照。

@@ -59,6 +59,7 @@ import {
   expandMemory, forgetMemory, getMemoryJob, getMemoryServiceCapabilities, mutateMemory,
   observeMemory, recallMemory, startMemoryJobWorker, stopMemoryJobWorker
 } from './lib/memory-service.js';
+import { bindCompanionMemory, companionMemoryLibrary, isCompanionMemoryDelegation, validateCompanionMemoryScope } from './lib/platform-companion-memory.js';
 import { getTrace, listTraces } from './lib/trace.js';
 import { parseSkillPackage } from './lib/skill-package.js';
 import { listPlots, listProps, listTools, listTriggers } from './lib/triggers.js';
@@ -312,7 +313,7 @@ function userMayAccessRoute(pathname, method) {
   if (['/api/memory/entities/merge', '/api/memory/entities/split'].includes(pathname) && method === 'POST') return true;
   if (/^\/api\/conversations\/[^/]+\/context$/.test(pathname) && method === 'GET') return true;
   if (pathname === '/v1/memory/capabilities' && method === 'GET') return true;
-  if (['/v1/memory/bind', '/v1/memory/observe', '/v1/memory/recall', '/v1/memory/expand'].includes(pathname)
+  if (['/v1/memory/bind', '/v1/memory/observe', '/v1/memory/recall', '/v1/memory/expand', '/v1/memory/library'].includes(pathname)
     && method === 'POST') return true;
   if (/^\/v1\/memory\/jobs\/[^/]+$/.test(pathname) && method === 'GET') return true;
   if (pathname === '/api/conversations' && ['GET', 'POST'].includes(method)) return true;
@@ -375,6 +376,7 @@ function memoryScopeWithAccess(principal, scope = {}) {
     spaceId: scope.spaceId ?? scope.space_id ?? scope.storyId ?? scope.story_id ?? 'main_story',
     branchId: scope.branchId ?? scope.branch_id ?? 'main'
   };
+  if (isCompanionMemoryDelegation(principal)) return validateCompanionMemoryScope(principal, normalized);
   if (principal.platformDelegated) {
     const purpose = normalized.agentId === 'edu-learning' ? 'learning' : normalized.agentId === 'edu-authoring' ? 'authoring' : null;
     if (principal.delegationSource !== 'education' || normalized.tenantId !== config.memoryService.tenantId
@@ -425,7 +427,8 @@ function memoryScopeFromQuery(principal, searchParams) {
     subjectId: searchParams.get('subject_id') || searchParams.get('user_id') || '',
     agentId: searchParams.get('agent_id') || '',
     spaceId: searchParams.get('space_id') || searchParams.get('story_id') || 'main_story',
-    branchId: searchParams.get('branch_id') || 'main'
+    branchId: searchParams.get('branch_id') || 'main',
+    ...(isCompanionMemoryDelegation(principal) ? { roleId: searchParams.get('role_id') || '' } : {})
   });
 }
 
@@ -1931,7 +1934,13 @@ async function handleApi(request, response, url) {
   if (pathname === '/v1/memory/bind' && method === 'POST') {
     const body = await readBody(request);
     const scope = memoryScopeWithAccess(principal, body.scope);
-    sendJson(response, 200, bindEducationMemory(principal, scope));
+    sendJson(response, 200, isCompanionMemoryDelegation(principal) ? bindCompanionMemory(principal, scope) : bindEducationMemory(principal, scope));
+    return;
+  }
+  if (pathname === '/v1/memory/library' && method === 'POST') {
+    const body = await readBody(request);
+    const scope = memoryScopeWithAccess(principal, body.scope);
+    sendJson(response, 200, companionMemoryLibrary(principal, scope));
     return;
   }
   if (pathname === '/v1/memory/observe' && method === 'POST') {
