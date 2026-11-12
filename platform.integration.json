@@ -32,13 +32,15 @@
       "--memory-node",
       "{node}",
       "--education-node",
-      "{node}"
+      "{node}",
+      "--companion-memory"
     ]
   ],
   "required_files": [
     "CHANGELOG.md",
     "docs/memory-lifecycle-v0.9.architecture.html",
     "docs/memory-lifecycle-v0.9.architecture.json",
+    "docs/platform-companion-memory.md",
     "lib/agent.js",
     "lib/architecture.js",
     "lib/ark.js",
@@ -57,6 +59,7 @@
     "lib/memory-views.js",
     "lib/memory.js",
     "lib/pi-runtime.js",
+    "lib/platform-companion-memory.js",
     "lib/platform.js",
     "lib/prefix-cache.js",
     "lib/providers/anthropic.js",
@@ -111,6 +114,7 @@
     "test/memory-schema-migration.test.js",
     "test/memory-service.test.js",
     "test/memory.test.js",
+    "test/platform-companion-memory.test.js",
     "test/platform-integration.test.js",
     "test/platform-memory-delegation.test.js",
     "test/platform-workspace.test.js",
